@@ -3,11 +3,15 @@ import { Hono } from "hono";
 import type { Env } from "./types";
 import { mountGoogleOAuth } from "./oauth/google";
 import { mountGoogleCallback } from "./oauth/callback";
+import { sessionMiddleware, type AppVars } from "./middleware/session";
+import { mountMe } from "./routes/me";
 
 export function createApp() {
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<{ Bindings: Env; Variables: AppVars }>();
+  app.use(sessionMiddleware);
   app.get("/health", (c) => c.text("ok"));
   mountGoogleOAuth(app);
   mountGoogleCallback(app);
+  mountMe(app);
   return app;
 }

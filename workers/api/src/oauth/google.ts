@@ -5,7 +5,7 @@ import type { Env } from "../types";
 const SCOPE = "openid email profile";
 const STATE_TTL_SEC = 600;
 
-export function mountGoogleOAuth(app: Hono<{ Bindings: Env }>) {
+export function mountGoogleOAuth(app: Hono<{ Bindings: Env; Variables: Record<string, unknown> }>) {
   app.get("/auth/google/start", async (c) => {
     const state = crypto.randomUUID();
     const nonce = crypto.randomUUID();

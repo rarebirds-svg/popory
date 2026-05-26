@@ -8,7 +8,7 @@ import { upsertUser } from "../db/users";
 import { isAllowed, ensureSeedAdmin } from "../db/whitelist";
 import { recordAudit } from "../db/audit";
 
-export function mountGoogleCallback(app: Hono<{ Bindings: Env }>) {
+export function mountGoogleCallback(app: Hono<{ Bindings: Env; Variables: Record<string, unknown> }>) {
   app.get("/auth/google/callback", async (c) => {
     const code = c.req.query("code");
     const state = c.req.query("state");
