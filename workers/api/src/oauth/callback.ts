@@ -29,15 +29,17 @@ export function mountGoogleCallback(app: Hono<{ Bindings: Env }>) {
       display_name: profile.name,
       picture_url: profile.picture,
     });
+    let role: "member" | "admin" = user.role;
     if (profile.email === c.env.SEED_ADMIN_EMAIL) {
       await ensureSeedAdmin(c.env.DB, profile.email);
+      role = "admin";
     }
 
     const key = await ensureActiveKey(c.env.DB);
     const token = await signSession({
       privateJwk: key.privateJwk,
       kid: key.kid,
-      claims: { sub: user.sub, email: user.email, role: user.role },
+      claims: { sub: user.sub, email: user.email, role },
     });
 
     c.header("Set-Cookie", buildSessionCookie(token, c.env));
