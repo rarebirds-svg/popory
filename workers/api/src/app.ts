@@ -5,6 +5,7 @@ import { mountGoogleOAuth } from "./oauth/google";
 import { mountGoogleCallback } from "./oauth/callback";
 import { sessionMiddleware, type AppVars } from "./middleware/session";
 import { mountMe } from "./routes/me";
+import { mountLogout } from "./routes/logout";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: AppVars }>();
@@ -13,5 +14,6 @@ export function createApp() {
   mountGoogleOAuth(app);
   mountGoogleCallback(app);
   mountMe(app);
+  mountLogout(app);
   return app;
 }

@@ -4,6 +4,7 @@ import type { Env } from "../types";
 import { verifySession } from "@popory/auth";
 import { loadJwks } from "../db/signing_keys";
 import { findUserBySub } from "../db/users";
+import { sha256Hex } from "../lib/hash";
 
 export interface SessionUser {
   sub: string;
@@ -19,6 +20,8 @@ export const sessionMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Ap
   const cookie = c.req.header("cookie") ?? "";
   const match = /popory_session=([^;]+)/.exec(cookie);
   if (!match) return next();
+  const hash = await sha256Hex(match[1]!);
+  if (await c.env.KV.get(`session:revoked:${hash}`)) return next();
   try {
     const jwks = await loadJwks(c.env.DB);
     const claims = await verifySession({ token: match[1]!, jwks });
