@@ -14,4 +14,4 @@ pnpm install
 pnpm dev
 ```
 
-자세한 설계는 `/Users/daegong/projects/docs/superpowers/specs/2026-05-27-popory-platform-foundation-design.md` 참고.
+자세한 설계는 내부 spec(`docs/superpowers/specs/2026-05-27-popory-platform-foundation-design.md`)을 참고하세요. spec 파일은 popory monorepo 외부 저장소에 위치합니다.
