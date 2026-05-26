@@ -1,0 +1,14 @@
+# 의존성·빌드 산출물·환경 변수
+node_modules
+.turbo
+dist
+.next
+.wrangler
+.dev.vars
+.env
+.env.*
+!.env.example
+coverage
+playwright-report
+test-results
+.DS_Store

@@ -1,0 +1,5 @@
+# popory monorepo의 워크스페이스 패키지 목록을 정의한다.
+packages:
+  - apps/*
+  - workers/*
+  - packages/*
