@@ -6,6 +6,7 @@ import { mountGoogleCallback } from "./oauth/callback";
 import { sessionMiddleware, type AppVars } from "./middleware/session";
 import { mountMe } from "./routes/me";
 import { mountLogout } from "./routes/logout";
+import { mountAdminWhitelist } from "./routes/admin_whitelist";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: AppVars }>();
@@ -15,5 +16,6 @@ export function createApp() {
   mountGoogleCallback(app);
   mountMe(app);
   mountLogout(app);
+  mountAdminWhitelist(app);
   return app;
 }
