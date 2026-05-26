@@ -1,8 +1,12 @@
-// 비로그인 랜딩 페이지. 로그인 안된 상태에서는 시작 버튼만 제공.
+// 비로그인 랜딩 + 로그인된 경우 dashboard 로 redirect.
+import { redirect } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/env";
+import { getCurrentUser } from "@/lib/session";
 
-export default function Page() {
+export default async function Page() {
+  const user = await getCurrentUser();
+  if (user) redirect("/dashboard");
   return (
     <main className="mx-auto max-w-2xl px-6 py-24">
       <h1 className="text-3xl font-semibold">popory family</h1>
