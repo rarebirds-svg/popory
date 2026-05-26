@@ -12,7 +12,12 @@ export default defineWorkersConfig(async () => {
         workers: {
           wrangler: { configPath: "../../infra/wrangler/api.toml" },
           miniflare: {
-            bindings: { TEST_MIGRATIONS: migrations },
+            bindings: {
+              TEST_MIGRATIONS: migrations,
+              GOOGLE_CLIENT_ID: "test-client-id",
+              GOOGLE_CLIENT_SECRET: "test-secret",
+              SEED_ADMIN_EMAIL: "admin@example.com",
+            },
           },
         },
       },
