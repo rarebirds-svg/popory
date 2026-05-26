@@ -1,0 +1,27 @@
+{
+  "name": "@popory/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev --config ../../infra/wrangler/api.toml --local",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.5.0",
+    "jose": "^5.6.0",
+    "zod": "^3.23.0",
+    "@popory/auth": "workspace:*",
+    "@popory/config": "workspace:*",
+    "@popory/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.5.0",
+    "@cloudflare/workers-types": "^4.20240605.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0",
+    "wrangler": "^3.65.0"
+  }
+}
