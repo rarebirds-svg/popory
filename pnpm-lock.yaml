@@ -28,6 +28,19 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1
 
+  packages/types:
+    dependencies:
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1
+
 packages:
 
   '@esbuild/aix-ppc64@0.21.5':
