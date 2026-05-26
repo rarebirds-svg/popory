@@ -9,6 +9,7 @@ import { mountLogout } from "./routes/logout";
 import { mountAdminWhitelist } from "./routes/admin_whitelist";
 import { mountAdminUsers } from "./routes/admin_users";
 import { mountAdminOverview } from "./routes/admin_overview";
+import { mountJwks } from "./routes/jwks";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: AppVars }>();
@@ -21,5 +22,6 @@ export function createApp() {
   mountAdminWhitelist(app);
   mountAdminUsers(app);
   mountAdminOverview(app);
+  mountJwks(app);
   return app;
 }
