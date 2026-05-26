@@ -50,4 +50,16 @@ export function mountPublished(app: Hono<{ Bindings: Env; Variables: Vars }>) {
     const body = await obj?.text();
     return c.json({ ...row, body });
   });
+
+  app.delete("/api/published_items/:id", async (c) => {
+    const u = c.get("user");
+    if (!u || u.role !== "admin") return c.text("forbidden", 403);
+    const id = c.req.param("id");
+    const row = await c.env.DB.prepare("SELECT body_r2_key FROM published_items WHERE id=?").bind(id)
+      .first<{ body_r2_key: string }>();
+    if (!row) return c.text("not found", 404);
+    await c.env.R2.delete(row.body_r2_key);
+    await c.env.DB.prepare("DELETE FROM published_items WHERE id=?").bind(id).run();
+    return c.body(null, 204);
+  });
 }
