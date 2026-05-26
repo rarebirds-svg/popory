@@ -7,6 +7,7 @@ import { sessionMiddleware, type AppVars } from "./middleware/session";
 import { mountMe } from "./routes/me";
 import { mountLogout } from "./routes/logout";
 import { mountAdminWhitelist } from "./routes/admin_whitelist";
+import { mountAdminUsers } from "./routes/admin_users";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: AppVars }>();
@@ -17,5 +18,6 @@ export function createApp() {
   mountMe(app);
   mountLogout(app);
   mountAdminWhitelist(app);
+  mountAdminUsers(app);
   return app;
 }
