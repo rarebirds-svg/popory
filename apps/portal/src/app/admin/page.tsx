@@ -1,6 +1,7 @@
 // /admin 진입 시 보이는 overview (사용자 수, 영역별 publish 건수, 최근 audit).
 import { headers } from "next/headers";
 import Link from "next/link";
+import { Card } from "@popory/ui";
 import { API_BASE } from "@/lib/env";
 
 async function fetchOverview() {
@@ -24,18 +25,18 @@ export default async function AdminHome() {
         <Link href="/admin/users">사용자</Link>
       </nav>
       <section className="mt-8 grid grid-cols-2 gap-4">
-        <div className="rounded-xl border border-popory-border p-4">
+        <Card>
           <div className="text-popory-muted text-sm">활성 사용자</div>
           <div className="text-2xl">{o.users}</div>
-        </div>
-        <div className="rounded-xl border border-popory-border p-4">
+        </Card>
+        <Card>
           <div className="text-popory-muted text-sm">영역별 게시물</div>
           <ul className="mt-2 text-sm">
             {Object.entries(o.published_by_area).map(([k, v]) => (
               <li key={k}>{k}: {v}</li>
             ))}
           </ul>
-        </div>
+        </Card>
       </section>
       <section className="mt-8">
         <h2 className="text-lg font-medium">최근 변경</h2>
