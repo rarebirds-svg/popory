@@ -60,6 +60,12 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1
 
+  packages/ui:
+    devDependencies:
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+
 packages:
 
   '@esbuild/aix-ppc64@0.21.5':
