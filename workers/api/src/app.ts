@@ -1,5 +1,6 @@
 // 포털 API의 Hono 라우터 조립.
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Env } from "./types";
 import { mountGoogleOAuth } from "./oauth/google";
 import { mountGoogleCallback } from "./oauth/callback";
@@ -17,6 +18,10 @@ import type { ServiceVars } from "./middleware/service_auth";
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: AppVars & ServiceVars }>();
   app.use(sessionMiddleware);
+  app.use("/api/*", cors({
+    origin: (origin, c) => (origin === c.env.PORTAL_ORIGIN ? origin : ""),
+    credentials: true,
+  }));
   app.get("/health", (c) => c.text("ok"));
   mountGoogleOAuth(app);
   mountGoogleCallback(app);
