@@ -1,0 +1,26 @@
+# popory monorepo의 통합 CI: 린트·타입체크·테스트·wrangler dry-run.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @popory/config test
+      - run: pnpm --filter @popory/types test
+      - run: pnpm --filter @popory/auth test
+      - run: pnpm --filter @popory/api test
+      - run: pnpm --filter @popory/api exec wrangler deploy --dry-run --config ../../infra/wrangler/api.toml
+      - run: pnpm --filter @popory/portal build
