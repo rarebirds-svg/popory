@@ -1,13 +1,15 @@
 // 포털 세션 JWT 발급·검증 (HttpOnly 쿠키에 저장).
-import { SignJWT, jwtVerify, importJWK } from "jose";
+import { SignJWT, jwtVerify, importJWK, decodeProtectedHeader } from "jose";
+import { z } from "zod";
 
 const SESSION_TTL_SEC = 7 * 24 * 60 * 60;
 
-export interface SessionClaims {
-  sub: string;
-  email: string;
-  role: "member" | "admin";
-}
+export const SessionClaimsSchema = z.object({
+  sub: z.string().min(1),
+  email: z.string().email(),
+  role: z.enum(["member", "admin"]),
+});
+export type SessionClaims = z.infer<typeof SessionClaimsSchema>;
 
 export async function signSession(opts: {
   privateJwk: Record<string, unknown>;
@@ -30,7 +32,7 @@ export async function verifySession(opts: {
   token: string;
   jwks: { keys: Array<Record<string, unknown>> };
 }): Promise<SessionClaims> {
-  const header = JSON.parse(atob(opts.token.split(".")[0]!.replace(/-/g, "+").replace(/_/g, "/")));
+  const header = decodeProtectedHeader(opts.token);
   const jwk = opts.jwks.keys.find((k) => k.kid === header.kid);
   if (!jwk) throw new Error("unknown kid");
   const key = await importJWK(jwk, "ES256");
@@ -38,9 +40,9 @@ export async function verifySession(opts: {
     issuer: "popory-portal",
     audience: "popory-portal",
   });
-  return {
-    sub: payload.sub as string,
-    email: payload.email as string,
-    role: payload.role as "member" | "admin",
-  };
+  return SessionClaimsSchema.parse({
+    sub: payload.sub,
+    email: payload.email,
+    role: payload.role,
+  });
 }

@@ -1,5 +1,5 @@
 // 영역 진입 단명 JWT의 발급·검증 (60초 만료).
-import { SignJWT, jwtVerify, importJWK } from "jose";
+import { SignJWT, jwtVerify, importJWK, decodeProtectedHeader } from "jose";
 import { AreaTokenClaimsSchema } from "@popory/types";
 
 export interface SignAreaTokenInput {
@@ -29,7 +29,7 @@ export interface VerifyAreaTokenInput {
 }
 
 export async function verifyAreaToken(input: VerifyAreaTokenInput) {
-  const header = parseHeader(input.token);
+  const header = decodeProtectedHeader(input.token);
   const jwk = input.jwks.keys.find((k) => k.kid === header.kid);
   if (!jwk) throw new Error("unknown kid");
   const key = await importJWK(jwk, "ES256");
@@ -38,11 +38,4 @@ export async function verifyAreaToken(input: VerifyAreaTokenInput) {
     audience: input.expectedAudience,
   });
   return AreaTokenClaimsSchema.parse(payload);
-}
-
-function parseHeader(token: string): { kid?: string } {
-  const [b64] = token.split(".");
-  if (!b64) throw new Error("malformed token");
-  const json = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
-  return JSON.parse(json);
 }
