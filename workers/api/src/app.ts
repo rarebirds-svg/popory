@@ -11,9 +11,11 @@ import { mountAdminUsers } from "./routes/admin_users";
 import { mountAdminOverview } from "./routes/admin_overview";
 import { mountJwks } from "./routes/jwks";
 import { mountGo } from "./routes/go";
+import { mountPublished } from "./routes/published";
+import type { ServiceVars } from "./middleware/service_auth";
 
 export function createApp() {
-  const app = new Hono<{ Bindings: Env; Variables: AppVars }>();
+  const app = new Hono<{ Bindings: Env; Variables: AppVars & ServiceVars }>();
   app.use(sessionMiddleware);
   app.get("/health", (c) => c.text("ok"));
   mountGoogleOAuth(app);
@@ -25,5 +27,6 @@ export function createApp() {
   mountAdminOverview(app);
   mountJwks(app);
   mountGo(app);
+  mountPublished(app);
   return app;
 }

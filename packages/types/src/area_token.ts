@@ -3,7 +3,7 @@ import { z } from "zod";
 
 export const AreaTokenClaimsSchema = z.object({
   sub: z.string().min(1),
-  email: z.string().email(),
+  email: z.string().min(1),
   area: z.string().min(1),
   iss: z.literal("popory-portal"),
   aud: z.string().min(1),
