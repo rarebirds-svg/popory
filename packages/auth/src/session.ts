@@ -1,5 +1,5 @@
 // 포털 세션 JWT 발급·검증 (HttpOnly 쿠키에 저장).
-import { SignJWT, jwtVerify, importJWK, decodeProtectedHeader } from "jose";
+import { SignJWT, jwtVerify, importJWK, decodeProtectedHeader, type JWK } from "jose";
 import { z } from "zod";
 
 const SESSION_TTL_SEC = 7 * 24 * 60 * 60;
@@ -12,7 +12,7 @@ export const SessionClaimsSchema = z.object({
 export type SessionClaims = z.infer<typeof SessionClaimsSchema>;
 
 export async function signSession(opts: {
-  privateJwk: Record<string, unknown>;
+  privateJwk: JWK;
   kid: string;
   claims: SessionClaims;
 }): Promise<string> {
@@ -30,7 +30,7 @@ export async function signSession(opts: {
 
 export async function verifySession(opts: {
   token: string;
-  jwks: { keys: Array<Record<string, unknown>> };
+  jwks: { keys: JWK[] };
 }): Promise<SessionClaims> {
   const header = decodeProtectedHeader(opts.token);
   const jwk = opts.jwks.keys.find((k) => k.kid === header.kid);

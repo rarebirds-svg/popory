@@ -1,11 +1,13 @@
 // ES256 키 페어 생성·로드 유틸. D1 signing_keys 테이블 row와 1:1 대응.
-import { exportJWK, generateKeyPair } from "jose";
+import { exportJWK, generateKeyPair, type JWK } from "jose";
+
+export type Jwk = JWK;
 
 export interface SigningKeyPair {
   kid: string;
   alg: "ES256";
-  publicJwk: Record<string, unknown>;
-  privateJwk: Record<string, unknown>;
+  publicJwk: JWK;
+  privateJwk: JWK;
 }
 
 export async function generateKeyPairForTest(): Promise<SigningKeyPair> {

@@ -1,9 +1,10 @@
 // 세션 쿠키 만료 + KV에 세션 토큰 해시 blocklist 등록.
 import { Hono } from "hono";
 import type { Env } from "../types";
+import type { AppVars } from "../middleware/session";
 import { sha256Hex } from "../lib/hash";
 
-export function mountLogout(app: Hono<{ Bindings: Env }>) {
+export function mountLogout(app: Hono<{ Bindings: Env; Variables: AppVars }>) {
   app.post("/api/logout", async (c) => {
     const cookie = c.req.header("cookie") ?? "";
     const m = /popory_session=([^;]+)/.exec(cookie);

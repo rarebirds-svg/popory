@@ -1,9 +1,9 @@
 // 영역 진입 단명 JWT의 발급·검증 (60초 만료).
-import { SignJWT, jwtVerify, importJWK, decodeProtectedHeader } from "jose";
+import { SignJWT, jwtVerify, importJWK, decodeProtectedHeader, type JWK } from "jose";
 import { AreaTokenClaimsSchema } from "@popory/types";
 
 export interface SignAreaTokenInput {
-  privateJwk: Record<string, unknown>;
+  privateJwk: JWK;
   kid: string;
   claims: { sub: string; email: string; area: string; aud: string };
   ttlSeconds?: number;
@@ -24,7 +24,7 @@ export async function signAreaToken(input: SignAreaTokenInput): Promise<string> 
 
 export interface VerifyAreaTokenInput {
   token: string;
-  jwks: { keys: Array<Record<string, unknown>> };
+  jwks: { keys: JWK[] };
   expectedAudience: string;
 }
 
