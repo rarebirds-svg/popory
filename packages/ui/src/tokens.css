@@ -1,0 +1,20 @@
+/* popory 포털·영역 사이트가 공통으로 사용하는 디자인 토큰 (라이트/다크). */
+:root {
+  --popory-bg: #fafafa;
+  --popory-fg: #111111;
+  --popory-muted: #6b7280;
+  --popory-accent: #2563eb;
+  --popory-card: #ffffff;
+  --popory-border: #e5e7eb;
+  --popory-radius: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --popory-bg: #0b0b0c;
+    --popory-fg: #f5f5f5;
+    --popory-muted: #9ca3af;
+    --popory-accent: #60a5fa;
+    --popory-card: #161618;
+    --popory-border: #27272a;
+  }
+}

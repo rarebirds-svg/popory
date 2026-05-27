@@ -1,0 +1,53 @@
+# Cloudflare Workers (포털 API)의 배포·바인딩 설정.
+name = "popory-api"
+main = "../../workers/api/src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "popory-portal"
+database_id = "PLACEHOLDER_LOCAL"
+migrations_dir = "../../infra/migrations"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "popory-portal-public"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "PLACEHOLDER_LOCAL"
+
+[vars]
+PUBLIC_BASE_URL = "http://localhost:8787"
+PORTAL_ORIGIN = "http://localhost:3000"
+COOKIE_DOMAIN = "localhost"
+
+# secret으로 별도 주입: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SEED_ADMIN_EMAIL
+
+[env.prod]
+workers_dev = false
+
+[[env.prod.d1_databases]]
+binding = "DB"
+database_name = "popory-portal"
+database_id = "757c7607-31e1-4fee-88f6-5e3208cf69a1"
+migrations_dir = "../../infra/migrations"
+
+[[env.prod.r2_buckets]]
+binding = "R2"
+bucket_name = "popory-portal-public"
+
+[[env.prod.kv_namespaces]]
+binding = "KV"
+id = "8c0a1bc35a984176b08faab18227c43e"
+
+[env.prod.vars]
+PUBLIC_BASE_URL = "https://api.poporyfamily.com"
+PORTAL_ORIGIN = "https://poporyfamily.com"
+COOKIE_DOMAIN = "poporyfamily.com"
+
+[[env.prod.routes]]
+pattern = "api.poporyfamily.com"
+custom_domain = true
