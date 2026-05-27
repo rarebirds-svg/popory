@@ -25,8 +25,10 @@ describe("POST /api/logout", () => {
     const res = await SELF.fetch("https://example.com/api/logout", {
       method: "POST",
       headers: { cookie: `popory_session=${tok}` },
+      redirect: "manual",
     });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("http://localhost:3000/");
     expect(res.headers.get("set-cookie") ?? "").toMatch(/Max-Age=0/);
     const me = await SELF.fetch("https://example.com/api/me", {
       headers: { cookie: `popory_session=${tok}` },

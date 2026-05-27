@@ -15,6 +15,6 @@ export function mountLogout(app: Hono<{ Bindings: Env }>) {
       "Set-Cookie",
       `popory_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Domain=${c.env.COOKIE_DOMAIN}`,
     );
-    return c.body(null, 204);
+    return c.redirect(c.env.PORTAL_ORIGIN + "/", 302);
   });
 }
