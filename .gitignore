@@ -3,6 +3,7 @@ node_modules
 .turbo
 dist
 .next
+.vercel
 .wrangler
 .dev.vars
 .env
@@ -12,3 +13,7 @@ coverage
 playwright-report
 test-results
 .DS_Store
+
+# OAuth client credentials JSON 등 자격증명 다운로드본 (절대 커밋 금지).
+google_*.json
+client_secret_*.json

@@ -3,6 +3,7 @@ import "./globals.css";
 import type { ReactNode } from "react";
 
 export const metadata = { title: "popory family" };
+export const runtime = "edge";
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (

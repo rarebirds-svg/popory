@@ -1,0 +1,5 @@
+# popory portal (Cloudflare Pages)의 런타임 설정.
+name = "popory-portal"
+pages_build_output_dir = ".vercel/output/static"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
