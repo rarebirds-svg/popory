@@ -49,6 +49,21 @@ describe("GET /auth/google/callback", () => {
     expect(log?.action).toBe("login_rejected");
   });
 
+  it("seed admin bootstraps own whitelist entry on empty DB first login", async () => {
+    // allowed_emails 비어있는 prod 첫 로그인 시나리오.
+    const state = "state-seed";
+    await env.KV.put(`oauth:state:${state}`, JSON.stringify({ nonce: "n" }), { expirationTtl: 60 });
+    vi.spyOn(google, "exchangeCode").mockResolvedValueOnce({
+      sub: "g-seed", email: "admin@example.com", name: "Seed",
+    });
+    const res = await SELF.fetch(`https://example.com/auth/google/callback?code=c&state=${state}`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(302);
+    const wl = await env.DB.prepare("SELECT email FROM allowed_emails WHERE email='admin@example.com'").first();
+    expect(wl?.email).toBe("admin@example.com");
+  });
+
   it("seed admin's first login signs token with role=admin", async () => {
     await env.DB.prepare("INSERT INTO allowed_emails (email, created_at) VALUES (?, ?)")
       .bind("admin@example.com", 1).run();

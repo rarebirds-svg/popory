@@ -18,6 +18,9 @@ export function mountGoogleCallback(app: Hono<{ Bindings: Env; Variables: Record
     await c.env.KV.delete(`oauth:state:${state}`);
 
     const profile = await exchangeCode(c.env, code);
+    if (profile.email === c.env.SEED_ADMIN_EMAIL) {
+      await ensureSeedAdmin(c.env.DB, profile.email);
+    }
     if (!(await isAllowed(c.env.DB, profile.email))) {
       await recordAudit(c.env.DB, { action: "login_rejected", target: profile.email });
       return c.text("forbidden", 403);
