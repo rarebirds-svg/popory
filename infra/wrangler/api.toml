@@ -25,3 +25,25 @@ PORTAL_ORIGIN = "http://localhost:3000"
 COOKIE_DOMAIN = "localhost"
 
 # secret으로 별도 주입: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SEED_ADMIN_EMAIL
+
+[env.prod]
+workers_dev = false
+
+[[env.prod.d1_databases]]
+binding = "DB"
+database_name = "popory-portal"
+database_id = "PLACEHOLDER_PROD_D1"
+migrations_dir = "../../infra/migrations"
+
+[[env.prod.r2_buckets]]
+binding = "R2"
+bucket_name = "popory-portal-public"
+
+[[env.prod.kv_namespaces]]
+binding = "KV"
+id = "PLACEHOLDER_PROD_KV"
+
+[env.prod.vars]
+PUBLIC_BASE_URL = "https://api.poporyfamily.com"
+PORTAL_ORIGIN = "https://poporyfamily.com"
+COOKIE_DOMAIN = "poporyfamily.com"

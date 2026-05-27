@@ -1,16 +1,19 @@
-<!-- 로컬·preview·prod 환경에서 wrangler 바인딩을 어떻게 채우는지 안내. -->
+<!-- 로컬·prod 환경에서 wrangler 바인딩을 어떻게 채우는지 안내. -->
 
 # Cloudflare 환경 셋업
 
+모든 wrangler 명령은 `workers/api` 디렉터리에서 `pnpm exec wrangler ...` 형식으로 호출한다.
+
 ## 로컬
-1. `wrangler login`
-2. `wrangler d1 create popory-portal` → 출력된 ID를 `api.toml`의 `database_id`에 대입(또는 별도 wrangler dev 명령 시 `--local` 사용).
-3. `wrangler kv:namespace create popory-portal-kv` → `id` 채우기.
-4. `wrangler r2 bucket create popory-portal-public`
-5. `cp ../../.dev.vars.example ../../.dev.vars` 후 secret 채우기.
+
+1. `pnpm --filter @popory/api exec wrangler login`
+2. 로컬 dev는 `wrangler dev --local` (miniflare) 만 쓰므로 `api.toml` 최상위의 `PLACEHOLDER_LOCAL` 값은 그대로 둬도 된다.
+3. `.dev.vars` 로 secret 주입: `cp ../../.dev.vars.example ../../.dev.vars` 후 값을 채운다.
 
 ## prod
-- `wrangler secret put GOOGLE_CLIENT_ID --name popory-api`
-- `wrangler secret put GOOGLE_CLIENT_SECRET --name popory-api`
-- `wrangler secret put SEED_ADMIN_EMAIL --name popory-api`
-- 키 회전 절차는 `infra/secrets.md`에 작성 예정.
+
+prod worker 이름은 `popory-api-prod` (`[env.prod]` 블록).
+
+리소스 생성·도메인 매핑·secret 주입·검증 절차는 `docs/runbook/deploy-portal.md` 참조.
+
+키 회전 절차는 `infra/secrets.md`.
