@@ -29,3 +29,9 @@ def test_h1_in_input_is_preserved_but_caller_should_avoid():
     # 본문 컨벤션은 H1 미사용. 코드는 거부하지 않고 그대로 변환만 한다.
     html = markdown_to_email_html("# title\n\n본문\n")
     assert "<h1>title</h1>" in html
+
+
+def test_bare_url_autolinked():
+    # linkify=True 동작 — 명시적 markdown 링크 없이 bare URL도 자동 링크화
+    html = markdown_to_email_html("이거 확인 https://example.com 하세요.")
+    assert 'href="https://example.com"' in html

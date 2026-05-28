@@ -20,7 +20,7 @@ _ENVELOPE_FOOT = "</body></html>"
 
 
 def _make_md() -> MarkdownIt:
-    md = MarkdownIt("gfm-like", {"linkify": False, "html": False, "typographer": False})
+    md = MarkdownIt("gfm-like", {"linkify": True, "html": False, "typographer": False})
     md.enable("table")
     md.enable("strikethrough")
     md.use(tasklists_plugin)
