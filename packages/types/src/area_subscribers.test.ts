@@ -1,0 +1,25 @@
+// AreaSubscribersResponse zod 스키마: email 필수, display_name nullable
+import { describe, it, expect } from "vitest";
+import { AreaSubscribersResponseSchema } from "./area_subscribers";
+
+describe("AreaSubscribersResponseSchema", () => {
+  it("정상 응답 파싱", () => {
+    const ok = AreaSubscribersResponseSchema.parse({
+      subscribers: [
+        { email: "a@x", display_name: "A" },
+        { email: "b@x", display_name: null },
+      ],
+    });
+    expect(ok.subscribers).toHaveLength(2);
+  });
+
+  it("subscribers 누락 시 거절", () => {
+    expect(() => AreaSubscribersResponseSchema.parse({})).toThrow();
+  });
+
+  it("email 누락 시 거절", () => {
+    expect(() =>
+      AreaSubscribersResponseSchema.parse({ subscribers: [{ display_name: "x" }] }),
+    ).toThrow();
+  });
+});
