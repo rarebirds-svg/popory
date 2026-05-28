@@ -14,6 +14,7 @@ import { mountJwks } from "./routes/jwks";
 import { mountGo } from "./routes/go";
 import { mountPublished } from "./routes/published";
 import { mountAreas } from "./routes/areas";
+import { mountAreasSubscribers } from "./routes/areas_subscribers";
 import type { ServiceVars } from "./middleware/service_auth";
 
 export function createApp() {
@@ -35,5 +36,6 @@ export function createApp() {
   mountGo(app);
   mountPublished(app);
   mountAreas(app);
+  mountAreasSubscribers(app);
   return app;
 }
