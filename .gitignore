@@ -21,6 +21,7 @@ services/*/secrets/
 services/*/logs/
 services/*/__pycache__/
 services/*/.pytest_cache/
+services/*/*.egg-info/
 
 # OAuth client credentials JSON 등 자격증명 다운로드본 (절대 커밋 금지).
 google_*.json
