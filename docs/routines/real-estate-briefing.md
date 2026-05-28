@@ -411,81 +411,7 @@ EOF
    EOF
    ```
 
-4-bis. **Phase B publish** (메일 발송이 끝난 뒤 1회 호출. 실패해도 메일에는 영향 없음).
-
-   이 routine은 cloud에서 실행되므로 Mac 로컬 services/brief에 접근할 수 없다. Python을 inline으로 사용해 ES256 JWT를 자가 서명하고 portal API에 직접 POST 한다.
-
-   §5-3에서 작성한 `/tmp/brief_${DATE}.md` + `/tmp/brief_${DATE}.meta.json` 을 그대로 사용한다.
-
-   ```bash
-   DATE=$(TZ=Asia/Seoul date +%Y-%m-%d)
-   export BRIEF_BODY_FILE=/tmp/brief_${DATE}.md
-   export BRIEF_META_FILE=/tmp/brief_${DATE}.meta.json
-
-   python3 - <<'PYEOF'
-   import json, time, base64, os, urllib.request, urllib.error, subprocess, sys
-
-   # services-brief ES256 키 (kid=services-brief-2026-05). portal D1 signing_keys 활성 등록.
-   PRIVATE_PEM = b"""<<<PRIVATE_PEM_FROM_ROUTINE_PROMPT>>>
-   """
-   KID = "services-brief-2026-05"
-   PORTAL_BASE = "https://api.poporyfamily.com"
-
-   try:
-       from cryptography.hazmat.primitives import hashes, serialization
-       from cryptography.hazmat.primitives.asymmetric import ec, utils
-   except ImportError:
-       subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "cryptography"])
-       from cryptography.hazmat.primitives import hashes, serialization
-       from cryptography.hazmat.primitives.asymmetric import ec, utils
-
-   def b64u(b: bytes) -> str:
-       return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
-
-   key = serialization.load_pem_private_key(PRIVATE_PEM, password=None)
-   now = int(time.time())
-   header = {"alg": "ES256", "kid": KID, "typ": "JWT"}
-   claims = {
-       "iss": "popory-portal", "aud": "popory-portal",
-       "sub": "services-brief", "email": "services-brief@popory.local",
-       "area": "brief", "iat": now, "exp": now + 60,
-   }
-   signing_input = (b64u(json.dumps(header, separators=(",", ":")).encode()) + "." +
-                    b64u(json.dumps(claims, separators=(",", ":")).encode())).encode()
-   der_sig = key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
-   r, s = utils.decode_dss_signature(der_sig)
-   raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
-   jwt = signing_input.decode() + "." + b64u(raw_sig)
-
-   body = open(os.environ["BRIEF_BODY_FILE"], encoding="utf-8").read()
-   meta = json.loads(open(os.environ["BRIEF_META_FILE"], encoding="utf-8").read())
-   payload = {"area": "brief", "title": meta["title"], "body": body,
-              "published_at": int(meta["published_at"])}
-   if meta.get("summary"): payload["summary"] = meta["summary"]
-   if meta.get("tags"): payload["tags"] = list(meta["tags"])
-
-   req = urllib.request.Request(
-       f"{PORTAL_BASE}/api/published_items",
-       data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-       headers={"Authorization": f"Bearer {jwt}", "Content-Type": "application/json"},
-       method="POST",
-   )
-   try:
-       with urllib.request.urlopen(req, timeout=30) as resp:
-           result = json.loads(resp.read().decode())
-           print(json.dumps({"status": "ok", "publish_id": result.get("id")},
-                            ensure_ascii=False))
-   except urllib.error.HTTPError as e:
-       print(f"publish failed: HTTP {e.code} {e.read().decode(errors='replace')}",
-             file=sys.stderr)
-       sys.exit(1)
-   except Exception as e:
-       print(f"publish error: {e}", file=sys.stderr)
-       sys.exit(2)
-   PYEOF
-   ```
-
-   성공 시 stdout JSON의 `publish_id` 를 §5 발송 결과 로그에 추가한다. 실패해도 그날 작업은 정상 종료한다(메일 발송이 우선 책임). 첫 1주일은 dry-run으로 보고, 안정되면 Phase C(routine을 services/brief 전체 시퀀스로 교체)로 이행.
+4-bis. **Phase B publish** — 본 list item 안에 코드를 두지 않는다. `## 7-bis. Phase B publish (top-level)` 섹션의 3단계 절차를 그대로 따른다.
 
 5. **발송 요약 보고**:
    ```bash
@@ -504,6 +430,122 @@ EOF
 
 > 발송 검증은 logs 파일 마지막 줄 읽기로 갈음한다 (`search_threads`/`list_drafts` MCP 불필요).
 
+## 7-bis. Phase B publish (top-level)
+
+§7 메일 발송이 모두 끝난 뒤 본 섹션의 3단계를 그대로 실행한다. routine 종료 직전 1회. 실패해도 메일에는 영향 없다(메일은 이미 발송 완료).
+
+이 절차는 list 아이템 안 깊은 들여쓰기가 발생하지 않도록 모든 코드 블록이 top-level 0-공백으로 작성되어 있다. 들여쓰기를 임의로 추가하지 말 것.
+
+### 7-bis-1. 환경변수 export
+
+다음 Bash를 그대로 실행한다.
+
+```bash
+DATE=$(TZ=Asia/Seoul date +%Y-%m-%d)
+export BRIEF_BODY_FILE=/tmp/brief_${DATE}.md
+export BRIEF_META_FILE=/tmp/brief_${DATE}.meta.json
+```
+
+### 7-bis-2. Python 스크립트 작성 후 PEM placeholder 치환
+
+다음 Bash heredoc을 그대로 실행해 `/tmp/brief_publish.py` 파일을 만든다. 파일 안에는 일부러 PEM 자리 표시자 한 줄(`<<<PRIVATE_PEM_FROM_ROUTINE_PROMPT>>>`)이 남아 있다.
+
+```bash
+cat > /tmp/brief_publish.py <<'PY_EOF'
+import json, time, base64, os, urllib.request, urllib.error, subprocess, sys
+
+PRIVATE_PEM = b"""-----BEGIN PRIVATE KEY-----
+<<<PRIVATE_PEM_FROM_ROUTINE_PROMPT>>>
+-----END PRIVATE KEY-----
+"""
+KID = "services-brief-2026-05"
+PORTAL_BASE = "https://api.poporyfamily.com"
+
+try:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "cryptography"])
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+
+def b64u(b):
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
+
+key = serialization.load_pem_private_key(PRIVATE_PEM, password=None)
+now = int(time.time())
+header = {"alg": "ES256", "kid": KID, "typ": "JWT"}
+claims = {"iss": "popory-portal", "aud": "popory-portal", "sub": "services-brief",
+          "email": "services-brief@popory.local", "area": "brief",
+          "iat": now, "exp": now + 60}
+signing_input = (b64u(json.dumps(header, separators=(",", ":")).encode()) + "." +
+                 b64u(json.dumps(claims, separators=(",", ":")).encode())).encode()
+der_sig = key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+r, s = utils.decode_dss_signature(der_sig)
+raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+jwt_token = signing_input.decode() + "." + b64u(raw_sig)
+
+body = open(os.environ["BRIEF_BODY_FILE"], encoding="utf-8").read()
+meta = json.loads(open(os.environ["BRIEF_META_FILE"], encoding="utf-8").read())
+payload = {"area": "brief", "title": meta["title"], "body": body,
+           "published_at": int(meta["published_at"])}
+if meta.get("summary"): payload["summary"] = meta["summary"]
+if meta.get("tags"): payload["tags"] = list(meta["tags"])
+
+req = urllib.request.Request(
+    f"{PORTAL_BASE}/api/published_items",
+    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+    headers={"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read().decode())
+        print(json.dumps({"status": "ok", "publish_id": result.get("id")},
+                         ensure_ascii=False))
+except urllib.error.HTTPError as e:
+    print(f"publish failed: HTTP {e.code} {e.read().decode(errors='replace')}",
+          file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"publish error: {e}", file=sys.stderr)
+    sys.exit(2)
+PY_EOF
+```
+
+heredoc 실행 후 routine은 **Edit 또는 Read+Write 도구로 `/tmp/brief_publish.py` 파일을 열어** `<<<PRIVATE_PEM_FROM_ROUTINE_PROMPT>>>` 한 줄을 **routine entry prompt §2의 PEM 본문(BEGIN/END 헤더 줄 사이의 base64 본문 모든 줄)** 으로 정확히 치환한다.
+
+PEM 본문은 보통 3줄이다. entry prompt의 다음 부분에서 가져온다.
+
+```
+-----BEGIN PRIVATE KEY-----
+<여기 3줄의 base64 본문이 PEM 본문>
+-----END PRIVATE KEY-----
+```
+
+치환 후 `/tmp/brief_publish.py` 의 `PRIVATE_PEM` 변수가 다음 형태가 되어야 한다.
+
+```
+PRIVATE_PEM = b"""-----BEGIN PRIVATE KEY-----
+<3줄의 base64 본문>
+-----END PRIVATE KEY-----
+"""
+```
+
+### 7-bis-3. 실행
+
+```bash
+python3 /tmp/brief_publish.py
+```
+
+성공 시 stdout JSON 한 줄. 형식: `{"status":"ok","publish_id":"<ulid>"}`. `publish_id` 를 §7-5 발송 요약 보고에 추가한다.
+
+실패 시 stderr 에 사유. exit code:
+- 1 = portal HTTP 4xx/5xx (인증·payload·서버 오류)
+- 2 = 기타 (Python 예외, 네트워크 오류 등)
+
+실패해도 그날 작업은 정상 종료한다 — 메일은 이미 발송됐기 때문. 운영자가 다음 routine 실행 전 `/p/brief/` 와 stderr 메시지를 확인한다.
+
 ## 8. 실행 체크리스트
 
 1. 현재 KST 시각 확인 → 24시간 수집 윈도우 계산
@@ -519,5 +561,5 @@ EOF
 11. 수신자 이메일 주소 정확성 재확인
 12. 수신인별 1통씩 개별 발송
 13. 발송 성공 시 archive `topics.jsonl`에 그날 이슈 append (4-5-3). 실패 시 append 금지
-14. Phase B publish 1회 호출 (4-bis). exit 비제로여도 그날 작업은 정상 종료, 다음 실행 전 운영자가 `/p/brief/` 확인
+14. Phase B publish 1회 호출 (§7-bis 3단계: env export → /tmp/brief_publish.py 작성 + PEM 치환 → python3 실행). exit 비제로여도 그날 작업은 정상 종료, 다음 실행 전 운영자가 `/p/brief/` 확인
 15. 발송 결과 로그 출력 (수신자 수 / 성공·실패 / message_id / publish id)
