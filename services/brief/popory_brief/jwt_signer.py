@@ -18,6 +18,12 @@ class KeyMaterial:
     @classmethod
     def load(cls, path: Path) -> "KeyMaterial":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
+        top_kid = data["kid"]
+        inner_kid = data["public_jwk"].get("kid")
+        if top_kid != inner_kid:
+            raise ValueError(
+                f"keyfile kid mismatch: top-level {top_kid!r} vs public_jwk.kid {inner_kid!r}"
+            )
         return cls(
             kid=data["kid"],
             public_jwk=data["public_jwk"],
