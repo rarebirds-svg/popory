@@ -1,0 +1,11 @@
+# venv·캐시
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 비밀: Mac 로컬 한정. 절대 커밋 금지.
+secrets/
+
+# 일자별 로그: 메타만 들어가지만 운영 정보라 커밋 안 함.
+logs/

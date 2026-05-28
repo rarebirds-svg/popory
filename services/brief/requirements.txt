@@ -1,0 +1,10 @@
+# pyproject.toml과 동기. CI 또는 venv 재현용.
+google-api-python-client>=2.130
+google-auth-oauthlib>=1.2
+jwcrypto>=1.5.6
+markdown-it-py>=3.0
+mdit-py-plugins>=0.4
+requests>=2.32
+pytest>=8.0
+pytest-mock>=3.12
+responses>=0.25

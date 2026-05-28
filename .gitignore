@@ -15,6 +15,13 @@ playwright-report
 test-results
 .DS_Store
 
+# services/* (Python 워크로드)
+services/*/.venv/
+services/*/secrets/
+services/*/logs/
+services/*/__pycache__/
+services/*/.pytest_cache/
+
 # OAuth client credentials JSON 등 자격증명 다운로드본 (절대 커밋 금지).
 google_*.json
 client_secret_*.json

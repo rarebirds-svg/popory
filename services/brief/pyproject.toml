@@ -1,0 +1,31 @@
+# services/brief 의존성·테스트 설정 (popory monorepo 안의 독립 Python 프로젝트)
+[project]
+name = "popory-brief"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "google-api-python-client>=2.130",
+  "google-auth-oauthlib>=1.2",
+  "jwcrypto>=1.5.6",
+  "markdown-it-py>=3.0",
+  "mdit-py-plugins>=0.4",
+  "requests>=2.32",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-mock>=3.12",
+  "responses>=0.25",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["popory_brief*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
