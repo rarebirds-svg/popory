@@ -6,8 +6,8 @@ describe("AreaSubscribersResponseSchema", () => {
   it("정상 응답 파싱", () => {
     const ok = AreaSubscribersResponseSchema.parse({
       subscribers: [
-        { email: "a@x", display_name: "A" },
-        { email: "b@x", display_name: null },
+        { email: "a@example.com", display_name: "A" },
+        { email: "b@example.com", display_name: null },
       ],
     });
     expect(ok.subscribers).toHaveLength(2);
@@ -20,6 +20,14 @@ describe("AreaSubscribersResponseSchema", () => {
   it("email 누락 시 거절", () => {
     expect(() =>
       AreaSubscribersResponseSchema.parse({ subscribers: [{ display_name: "x" }] }),
+    ).toThrow();
+  });
+
+  it("잘못된 email 형식 거절", () => {
+    expect(() =>
+      AreaSubscribersResponseSchema.parse({
+        subscribers: [{ email: "not-an-email", display_name: null }],
+      }),
     ).toThrow();
   });
 });

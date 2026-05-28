@@ -2,7 +2,7 @@
 import { z } from "zod";
 
 export const AreaSubscriberSchema = z.object({
-  email: z.string().min(1),
+  email: z.string().email(),
   display_name: z.string().nullable(),
 });
 export type AreaSubscriber = z.infer<typeof AreaSubscriberSchema>;
