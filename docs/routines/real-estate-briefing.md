@@ -261,7 +261,9 @@ EOF
 </html>
 ```
 
-### 5-3. publish용 Markdown 본문 (Phase B)
+### 5-3. publish용 Markdown 본문 (Phase B · 필수)
+
+> **이 단계는 옵션이 아니다.** 메일용 HTML 본문 작성과 동시에 반드시 수행한다. 본문 파일 `/tmp/brief_${DATE}.md` 와 메타 파일 `/tmp/brief_${DATE}.meta.json` 이 생성돼 있어야 §7-bis가 동작한다. 두 파일이 없으면 publish 자체가 불가능하므로 §5-3은 건너뛰지 말 것.
 
 메일용 HTML 본문(§5-1·§5-2)과 함께, 같은 내용을 **GFM Markdown 1부**로 작성해 portal publish에 사용한다.
 
@@ -411,7 +413,7 @@ EOF
    EOF
    ```
 
-4-bis. **Phase B publish** — 본 list item 안에 코드를 두지 않는다. `## 7-bis. Phase B publish (top-level)` 섹션의 3단계 절차를 그대로 따른다.
+4-bis. **Phase B publish** (필수) — 본 list item 안에는 코드를 두지 않는다. `## 7-bis. Phase B publish (top-level)` 섹션의 3단계 절차를 **반드시** 수행한 뒤 5번 발송 요약 보고로 넘어간다. **§7-bis를 건너뛰면 routine 실패로 간주한다.**
 
 5. **발송 요약 보고**:
    ```bash
@@ -430,11 +432,24 @@ EOF
 
 > 발송 검증은 logs 파일 마지막 줄 읽기로 갈음한다 (`search_threads`/`list_drafts` MCP 불필요).
 
-## 7-bis. Phase B publish (top-level)
+## 7-bis. Phase B publish (top-level · 필수)
+
+> **본 섹션은 §7-4-bis에서 redirect된 것이다.** 메일 발송이 끝나면 7-bis-1·7-bis-2·7-bis-3 **세 단계 모두**를 반드시 수행한 뒤 §7-5로 돌아간다. §7-bis를 건너뛰는 것은 routine 실패다. 실행 결과(성공·실패)는 §7-5 발송 요약 보고에 publish_id 또는 실패 사유로 명시한다.
 
 §7 메일 발송이 모두 끝난 뒤 본 섹션의 3단계를 그대로 실행한다. routine 종료 직전 1회. 실패해도 메일에는 영향 없다(메일은 이미 발송 완료).
 
 이 절차는 list 아이템 안 깊은 들여쓰기가 발생하지 않도록 모든 코드 블록이 top-level 0-공백으로 작성되어 있다. 들여쓰기를 임의로 추가하지 말 것.
+
+### 7-bis-0. 본문 파일 존재 점검 (선결 조건)
+
+§5-3에서 작성됐어야 할 두 파일이 실제로 존재하는지 다음 Bash로 확인한다.
+
+```bash
+DATE=$(TZ=Asia/Seoul date +%Y-%m-%d)
+ls -la /tmp/brief_${DATE}.md /tmp/brief_${DATE}.meta.json
+```
+
+둘 중 하나라도 없으면 routine은 §5-3으로 돌아가 본문 + 메타 파일을 즉시 작성한 뒤 다시 §7-bis로 진입한다. 본문 파일 없이는 publish가 불가능하다.
 
 ### 7-bis-1. 환경변수 export
 
