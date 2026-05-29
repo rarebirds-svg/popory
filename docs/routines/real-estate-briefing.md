@@ -373,15 +373,15 @@ EOF
 
 > **인코딩 주의**. `--from` 생략 시 Gmail이 계정 표시명으로 채우는데, 한글이 RFC 2047 인코딩 없이 들어가 수신측에서 모자이크(`ëŠ ìŠ` 형태)로 보인다. 호출 시 반드시 `--from "부동산 이슈 브리핑 <rarebirds@gmail.com>"`을 포함할 것.
 
-## 7. 발송 절차 (Phase B · cloud sandbox 전용 · Gmail MCP draft 생성)
+## 7. 발송 절차 (Phase B · cloud sandbox 전용 · Gmail REST API)
 
-> **Phase B (2026-05-29~)**: cloud sandbox는 **outbound SMTP (포트 465/587)를 차단**한다 (2026-05-29 검증). smtplib·Gmail App Password 직접 발송 불가. Phase B 동안 routine은 **Gmail MCP의 draft 생성 도구**로 수신인별 draft를 만들고, 사용자가 매일 아침 Gmail "임시보관함"에서 수동 발송한다. Phase C에서 Gmail REST API 또는 외부 SMTP relay로 자동화한다.
+> **Phase B (2026-05-29~)**: cloud sandbox는 outbound SMTP를 차단하지만 HTTPS는 허용된다. Gmail 발송은 **Gmail REST API** (`gmail.googleapis.com/gmail/v1/users/me/messages/send`)를 OAuth 2.0 refresh token으로 호출한다. credentials 3개(client_id, client_secret, refresh_token)는 routine entry prompt §3에서 inject한다.
 
 > **자동 실행 안전 수칙**
 >
 > 1. 본문 HTML은 `/tmp/brief_body_${DATE}.html` 한 파일에 작성한다(수신인 공통).
-> 2. 모든 파일 작성은 Bash heredoc.
-> 3. 발송은 Python smtplib 사용 금지 (sandbox 차단). attached Gmail connector의 draft 생성 도구만 사용.
+> 2. 발송 스크립트는 `/tmp/brief_send.py` 한 파일에 작성한다.
+> 3. 모든 파일 작성은 Bash heredoc.
 
 ### 7-1. 본문 HTML 파일 작성
 
@@ -395,41 +395,111 @@ cat > /tmp/brief_body_${DATE}.html <<'EOF'
 EOF
 ```
 
-### 7-2. 수신인별 Gmail draft 생성
+### 7-2. 발송 스크립트 작성 + 3개 placeholder 치환
 
-routine LLM은 attached Gmail connector의 "임시보관함 생성" 또는 "draft 생성" 도구(보통 `create_draft` 또는 동등 이름)를 사용해 다음 파라미터로 수신인 수만큼 호출한다.
+다음 Bash heredoc을 그대로 실행해 `/tmp/brief_send.py` 파일을 만든다. 파일 안에 OAuth 자리표시자 **3줄**이 남아 있다.
 
-파라미터.
-- `to`: 수신인 이메일 1개 (§6 목록의 1명. 현재 `lovemycho@naver.com`, `sungjong.kim@navercorp.com`)
-- `subject`: `[부동산 이슈 브리핑] YYYY-MM-DD` (KST)
-- `body` (HTML): `/tmp/brief_body_${DATE}.html` 파일 내용 전체
-- `from`: 가능하면 `부동산 이슈 브리핑 <rarebirds@gmail.com>`. 도구가 from을 지원 안 하면 OAuth 계정 기본값.
+```bash
+cat > /tmp/brief_send.py <<'PY_EOF'
+import json, base64, sys, os, urllib.parse, urllib.request, urllib.error
+from email.message import EmailMessage
 
-draft 생성 도구는 일반적으로 `draft_id` 또는 `message_id`를 응답한다. 각 응답을 누적해 §7-5 JSON에 포함시킨다.
+CLIENT_ID = "<<<GMAIL_CLIENT_ID_FROM_ROUTINE_PROMPT>>>"
+CLIENT_SECRET = "<<<GMAIL_CLIENT_SECRET_FROM_ROUTINE_PROMPT>>>"
+REFRESH_TOKEN = "<<<GMAIL_REFRESH_TOKEN_FROM_ROUTINE_PROMPT>>>"
 
-만약 draft 생성 도구도 없으면 routine은 stderr에 `Gmail MCP에 draft 도구 없음` 명시 후 §7-bis publish는 건너뛰고 §7-5로 진행한다.
+FROM_EMAIL = "rarebirds@gmail.com"
+FROM_NAME = "부동산 이슈 브리핑"
+RECIPIENTS = ["lovemycho@naver.com", "sungjong.kim@navercorp.com"]
 
-### 7-3. 결과 처리 정책
+data = urllib.parse.urlencode({
+    "client_id": CLIENT_ID,
+    "client_secret": CLIENT_SECRET,
+    "refresh_token": REFRESH_TOKEN,
+    "grant_type": "refresh_token",
+}).encode()
+try:
+    with urllib.request.urlopen("https://oauth2.googleapis.com/token", data=data, timeout=30) as resp:
+        access_token = json.loads(resp.read().decode())["access_token"]
+except urllib.error.HTTPError as e:
+    print(f"oauth refresh failed: HTTP {e.code} {e.read().decode(errors='replace')[:300]}", file=sys.stderr)
+    sys.exit(3)
 
-- `drafts_created ≥ 1` → §7-bis publish **진행**. routine은 메일 발송이 "사용자 수동 발송 대기" 상태로 완료된 것으로 간주한다.
-- `drafts_created == 0` → §7-bis publish **건너뛴다**. 공개본만 떠있고 메일 통로 없는 상태 방지.
+date = os.environ["BRIEF_DATE"]
+subject = f"[부동산 이슈 브리핑] {date}"
+html_body = open(f"/tmp/brief_body_{date}.html", encoding="utf-8").read()
 
-> **사용자 수동 발송**. Phase B 동안 사용자는 매일 아침 Gmail "임시보관함"(<https://mail.google.com/mail/u/0/#drafts>) 폴더에 들어가 그날 만들어진 draft 2건을 각각 "보내기" 클릭한다. draft 본문은 routine이 작성한 그대로, subject·to·from 모두 정상 설정되어 있다. Phase C에서 발송 자동화가 들어오면 이 수동 단계는 제거된다.
+results = {"sent": 0, "failed": 0, "message_ids": {}, "errors": {}}
+
+for to in RECIPIENTS:
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{FROM_NAME} <{FROM_EMAIL}>"
+    msg["To"] = to
+    msg.set_content("HTML 본문 미지원 클라이언트용 fallback")
+    msg.add_alternative(html_body, subtype="html")
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+    req = urllib.request.Request(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        data=json.dumps({"raw": raw}).encode(),
+        headers={"Authorization": f"Bearer {access_token}",
+                 "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            r = json.loads(resp.read().decode())
+            results["sent"] += 1
+            results["message_ids"][to] = r.get("id")
+    except urllib.error.HTTPError as e:
+        results["failed"] += 1
+        results["errors"][to] = f"HTTP {e.code}: {e.read().decode(errors='replace')[:200]}"
+    except Exception as e:
+        results["failed"] += 1
+        results["errors"][to] = str(e)
+
+print(json.dumps(results, ensure_ascii=False))
+PY_EOF
+```
+
+heredoc 실행 후 routine은 **Edit 또는 Read+Write 도구로 `/tmp/brief_send.py` 파일을 열어 3개 placeholder를 모두 치환**한다.
+
+| 매뉴얼 placeholder | routine entry prompt §3에서 가져올 값 |
+|--------------------|----------------------------------------|
+| `<<<GMAIL_CLIENT_ID_FROM_ROUTINE_PROMPT>>>` | `client_id` 한 줄 |
+| `<<<GMAIL_CLIENT_SECRET_FROM_ROUTINE_PROMPT>>>` | `client_secret` 한 줄 |
+| `<<<GMAIL_REFRESH_TOKEN_FROM_ROUTINE_PROMPT>>>` | `refresh_token` 한 줄 |
+
+치환 후 세 변수가 모두 entry prompt의 실제 값을 포함한 형태가 되어야 한다.
+
+### 7-3. 실행 + 결과 처리
+
+```bash
+export BRIEF_DATE=$(TZ=Asia/Seoul date +%Y-%m-%d)
+python3 /tmp/brief_send.py
+```
+
+stdout JSON 한 줄. 형식: `{"sent":N,"failed":M,"message_ids":{...},"errors":{...}}`.
+
+- `sent ≥ 1` → §7-bis publish **진행**.
+- `sent == 0` → §7-bis publish **건너뛴다** (메일 0건이면 공개본도 안 만든다).
+
+exit 3 = OAuth refresh 실패. credentials 무효 또는 만료. routine 즉시 종료.
 
 ### 7-4. 아카이브 갱신 — Phase B 동안 skip
 
-### 7-bis. Phase B publish — 별도 top-level 섹션 (§7-bis) 참조. `drafts_created ≥ 1` 일 때만 수행.
+### 7-bis. Phase B publish — 별도 top-level 섹션 (§7-bis) 참조. `sent ≥ 1` 일 때만 수행.
 
 ### 7-5. 발송 요약 보고
 
 stdout에 다음 JSON 한 줄을 print 후 종료한다.
 
 ```
-{"date":"YYYY-MM-DD","drafts_created":N,"draft_ids":{...},"publish_id":"..."}
+{"date":"YYYY-MM-DD","sent":N,"failed":M,"message_ids":{...},"publish_id":"..."}
 ```
 
-- `drafts_created`: 성공한 draft 수.
-- `draft_ids`: 수신인별 draft id (예: `{"lovemycho@naver.com":"r123...","sungjong.kim@navercorp.com":"r456..."}`).
+- `sent`/`failed`/`message_ids`: §7-3 결과.
 - `publish_id`: §7-bis-3 출력. publish 미수행 또는 실패 시 `null` 또는 실패 사유.
 
 ### Exit code 처리
@@ -586,7 +656,7 @@ python3 /tmp/brief_publish.py
 9. 5-3 publish용 Markdown 본문(`/tmp/brief_${DATE}.md`) + 메타(`/tmp/brief_${DATE}.meta.json`) 작성
 10. 5-4 self-check 항목 모두 통과 확인 (HTML 메일 + publish 본문 + 출처 검증). 4-5 중복 검증은 Phase B skip.
 11. 수신자 이메일 주소 정확성 재확인
-12. 수신인별 1건씩 Gmail MCP "임시보관함 생성/draft" tool로 draft 작성 (§7-2). Phase B 동안 사용자가 매일 임시보관함에서 수동 발송.
+12. 수신인별 1통씩 Gmail REST API 발송 (§7-2: /tmp/brief_send.py 작성 + 3개 OAuth placeholder 치환 + python3 실행)
 13. ~~archive `topics.jsonl` append~~ — Phase B 동안 skip
-14. Phase B publish 1회 호출 (§7-bis 3단계: env export → /tmp/brief_publish.py 작성 + PEM 치환 → python3 실행). `drafts_created ≥ 1` 일 때만 진행. exit 비제로여도 그날 작업은 정상 종료.
-15. §7-5 발송 요약 JSON 출력 (drafts_created, draft_ids, publish_id 포함)
+14. Phase B publish 1회 호출 (§7-bis 3단계: env export → /tmp/brief_publish.py 작성 + PEM 치환 → python3 실행). `sent ≥ 1` 일 때만 진행. exit 비제로여도 그날 작업은 정상 종료.
+15. §7-5 발송 요약 JSON 출력 (sent, failed, message_ids, publish_id 포함)
