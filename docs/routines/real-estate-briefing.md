@@ -106,7 +106,11 @@
 
 **Tier 4 언론 기사는 예외 없이 실행일 게재본만 허용.** 개인 블로그(`aboda.kr`, `mhb-blog.com`, 티스토리·네이버 블로그 등)는 게재일 확인이 곤란하고 신뢰도가 낮으므로, *Tier 1~4 정식 매체의 동일 사실 오늘자 기사가 확보된 경우에만 보조 인용* 가능. 단독 출처 사용 금지.
 
-### 4-5. 과거 브리핑 주제 중복 제외 (필수)
+### 4-5. 과거 브리핑 주제 중복 제외 (Phase B 동안 일시 비활성)
+
+> **Phase B (2026-05-29~)**: cloud sandbox는 매 invocation 새로 시작돼 Mac 로컬 archive 파일에 접근할 수 없다. 본 §4-5 절차는 **Phase B 동안 전부 skip 한다**. 중복 검사 없이 §4-1·§4-2·§4-3·§4-4만 적용한다. Phase C에서 archive를 portal API 또는 다른 cloud 저장소로 옮긴 뒤 재활성한다.
+
+### 4-5 (참고용 — Phase C 복원 시 사용). 과거 브리핑 주제 중복 제외 (Phase C에서 재활성)
 
 **원칙**: 최근 14일 이내 다룬 주제는 *그날의 신규 사실*이 없으면 재인용하지 않는다. 매일 같은 정책 해설·같은 시장 진단을 반복하면 브리핑 정보가치가 사라진다.
 
@@ -350,9 +354,7 @@ EOF
 - [ ] 정부 보도자료 원문 인용 시 본문에 발표일 명시 (예. "국토부 2026-05-12 발표")
 - [ ] 비공식 블로그(개인 블로그·티스토리·네이버 블로그 등)를 단독 출처로 인용한 이슈 없음
 
-**중복 검증 (4-5 절차)**
-- [ ] 후보 이슈가 archive 최근 14일치와 키워드 2개 이상 겹치지 않음. 겹치는 경우 새 통계 회차·정책 단계·결정 변화 중 하나가 본문에 명시됨
-- [ ] 발송 성공 후 archive `topics.jsonl`에 그날 이슈를 append할 준비
+**중복 검증 (4-5 절차)** — Phase B 동안 skip (cloud sandbox에 archive 없음)
 
 **publish 본문 검증 (5-3 절차 · Phase B)**
 - [ ] `/tmp/brief_${DATE}.md` 작성됨. H1 미사용, 본문에 §5-2 HTML 위계가 Markdown으로 1:1 옮겨짐
@@ -371,54 +373,53 @@ EOF
 
 > **인코딩 주의**. `--from` 생략 시 Gmail이 계정 표시명으로 채우는데, 한글이 RFC 2047 인코딩 없이 들어가 수신측에서 모자이크(`ëŠ ìŠ` 형태)로 보인다. 호출 시 반드시 `--from "부동산 이슈 브리핑 <rarebirds@gmail.com>"`을 포함할 것.
 
-## 7. 발송 절차
+## 7. 발송 절차 (Phase B · cloud sandbox 전용)
 
-> **자동 실행 안전 수칙** (사람 승인 없이 동작해야 하므로 필수)
+> **Phase B (2026-05-29~)**: routine은 cloud sandbox에서 실행되므로 Mac 로컬 자산(daily-brief send_gmail.py, .venv, archive 파일)에 접근할 수 없다. 본 §7은 그에 맞게 재작성되어 있다. Gmail 발송은 routine entry prompt에 attached된 **Gmail MCP connector의 메일 발송 tool**(보통 `send_email` 또는 동등 이름)을 사용한다.
+
+> **자동 실행 안전 수칙**
 >
-> 1. **본문 파일명에 KST 날짜 + 인덱스를 박아 매일 unique하게**. 형식: `/tmp/brief_body_YYYYMMDD_<index>.txt`. 전날 파일이 남아 있어도 새 경로라서 Write 시 "Read 먼저" 하네스 규칙에 걸리지 않는다.
-> 2. **본문 파일은 Bash heredoc(`cat > path <<'EOF' ... EOF`)으로 작성**. Write tool 자체를 거치지 않으므로 어떤 경로·중복 상태에도 안전.
-> 3. 모든 발송 명령은 settings.local.json allowlist에 이미 등록되어 prompt 없이 실행됨 (`Bash(/Users/daegong/projects/daily-brief/.venv/bin/python:*)`, `Write(/tmp/**)`, `Read(/tmp/**)` 등). **새 도구·새 경로 끌어들이지 말 것**.
+> 1. **본문 파일명에 KST 날짜 + 인덱스를 박아 매일 unique하게**. 형식: `/tmp/brief_body_YYYYMMDD_<index>.txt`. 본문 파일은 Bash heredoc(`cat > path <<'EOF' ... EOF`)으로 작성.
+> 2. **모든 통신은 attached connector + Python urllib 만 사용**. Mac 로컬 Python 인터프리터 경로는 절대 호출하지 말 것.
 
 ### 절차
 
-1. **본문 파일 작성**. 수신인별 1파일. 반드시 Bash heredoc 사용 (Write tool 금지). 파일명에 KST 날짜 포함.
+1. **본문 파일 작성**. 수신인별 1파일. Bash heredoc.
    ```bash
    cat > /tmp/brief_body_$(TZ=Asia/Seoul date +%Y%m%d)_1.txt <<'EOF'
    <!DOCTYPE html>
    ... (수신인1 본문 HTML) ...
    EOF
    ```
-   동일 형식으로 `_2`, `_3`... 반복.
+   동일 형식으로 `_2`, `_3`... 반복. §5-1·§5-2 디자인 그대로.
 
-2. **수신인별 발송**. 한 줄 단일 명령(셸 변수·세미콜론 분리 금지):
-   ```bash
-   /Users/daegong/projects/daily-brief/.venv/bin/python \
-     /Users/daegong/projects/daily-brief/send_gmail.py \
-     --to <수신인> \
-     --from "부동산 이슈 브리핑 <rarebirds@gmail.com>" \
-     --subject "[부동산 이슈 브리핑] $(TZ=Asia/Seoul date +%Y-%m-%d)" \
-     --body-file /tmp/brief_body_$(TZ=Asia/Seoul date +%Y%m%d)_<index>.txt \
-     --html
-   ```
+2. **수신인별 발송 (Gmail MCP)**. routine LLM은 attached Gmail connector의 "메일 발송" 도구를 사용해 다음 파라미터로 호출한다. 한 명에게 한 번씩, 총 수신인 수만큼.
+
+   파라미터.
+   - `to`: 수신인 이메일 1개 (lovemycho@naver.com, sungjong.kim@navercorp.com 등 §6 목록의 1명)
+   - `subject`: `[부동산 이슈 브리핑] YYYY-MM-DD` (KST)
+   - `body` (HTML): `/tmp/brief_body_YYYYMMDD_<index>.txt` 파일 내용 전체
+   - `from`: 가능하면 `부동산 이슈 브리핑 <rarebirds@gmail.com>` 표시명. 발송 도구가 from을 지원 안 하면 OAuth 계정 기본값으로 발송.
+
+   Gmail connector tool 이름은 routine LLM이 실제 attached tool 목록에서 확인한다. 일반적으로 `Gmail__send_email` 같은 형태일 가능성이 높다.
+
+   **만약 Gmail connector에 발송 도구가 없으면** routine은 stderr에 `Gmail MCP에 send 도구 없음 — Phase B 발송 단계 중단` 명시 후 §7-bis publish는 건너뛰고 §7-5로 진행한다 (메일 0건이므로 공개본도 publish 안 함).
 
 3. **결과 처리**
-   - exit code 0 → stdout JSON의 `message_id`를 로그 기록
-   - exit code 비제로 → stderr 사유 보고. 본문 파일은 `/tmp`에 그대로 남겨 수동 복구 가능하도록. **archive에 append 금지**
+   - send tool이 정상 응답(`message_id` 또는 thread_id 포함) → 로그.
+   - send tool 에러 (4xx/5xx) → 해당 수신자 skip, 다음 수신자 진행.
+   - 전원 실패 → §7-bis (publish) 호출 안 함.
+   - 1명 이상 성공 → §7-bis 진행.
 
-4. **아카이브 갱신**. 모든 수신인 발송이 성공한 경우 archive `topics.jsonl`에 그날 이슈 append (4-5-3 형식). 일부만 성공한 경우에도 본문은 동일하므로 append 수행.
-   ```bash
-   cat >> /Users/daegong/projects/daily-brief/archive/topics.jsonl <<'EOF'
-   {"date":"$(TZ=Asia/Seoul date +%Y-%m-%d)","section":"core","title":"...","keywords":["...","..."]}
-   ...
-   EOF
+4. **아카이브 갱신** — **Phase B 동안 skip**. cloud sandbox는 Mac 로컬 archive 파일에 접근할 수 없다. archive 갱신 코드를 시도하지 말 것. Phase C에서 portal API로 archive를 이전한 뒤 재활성한다.
+
+4-bis. **Phase B publish** (필수) — `## 7-bis. Phase B publish (top-level)` 섹션의 3단계 절차를 **반드시** 수행한 뒤 5번 발송 요약 보고로 넘어간다. §7-bis를 건너뛰면 routine 실패로 간주한다.
+
+5. **발송 요약 보고** — stdout에 다음 JSON 한 줄을 print 후 종료한다.
+   ```json
+   {"date":"YYYY-MM-DD","sent":N,"failed":M,"publish_id":"..."}
    ```
-
-4-bis. **Phase B publish** (필수) — 본 list item 안에는 코드를 두지 않는다. `## 7-bis. Phase B publish (top-level)` 섹션의 3단계 절차를 **반드시** 수행한 뒤 5번 발송 요약 보고로 넘어간다. **§7-bis를 건너뛰면 routine 실패로 간주한다.**
-
-5. **발송 요약 보고**:
-   ```bash
-   tail -2 /Users/daegong/projects/daily-brief/logs/$(TZ=Asia/Seoul date +%Y-%m-%d).log
-   ```
+   `sent`/`failed`는 §7-2 발송 결과, `publish_id`는 §7-bis-3 출력. publish 실패 시 `publish_id` 자리에 `null` 또는 실패 사유 문자열.
 
 ### Exit code 처리
 
@@ -565,16 +566,16 @@ python3 /tmp/brief_publish.py
 
 1. 현재 KST 시각 확인 → 24시간 수집 윈도우 계산
 2. Tier 1·2 매체 접근 정상 여부 확인
-3. archive 디렉터리·파일 존재 확인, 없으면 `mkdir -p` + `touch`로 생성 (4-5-1)
-4. archive 최근 14일치 조회 → 후보 이슈 중복 필터링 (4-5-2). 중복 후보는 새 통계 회차·정책 단계·결정 변화 중 하나가 있을 때만 통과
+3. ~~archive 디렉터리·파일 존재 확인~~ — Phase B 동안 skip
+4. ~~archive 최근 14일치 조회 → 중복 필터링~~ — Phase B 동안 skip
 5. 전제 조건·선정 기준 적용 후 이슈 3건 이상 확보. 미달 시 "이슈 부족" 안내 후 종료
 6. 모든 이슈에 원본 URL 포함 검증
 7. Tier 1 1차 소스 우선 인용 여부 확인
 8. 인용 URL 게재일 일괄 검증 (4-4 절차) — 슬러그·메타 둘 다 확인. 실행일 ≠ 게재일이면 교체 또는 제거. 통계 페이지·보도자료 원문은 예외, 단 본문에 회차 일자·발표일 명시
 9. 5-3 publish용 Markdown 본문(`/tmp/brief_${DATE}.md`) + 메타(`/tmp/brief_${DATE}.meta.json`) 작성
-10. 5-4 self-check 항목 모두 통과 확인 (HTML 메일 + publish 본문 + 출처·중복 검증)
+10. 5-4 self-check 항목 모두 통과 확인 (HTML 메일 + publish 본문 + 출처 검증). 4-5 중복 검증은 Phase B skip.
 11. 수신자 이메일 주소 정확성 재확인
-12. 수신인별 1통씩 개별 발송
-13. 발송 성공 시 archive `topics.jsonl`에 그날 이슈 append (4-5-3). 실패 시 append 금지
+12. 수신인별 1통씩 Gmail MCP "메일 발송" tool로 발송 (§7-2)
+13. ~~archive `topics.jsonl` append~~ — Phase B 동안 skip
 14. Phase B publish 1회 호출 (§7-bis 3단계: env export → /tmp/brief_publish.py 작성 + PEM 치환 → python3 실행). exit 비제로여도 그날 작업은 정상 종료, 다음 실행 전 운영자가 `/p/brief/` 확인
-15. 발송 결과 로그 출력 (수신자 수 / 성공·실패 / message_id / publish id)
+15. §7-5 발송 요약 보고 JSON 출력
