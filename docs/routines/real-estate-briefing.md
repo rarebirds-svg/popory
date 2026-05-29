@@ -373,53 +373,106 @@ EOF
 
 > **인코딩 주의**. `--from` 생략 시 Gmail이 계정 표시명으로 채우는데, 한글이 RFC 2047 인코딩 없이 들어가 수신측에서 모자이크(`ëŠ ìŠ` 형태)로 보인다. 호출 시 반드시 `--from "부동산 이슈 브리핑 <rarebirds@gmail.com>"`을 포함할 것.
 
-## 7. 발송 절차 (Phase B · cloud sandbox 전용)
+## 7. 발송 절차 (Phase B · cloud sandbox 전용 · smtplib + Gmail App Password)
 
-> **Phase B (2026-05-29~)**: routine은 cloud sandbox에서 실행되므로 Mac 로컬 자산(daily-brief send_gmail.py, .venv, archive 파일)에 접근할 수 없다. 본 §7은 그에 맞게 재작성되어 있다. Gmail 발송은 routine entry prompt에 attached된 **Gmail MCP connector의 메일 발송 tool**(보통 `send_email` 또는 동등 이름)을 사용한다.
+> **Phase B (2026-05-29~)**: cloud sandbox에서 실행. Gmail 발송은 Python 표준 라이브러리 `smtplib` + Gmail App Password (routine entry prompt §3에서 inject)로 직접 SMTP 호출한다. Gmail MCP는 사용하지 않는다.
 
 > **자동 실행 안전 수칙**
 >
-> 1. **본문 파일명에 KST 날짜 + 인덱스를 박아 매일 unique하게**. 형식: `/tmp/brief_body_YYYYMMDD_<index>.txt`. 본문 파일은 Bash heredoc(`cat > path <<'EOF' ... EOF`)으로 작성.
-> 2. **모든 통신은 attached connector + Python urllib 만 사용**. Mac 로컬 Python 인터프리터 경로는 절대 호출하지 말 것.
+> 1. 본문 HTML은 `/tmp/brief_body_${DATE}.html` 한 파일에 작성한다(수신인 공통).
+> 2. 발송 스크립트는 `/tmp/brief_send.py` 한 파일에 작성한다.
+> 3. 모든 파일 작성은 Bash heredoc (Write tool 금지).
 
-### 절차
+### 7-1. 본문 HTML 파일 작성
 
-1. **본문 파일 작성**. 수신인별 1파일. Bash heredoc.
-   ```bash
-   cat > /tmp/brief_body_$(TZ=Asia/Seoul date +%Y%m%d)_1.txt <<'EOF'
-   <!DOCTYPE html>
-   ... (수신인1 본문 HTML) ...
-   EOF
-   ```
-   동일 형식으로 `_2`, `_3`... 반복. §5-1·§5-2 디자인 그대로.
+§5-1·§5-2 디자인 그대로의 HTML을 다음 한 파일에 작성한다 (수신인 공통).
 
-2. **수신인별 발송 (Gmail MCP)**. routine LLM은 attached Gmail connector의 "메일 발송" 도구를 사용해 다음 파라미터로 호출한다. 한 명에게 한 번씩, 총 수신인 수만큼.
+```bash
+DATE=$(TZ=Asia/Seoul date +%Y-%m-%d)
+cat > /tmp/brief_body_${DATE}.html <<'EOF'
+<!DOCTYPE html>
+... §5-2 HTML 전체 ...
+EOF
+```
 
-   파라미터.
-   - `to`: 수신인 이메일 1개 (lovemycho@naver.com, sungjong.kim@navercorp.com 등 §6 목록의 1명)
-   - `subject`: `[부동산 이슈 브리핑] YYYY-MM-DD` (KST)
-   - `body` (HTML): `/tmp/brief_body_YYYYMMDD_<index>.txt` 파일 내용 전체
-   - `from`: 가능하면 `부동산 이슈 브리핑 <rarebirds@gmail.com>` 표시명. 발송 도구가 from을 지원 안 하면 OAuth 계정 기본값으로 발송.
+### 7-2. 발송 스크립트 작성 + App Password placeholder 치환
 
-   Gmail connector tool 이름은 routine LLM이 실제 attached tool 목록에서 확인한다. 일반적으로 `Gmail__send_email` 같은 형태일 가능성이 높다.
+다음 Bash heredoc을 그대로 실행해 `/tmp/brief_send.py` 파일을 만든다. 파일 안에 의도적으로 App Password 자리표시자 한 줄(`<<<GMAIL_APP_PASSWORD_FROM_ROUTINE_PROMPT>>>`)이 남아 있다.
 
-   **만약 Gmail connector에 발송 도구가 없으면** routine은 stderr에 `Gmail MCP에 send 도구 없음 — Phase B 발송 단계 중단` 명시 후 §7-bis publish는 건너뛰고 §7-5로 진행한다 (메일 0건이므로 공개본도 publish 안 함).
+```bash
+cat > /tmp/brief_send.py <<'PY_EOF'
+import os, smtplib, ssl, sys, json
+from email.message import EmailMessage
 
-3. **결과 처리**
-   - send tool이 정상 응답(`message_id` 또는 thread_id 포함) → 로그.
-   - send tool 에러 (4xx/5xx) → 해당 수신자 skip, 다음 수신자 진행.
-   - 전원 실패 → §7-bis (publish) 호출 안 함.
-   - 1명 이상 성공 → §7-bis 진행.
+APP_PASSWORD = "<<<GMAIL_APP_PASSWORD_FROM_ROUTINE_PROMPT>>>"
+FROM_EMAIL = "rarebirds@gmail.com"
+FROM_NAME = "부동산 이슈 브리핑"
 
-4. **아카이브 갱신** — **Phase B 동안 skip**. cloud sandbox는 Mac 로컬 archive 파일에 접근할 수 없다. archive 갱신 코드를 시도하지 말 것. Phase C에서 portal API로 archive를 이전한 뒤 재활성한다.
+RECIPIENTS = ["lovemycho@naver.com", "sungjong.kim@navercorp.com"]
 
-4-bis. **Phase B publish** (필수) — `## 7-bis. Phase B publish (top-level)` 섹션의 3단계 절차를 **반드시** 수행한 뒤 5번 발송 요약 보고로 넘어간다. §7-bis를 건너뛰면 routine 실패로 간주한다.
+date = os.environ["BRIEF_DATE"]
+subject = f"[부동산 이슈 브리핑] {date}"
+html_body = open(f"/tmp/brief_body_{date}.html", encoding="utf-8").read()
 
-5. **발송 요약 보고** — stdout에 다음 JSON 한 줄을 print 후 종료한다.
-   ```json
-   {"date":"YYYY-MM-DD","sent":N,"failed":M,"publish_id":"..."}
-   ```
-   `sent`/`failed`는 §7-2 발송 결과, `publish_id`는 §7-bis-3 출력. publish 실패 시 `publish_id` 자리에 `null` 또는 실패 사유 문자열.
+ctx = ssl.create_default_context()
+results = {"sent": 0, "failed": 0, "errors": []}
+
+with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as smtp:
+    try:
+        smtp.login(FROM_EMAIL, APP_PASSWORD)
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"smtp auth failed: {e}", file=sys.stderr)
+        sys.exit(3)
+    for to in RECIPIENTS:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = f"{FROM_NAME} <{FROM_EMAIL}>"
+        msg["To"] = to
+        msg.set_content("부동산 이슈 브리핑 — HTML 본문을 지원하는 메일 클라이언트에서 확인해 주세요.")
+        msg.add_alternative(html_body, subtype="html")
+        try:
+            smtp.send_message(msg)
+            results["sent"] += 1
+        except Exception as e:
+            results["failed"] += 1
+            results["errors"].append({"to": to, "error": str(e)})
+
+print(json.dumps(results, ensure_ascii=False))
+PY_EOF
+```
+
+heredoc 실행 후 routine은 **Edit 또는 Read+Write 도구로 `/tmp/brief_send.py` 파일을 열어** `<<<GMAIL_APP_PASSWORD_FROM_ROUTINE_PROMPT>>>` 한 줄을 **routine entry prompt §3의 Gmail App Password 16자**로 정확히 치환한다 (공백 포함 그대로 또는 공백 제거한 형태 둘 다 OK — Gmail은 두 형식 모두 받음).
+
+치환 후 `APP_PASSWORD` 변수가 다음 형태가 되어야 한다.
+
+```
+APP_PASSWORD = "<16자 또는 공백포함 19자>"
+```
+
+### 7-3. 실행 + 결과 처리
+
+```bash
+export BRIEF_DATE=$(TZ=Asia/Seoul date +%Y-%m-%d)
+python3 /tmp/brief_send.py
+```
+
+stdout JSON 한 줄. 형식: `{"sent":N,"failed":M,"errors":[...]}`. `sent ≥ 1` 이면 발송 성공으로 간주하고 §7-bis publish 진행. `sent == 0` 이면 §7-bis publish 건너뛰고 §7-5로 진행 (메일 0건이므로 공개본도 publish 안 함).
+
+exit 3 = SMTP auth 실패. App Password 무효 또는 만료. routine 즉시 종료.
+
+### 7-4. 아카이브 갱신 — Phase B 동안 skip
+
+### 7-bis. Phase B publish — 별도 top-level 섹션 (§7-bis) 참조. `sent ≥ 1` 일 때만 수행.
+
+### 7-5. 발송 요약 보고
+
+stdout에 다음 JSON 한 줄을 print 후 종료한다.
+
+```
+{"date":"YYYY-MM-DD","sent":N,"failed":M,"publish_id":"..."}
+```
+
+`sent`/`failed`는 §7-3 결과, `publish_id`는 §7-bis-3 출력. publish 미수행 또는 실패 시 `publish_id` 자리에 `null` 또는 실패 사유 문자열.
 
 ### Exit code 처리
 
