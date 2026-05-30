@@ -1,4 +1,5 @@
 # pyproject.toml과 동기. CI 또는 venv 재현용.
+anthropic>=0.40
 google-api-python-client>=2.130
 google-auth-oauthlib>=1.2
 jwcrypto>=1.5.6
