@@ -26,7 +26,7 @@ from popory_brief.log import append_log, KST
 LOGS_DIR = Path(__file__).resolve().parent / "logs"
 CLAUDE_BIN = "/opt/homebrew/bin/claude"
 DEFAULT_MODEL = "claude-sonnet-4-6"
-TIMEOUT_SECONDS = 600
+TIMEOUT_SECONDS = 1200
 
 
 def main() -> None:
