@@ -2,6 +2,9 @@
 import Link from "next/link";
 import { API_BASE } from "@/lib/env";
 
+export const dynamic = "force-dynamic";
+export const runtime = "edge";
+
 interface Item {
   id: string;
   title: string;
@@ -66,12 +69,10 @@ function formatDate(unixSeconds: number): string {
 }
 
 export default async function BriefHubPage() {
-  const cards: CategoryCard[] = await Promise.all(
-    BRIEF_CATEGORIES.map(async (c) => ({
-      ...c,
-      latest: await fetchLatest(c.slug),
-    })),
-  );
+  const cards: CategoryCard[] = [];
+  for (const c of BRIEF_CATEGORIES) {
+    cards.push({ ...c, latest: await fetchLatest(c.slug) });
+  }
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-12">
