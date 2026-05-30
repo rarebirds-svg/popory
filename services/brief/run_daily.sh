@@ -21,15 +21,9 @@ if [ ! -f "${BRIEF_DIR}/secrets/portal_endpoints.env" ]; then
   log "\"missing portal_endpoints.env\""
   exit 2
 fi
-if [ ! -f "${BRIEF_DIR}/secrets/anthropic.env" ]; then
-  log "\"missing anthropic.env\""
-  exit 2
-fi
 set -a
 # shellcheck disable=SC1091
 source "${BRIEF_DIR}/secrets/portal_endpoints.env"
-# shellcheck disable=SC1091
-source "${BRIEF_DIR}/secrets/anthropic.env"
 set +a
 
 # 2) 본문 + 메타 생성 (Anthropic API + web_search)
@@ -63,7 +57,7 @@ fi
 # 4) 수신인별 메일 발송 (jq로 이메일 추출 후 반복)
 SENT=0
 FAILED=0
-EMAILS=$(echo "${SUBS_OUT}" | /opt/homebrew/bin/jq -r '.subscribers[].email' 2>/dev/null)
+EMAILS=$(echo "${SUBS_OUT}" | /usr/bin/jq -r '.subscribers[].email' 2>/dev/null)
 if [ -z "${EMAILS}" ]; then
   log "\"no subscribers — skipping publish\""
   exit 0
@@ -74,7 +68,7 @@ while IFS= read -r EMAIL; do
   [ -z "${EMAIL}" ] && continue
   SEND_OUT=$("${VENV_PY}" "${BRIEF_DIR}/send_gmail.py" \
     --to "${EMAIL}" \
-    --from "부동산 이슈 브리핑 <rarebirds@gmail.com>" \
+    --from "부동산 이슈 브리핑 <poporyfamily@gmail.com>" \
     --subject "${SUBJECT}" \
     --body-file "${BODY_FILE}" \
     --md 2>&1)
