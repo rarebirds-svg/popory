@@ -56,7 +56,8 @@ function parseYamlScalar(s: string): unknown {
   if (trimmed === "true") return true;
   if (trimmed === "false") return false;
   if (/^".*"$/.test(trimmed)) {
-    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    // \X → X 한 패스. backslash·quote escape 모두 안전 처리.
+    return trimmed.slice(1, -1).replace(/\\(.)/g, (_, ch) => ch);
   }
   return trimmed;
 }

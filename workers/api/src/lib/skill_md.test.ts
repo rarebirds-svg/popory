@@ -68,6 +68,21 @@ describe("serializeSkillMd", () => {
     expect(out).toContain('subject_template: "A \\"B\\" C"');
     expect(out).toContain("enabled: false");
   });
+
+  it("sender_name 안의 따옴표·역슬래시 escape round-trip", () => {
+    const fields = {
+      slug: "x",
+      name: "X",
+      delivery_mode: "bundled" as const,
+      subject_template: "x",
+      sender_name: 'a "b" \\\\c',
+      enabled: true,
+    };
+    const out = serializeSkillMd({ fields, body: "body\n" });
+    const back = parseSkillMd(out);
+    expect(back.errors).toEqual([]);
+    expect(back.fields).toEqual(fields);
+  });
 });
 
 describe("validateFields", () => {
@@ -105,6 +120,12 @@ describe("validateFields", () => {
   it("subject_template 빈 문자열 위반", () => {
     expect(validateFields({ ...base, subject_template: "" })).toContainEqual(
       expect.stringContaining("subject_template"),
+    );
+  });
+
+  it("sender_name 빈 문자열 위반", () => {
+    expect(validateFields({ ...base, sender_name: "" })).toContainEqual(
+      expect.stringContaining("sender_name"),
     );
   });
 });
