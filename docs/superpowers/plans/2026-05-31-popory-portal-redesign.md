@@ -6,14 +6,21 @@
 
 **Architecture:** 하나의 토큰 시스템(`packages/ui/src/tokens.css`) 위에 두 테마를 둔다. 공개 영역은 기본 `--popory-*` 토큰(네이비)을 쓰고, 어드민은 `.ledger` 스코프에서 같은 변수를 종이 톤 값으로 재매핑한다 — 그래서 동일한 Tailwind 유틸리티가 표면별로 다르게 보인다. 폰트는 `next/font`로 Fraunces(세리프 헤드라인)·Inter+Noto Sans KR(본문)을 root layout에서 로드해 CSS 변수로 노출한다. 라우팅·인증·API·데이터 흐름은 불변, 프레젠테이션만 교체한다.
 
-**Tech Stack:** Next.js 15 (App Router, edge runtime), React 19, Tailwind CSS 3.4 + @tailwindcss/typography, next/font, react-markdown + remark-gfm.
+**Tech Stack:** Next.js 15 (App Router, edge runtime), React 19, Tailwind CSS 3.4 + @tailwindcss/typography, next/font, react-markdown + remark-gfm. 모노레포는 pnpm + turbo. portal은 `@popory/portal`, 공유 UI는 `@popory/ui`(node_modules 심볼릭 링크).
 
-**검증 방식(중요):** 이 저장소에는 단위 테스트 하니스가 없고, 본 작업은 순수 프레젠테이션 변경이라 테스트 프레임워크를 새로 도입하지 않는다(YAGNI). 각 태스크의 검증은 다음 3종으로 한다.
-- 타입 — `cd apps/portal && npx tsc --noEmit` → 에러 0.
-- 빌드(주요 분기점) — `cd apps/portal && npm run build` → 성공.
-- 육안 — `cd apps/portal && npm run dev` 후 해당 경로를 브라우저로 확인. 라이트/다크는 OS 테마 또는 브라우저 devtools의 `prefers-color-scheme` 에뮬레이션으로 둘 다 본다.
+**검증 방식(중요):** portal에는 단위 테스트 하니스가 없고(플레이wright e2e 스캐폴드만 존재), 본 작업은 순수 프레젠테이션 변경이라 테스트 프레임워크를 새로 도입하지 않는다(YAGNI). 각 태스크의 검증은 다음 3종으로 한다.
+- 타입 — `pnpm -C apps/portal typecheck` → 에러 0.
+- 빌드(주요 분기점) — `pnpm -C apps/portal build` → 성공.
+- 육안 — `pnpm -C apps/portal dev` 후 해당 경로를 브라우저로 확인. 라이트/다크는 OS 테마 또는 브라우저 devtools의 `prefers-color-scheme` 에뮬레이션으로 둘 다 본다.
 
-**디자인 소스 오브 트루스:** 합의된 목업 HTML이 `.superpowers/brainstorm/39394-1780220883/content/`(gitignore됨)에 있다 — `direction.html`(방향 비교), `system-b.html`(공개 4표면), `terracotta.html`(폐기, 무시). 구조·간격·위계는 `system-b.html`를 기준으로 한다. 스펙은 `docs/superpowers/specs/2026-05-31-popory-portal-redesign-design.md`.
+**디자인 소스 오브 트루스:** 합의된 목업 HTML이 `.superpowers/brainstorm/39394-1780220883/content/`(gitignore됨)에 있다 — `system-b.html`(공개 4표면)이 구조·간격·위계의 기준. 스펙은 `docs/superpowers/specs/2026-05-31-popory-portal-redesign-design.md`.
+
+**현 코드 사실(플랜 전제):**
+- `Header` 시그니처는 `{ email, role: "member"|"admin", apiBase }`. 로그아웃은 `${apiBase}/api/logout`. (서버 컴포넌트, `'use client'` 없음.)
+- `@popory/ui` index.ts는 `import "./tokens.css";` 를 포함한다 — 이 import는 반드시 유지.
+- 마크다운 렌더는 `apps/portal/src/app/p/[area]/[id]/markdown-body.tsx`의 로컬 `MarkdownBody`. `@popory/ui`에는 없음.
+- `published_at`은 **유닉스 초(number)**. 표시는 `new Date(published_at * 1000)`.
+- 본문 상세 필드는 `item.body`(마크다운 문자열). 목록/허브 아이템은 `{ id, title, summary, published_at }`.
 
 ---
 
@@ -21,28 +28,21 @@
 
 **토큰·설정 (기반)**
 - Modify: `packages/ui/src/tokens.css` — 공개 팔레트 재조정 + 신규 토큰(`--popory-fg2`, `--popory-accent-soft`) + `.ledger` 스코프 토큰(라이트/다크).
-- Modify: `apps/portal/tailwind.config.ts` — 신규 색 토큰 매핑, `fontFamily` serif/sans 매핑, `prose-popory` 재설계.
-- Modify: `apps/portal/src/app/layout.tsx` — `next/font`로 Fraunces·Inter·Noto Sans KR 로드, body에 폰트 변수 클래스 부여.
+- Modify: `apps/portal/tailwind.config.ts` — 신규 색 토큰 매핑, `fontFamily` serif/sans, `prose-popory` 재설계.
+- Modify: `apps/portal/src/app/layout.tsx` — `next/font`로 Fraunces·Inter·Noto Sans KR 로드, html에 폰트 변수 클래스 부여.
 
 **공유 컴포넌트 (`packages/ui`)**
-- Create: `packages/ui/src/components/Kicker.tsx` — accent-soft 칩.
-- Create: `packages/ui/src/components/BriefCard.tsx` — 좌측 accent 보더 요점 카드.
-- Create: `packages/ui/src/components/WhyBlock.tsx` — "왜 중요한가" 블록.
-- Modify: `packages/ui/src/components/Header.tsx` — Nav 리워크(로고 dot + 우측 메뉴). props 시그니처 유지.
-- Modify: `packages/ui/src/components/MarkdownBody.tsx` — 변경 없음(스타일은 tailwind `prose-popory`에서). 확인만.
-- Modify: `packages/ui/src/index.ts` — 신규 컴포넌트 export.
+- Create: `packages/ui/src/components/Kicker.tsx`
+- Create: `packages/ui/src/components/BriefCard.tsx`
+- Create: `packages/ui/src/components/WhyBlock.tsx`
+- Modify: `packages/ui/src/components/Header.tsx` — Nav 리워크(로고 dot + 아바타). props 시그니처 유지.
+- Modify: `packages/ui/src/index.ts` — tokens.css import 유지 + 신규 컴포넌트 export.
 
 **공개 페이지 (`apps/portal/src/app`)**
-- Modify: `page.tsx` — 랜딩.
-- Modify: `(authed)/dashboard/page.tsx` — 대시보드.
-- Modify: `p/brief/page.tsx` — 브리핑 허브.
-- Modify: `p/[area]/page.tsx` — 영역 목록.
-- Modify: `p/page.tsx` — 공개 아카이브 홈.
-- Modify: `p/[area]/[id]/page.tsx` — 본문 셸(키커·헤드라인·메타 + MarkdownBody).
+- Modify: `page.tsx`(랜딩), `(authed)/dashboard/page.tsx`, `p/brief/page.tsx`, `p/[area]/page.tsx`, `p/page.tsx`, `p/[area]/[id]/page.tsx`.
 
 **어드민 페이지 (`apps/portal/src/app/admin`)**
-- Modify: `admin/layout.tsx` — `.ledger` 래퍼 + 세리프 헤딩.
-- Modify: `admin/page.tsx`, `admin/whitelist/page.tsx`, `admin/users/page.tsx`, `admin/brief-categories/page.tsx`, `admin/brief-categories/new/NewForm.tsx`, `admin/brief-categories/[slug]/EditForm.tsx` — Ledger 톤 input/table/heading 정리.
+- Modify: `admin/layout.tsx`(.ledger 래퍼) + `admin/page.tsx`, `admin/whitelist/page.tsx`, `admin/users/page.tsx`, `admin/brief-categories/page.tsx`, `admin/brief-categories/new/NewForm.tsx`, `admin/brief-categories/[slug]/EditForm.tsx`.
 
 ---
 
@@ -55,7 +55,7 @@
 
 - [ ] **Step 1: tokens.css를 새 팔레트로 교체**
 
-`packages/ui/src/tokens.css` 전체를 아래로 교체한다. 첫 줄 한국어 헤더 주석은 유지한다.
+`packages/ui/src/tokens.css` 전체를 아래로 교체한다.
 
 ```css
 /* popory 포털·영역 사이트가 공통으로 사용하는 디자인 토큰 (라이트/다크). */
@@ -111,7 +111,7 @@
 
 - [ ] **Step 2: tailwind.config.ts에 신규 토큰·폰트·prose 반영**
 
-`apps/portal/tailwind.config.ts` 전체를 아래로 교체한다. 첫 줄 주석 유지.
+`apps/portal/tailwind.config.ts` 전체를 아래로 교체한다.
 
 ```ts
 // 포털 Tailwind 설정. popory 토큰을 CSS 변수로 받고, prose-popory 변형을 정의한다.
@@ -198,13 +198,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
 - [ ] **Step 4: 타입체크**
 
-Run: `cd apps/portal && npx tsc --noEmit`
-Expected: 에러 0. (`@tailwindcss/typography` 타입은 무시되어도 무방.)
+Run: `pnpm -C apps/portal typecheck`
+Expected: 에러 0.
 
 - [ ] **Step 5: 빌드로 폰트 로드 확인**
 
-Run: `cd apps/portal && npm run build`
-Expected: 성공. `next/font`가 Fraunces/Inter/Noto Sans KR을 받아온다.
+Run: `pnpm -C apps/portal build`
+Expected: 성공.
 
 - [ ] **Step 6: 커밋**
 
@@ -292,15 +292,15 @@ export function WhyBlock({ label = "왜 중요한가", children }: { label?: str
 }
 ```
 
-- [ ] **Step 4: index.ts에 export 추가**
+- [ ] **Step 4: index.ts에 export 추가 (tokens.css import 유지)**
 
-`packages/ui/src/index.ts` 전체를 아래로 교체한다.
+`packages/ui/src/index.ts` 전체를 아래로 교체한다. **`import "./tokens.css";` 줄을 반드시 유지한다** (이게 빠지면 전 사이트 토큰이 깨진다). `MarkdownBody`는 `@popory/ui`에 없으므로 export하지 않는다.
 
 ```ts
-// @popory/ui 공개 진입점. 공통 컴포넌트를 재노출한다.
+// @popory/ui 공개 진입점. 토큰과 공통 컴포넌트를 재노출한다.
+import "./tokens.css";
 export { Card } from "./components/Card";
 export { Header } from "./components/Header";
-export { MarkdownBody } from "./components/MarkdownBody";
 export { Kicker } from "./components/Kicker";
 export { BriefCard } from "./components/BriefCard";
 export { WhyBlock } from "./components/WhyBlock";
@@ -308,7 +308,7 @@ export { WhyBlock } from "./components/WhyBlock";
 
 - [ ] **Step 5: 타입체크**
 
-Run: `cd apps/portal && npx tsc --noEmit`
+Run: `pnpm -C apps/portal typecheck`
 Expected: 에러 0.
 
 - [ ] **Step 6: 커밋**
@@ -327,19 +327,11 @@ git commit -m "feat(ui): 공유 프리미티브 Kicker·BriefCard·WhyBlock 추�
 
 - [ ] **Step 1: Header를 새 디자인으로 교체 (props 시그니처 유지)**
 
-`packages/ui/src/components/Header.tsx` 전체를 아래로 교체한다. props(`email`, `role?`, `showAdmin?`)는 그대로 유지해 호출부를 깨지 않는다. 미사용 `useState` import를 제거한다(이 변경으로 고아가 됨).
+`packages/ui/src/components/Header.tsx` 전체를 아래로 교체한다. props(`email`, `role`, `apiBase`)와 로그아웃 endpoint(`${apiBase}/api/logout`)는 그대로 유지해 호출부를 깨지 않는다.
 
 ```tsx
 // 포털 상단 헤더(Nav). 로고와 사용자 정보·admin 링크·로그아웃을 제공한다.
-'use client';
-
-interface HeaderProps {
-  email: string;
-  role?: string;
-  showAdmin?: boolean;
-}
-
-export function Header({ email, showAdmin }: HeaderProps) {
+export function Header({ email, role, apiBase }: { email: string; role: "member" | "admin"; apiBase: string }) {
   const initial = email?.[0]?.toUpperCase() ?? "?";
   return (
     <header className="border-b border-popory-border bg-popory-card">
@@ -350,14 +342,14 @@ export function Header({ email, showAdmin }: HeaderProps) {
         </a>
         <div className="flex items-center gap-4 text-sm text-popory-muted">
           <a href="/p/brief" className="hidden hover:text-popory-fg sm:inline">브리핑</a>
-          {showAdmin && <a href="/admin" className="hover:text-popory-fg">어드민</a>}
+          {role === "admin" && <a href="/admin" className="hover:text-popory-fg">어드민</a>}
           <span className="flex items-center gap-2">
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-popory-accent-soft text-[11px] font-bold text-popory-accent">
               {initial}
             </span>
             <span className="hidden sm:inline">{email}</span>
           </span>
-          <form action="/api/auth/logout" method="post">
+          <form action={`${apiBase}/api/logout`} method="post">
             <button type="submit" className="hover:text-popory-fg">로그아웃</button>
           </form>
         </div>
@@ -369,14 +361,10 @@ export function Header({ email, showAdmin }: HeaderProps) {
 
 - [ ] **Step 2: 타입체크**
 
-Run: `cd apps/portal && npx tsc --noEmit`
-Expected: 에러 0. (`role` prop은 인터페이스에 남기되 미사용 — 호출부 `role={...}` 전달이 깨지지 않는다.)
+Run: `pnpm -C apps/portal typecheck`
+Expected: 에러 0.
 
-- [ ] **Step 3: 육안 확인**
-
-Run: `cd apps/portal && npm run dev` → `http://localhost:3000/dashboard` 접속(로그인 필요 시 우회 어려우면 build만 통과 확인). 헤더에 로고 dot·아바타가 보이는지 확인.
-
-- [ ] **Step 4: 커밋**
+- [ ] **Step 3: 커밋**
 
 ```bash
 git add packages/ui/src/components/Header.tsx
@@ -385,67 +373,95 @@ git commit -m "feat(ui): Nav 헤더 리워크 (로고 dot·아바타)"
 
 ---
 
-## Task 4: 브리핑 본문 읽기 (prose-popory 검증 + 본문 셸)
+## Task 4: 브리핑 본문 읽기 (prose-popory + 본문 셸)
 
 **Files:**
 - Modify: `apps/portal/src/app/p/[area]/[id]/page.tsx`
-- (참고) `packages/ui/src/components/MarkdownBody.tsx` — 변경 없음, `prose prose-popory`가 Task 1의 새 prose 설정을 받는다.
+- (변경 없음) `apps/portal/src/app/p/[area]/[id]/markdown-body.tsx` — 로컬 `MarkdownBody`, `prose prose-popory`가 Task 1의 새 prose 설정을 받는다.
 
-- [ ] **Step 1: 본문 페이지 현재 구조 확인**
+- [ ] **Step 1: 본문 셸을 에디토리얼 레이아웃으로 교체**
 
-Run: `sed -n '1,80p' apps/portal/src/app/p/[area]/[id]/page.tsx`
-Expected: 발행물을 fetch해 제목·날짜·`<MarkdownBody content=... />`를 렌더하는 server component. fetch/props 구조를 메모한다(다음 스텝에서 그대로 재사용).
-
-- [ ] **Step 2: 본문 셸을 에디토리얼 레이아웃으로 교체**
-
-`apps/portal/src/app/p/[area]/[id]/page.tsx`에서, 데이터 fetch 로직은 그대로 두고 **return 마크업만** 아래 형태로 교체한다. 변수명(`item`, `area` 등)은 Step 1에서 확인한 실제 이름에 맞춘다. 키커의 카테고리 라벨은 area 문자열(예: `brief-real-estate` → 표시용으로 가공)이나 item 필드에서 가져온다.
+`apps/portal/src/app/p/[area]/[id]/page.tsx` 전체를 아래로 교체한다. fetch 로직·타입·`MarkdownBody` 로컬 import는 그대로, return 마크업만 에디토리얼로 바꾼다. `Kicker`를 `@popory/ui`에서 추가 import.
 
 ```tsx
-return (
-  <main className="mx-auto max-w-2xl px-4 py-10">
-    <a href={`/p/${area}`} className="text-sm text-popory-muted hover:text-popory-fg">← 목록으로</a>
-    <div className="mt-4">
-      <Kicker>{categoryLabel}{item.published_at ? ` · ${formatDate(item.published_at)}` : ""}</Kicker>
-    </div>
-    <h1 className="mt-3 font-serif text-3xl font-semibold leading-tight tracking-tight text-popory-fg">
-      {item.title}
-    </h1>
-    <div className="mt-3 flex items-center gap-2 border-b border-popory-border pb-5 text-xs text-popory-muted">
-      <span>popory 브리핑</span>
-    </div>
-    <div className="mt-6">
-      <MarkdownBody content={item.body ?? item.content ?? ""} />
-    </div>
-  </main>
-);
-```
+// 발행물 상세 페이지. published_items에서 단건 조회 후 markdown 렌더.
+import { notFound } from "next/navigation";
+import { Kicker } from "@popory/ui";
+import { API_BASE } from "@/lib/env";
+import { MarkdownBody } from "./markdown-body";
 
-import 줄에 `Kicker`를 추가한다: `import { MarkdownBody, Kicker } from "@popory/ui";`
+export const dynamic = "force-dynamic";
+export const runtime = "edge";
 
-`categoryLabel`과 `formatDate`는 파일 상단(컴포넌트 밖)에 작은 헬퍼로 둔다. `area`가 `brief-` 접두라면 제거하고 표시한다.
+interface ItemDetail {
+  id: string;
+  area: string;
+  title: string;
+  body: string;
+  published_at: number;
+}
 
-```tsx
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return `${d.getMonth() + 1}.${d.getDate()}`;
+async function fetchItem(area: string, id: string): Promise<ItemDetail | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/published_items/${id}?area=${area}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ItemDetail;
+  } catch {
+    return null;
+  }
+}
+
+function formatDate(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000);
+  return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`;
+}
+
+export default async function ItemDetailPage({
+  params,
+}: {
+  params: Promise<{ area: string; id: string }>;
+}) {
+  const { area, id } = await params;
+  const item = await fetchItem(area, id);
+  if (!item) notFound();
+
+  const categoryLabel = area.replace(/^brief-/, "");
+
+  return (
+    <main className="mx-auto max-w-2xl px-4 py-10">
+      <a href={`/p/${area}`} className="text-sm text-popory-muted hover:text-popory-fg">← 목록으로</a>
+      <div className="mt-4">
+        <Kicker>{categoryLabel} · {formatDate(item.published_at)}</Kicker>
+      </div>
+      <h1 className="mt-3 font-serif text-3xl font-semibold leading-tight tracking-tight text-popory-fg">
+        {item.title}
+      </h1>
+      <div className="mt-3 flex items-center gap-2 border-b border-popory-border pb-5 text-xs text-popory-muted">
+        <span>popory 브리핑</span>
+      </div>
+      <div className="prose prose-popory mt-6 max-w-none">
+        <MarkdownBody content={item.body} />
+      </div>
+    </main>
+  );
 }
 ```
 
-`categoryLabel`은 `const categoryLabel = area.replace(/^brief-/, "");` 로 컴포넌트 본문 안에서 만든다. (실제 area/필드명은 Step 1 확인값에 맞춘다. 본문 필드가 `body`인지 `content`인지도 확인해 한쪽으로 고정한다.)
+- [ ] **Step 2: 타입체크**
 
-- [ ] **Step 3: 타입체크**
+Run: `pnpm -C apps/portal typecheck`
+Expected: 에러 0.
 
-Run: `cd apps/portal && npx tsc --noEmit`
-Expected: 에러 0. (필드명 불일치 시 Step 1 확인값으로 수정.)
+- [ ] **Step 3: 육안 확인**
 
-- [ ] **Step 4: 육안 확인**
+`pnpm -C apps/portal dev` → 실제 발행물 경로(`/p/brief-<slug>/<id>`) 접속. 키커 → 세리프 헤드라인 → 본문 순서, 본문 폭(약 42rem)·행간이 읽기 좋은지 라이트/다크 모두 확인.
 
-`npm run dev` → 실제 발행물 경로(`/p/brief-<slug>/<id>`) 접속. 키커 → 세리프 헤드라인 → 본문 순서, 본문 폭(약 42rem)·행간이 읽기 좋은지 라이트/다크 모두 확인.
-
-- [ ] **Step 5: 커밋**
+- [ ] **Step 4: 커밋**
 
 ```bash
-git add apps/portal/src/app/p/\[area\]/\[id\]/page.tsx
+git add "apps/portal/src/app/p/[area]/[id]/page.tsx"
 git commit -m "feat(portal): 브리핑 본문 에디토리얼 레이아웃 (키커·세리프 헤드라인·prose 재설계)"
 ```
 
@@ -456,55 +472,67 @@ git commit -m "feat(portal): 브리핑 본문 에디토리얼 레이아웃 (키�
 **Files:**
 - Modify: `apps/portal/src/app/p/brief/page.tsx`
 
-- [ ] **Step 1: 허브 마크업 교체 (fetch 로직 유지)**
+- [ ] **Step 1: 허브 return 마크업 교체 (fetch·타입·`cards` 로직 유지)**
 
-`apps/portal/src/app/p/brief/page.tsx`의 `fetchCategories`·`fetchLatest`·`Promise.all` 로직은 그대로 두고, `return` 마크업을 아래로 교체한다. `Kicker` import를 추가한다.
-
-```tsx
-import { Kicker } from "@popory/ui";
-```
+`apps/portal/src/app/p/brief/page.tsx`에서 상단 import/interface/`fetchCategories`/`fetchLatest`/`formatDate`/`cards` 빌드 로직은 그대로 둔다. 다음 두 가지만 바꾼다.
+1. import에 Kicker 추가: 파일 상단 `import Link from "next/link";` 아래에 `import { Kicker } from "@popory/ui";` 추가.
+2. `return (...)` 블록 전체를 아래로 교체.
 
 ```tsx
-return (
-  <main className="mx-auto max-w-5xl px-4 py-10">
-    <Kicker>Daily Briefings</Kicker>
-    <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">매일 아침, 여러 갈래의 세상</h1>
-    <p className="mt-2 text-sm text-popory-muted">AI가 큐레이션한 일일 브리핑. 매일 오전 9시 발행.</p>
-    {categories.length === 0 ? (
-      <p className="mt-10 text-sm text-popory-muted">아직 발행된 브리핑이 없습니다.</p>
-    ) : (
-      <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {categories.map((c, i) => (
-          <Link key={c.slug} href={`/p/brief-${c.slug}`} className="group">
-            <div className="h-full rounded-xl border border-popory-border bg-popory-card p-5 transition group-hover:border-popory-accent">
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-bold text-popory-fg">{c.name}</h2>
-              </div>
-              {c.description && <p className="mt-1 text-xs text-popory-muted">{c.description}</p>}
-              {latest[i] && (
-                <p className="mt-3 border-t border-dashed border-popory-border pt-3 text-sm leading-relaxed text-popory-fg2 line-clamp-2">
-                  {latest[i]!.title}
-                </p>
-              )}
-            </div>
-          </Link>
-        ))}
-      </div>
-    )}
-  </main>
-);
+  return (
+    <main className="mx-auto max-w-5xl px-4 py-10">
+      <Kicker>Daily Briefings</Kicker>
+      <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">
+        매일 아침, 여러 갈래의 세상
+      </h1>
+      <p className="mt-2 text-sm text-popory-muted">
+        AI가 큐레이션한 일일 브리핑. 매일 09:00 KST 발행.
+      </p>
+      {cards.length === 0 ? (
+        <p className="mt-10 text-sm text-popory-muted">카테고리 목록을 불러오지 못했습니다.</p>
+      ) : (
+        <ul className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {cards.map((c) => (
+            <li key={c.slug}>
+              <Link
+                href={`/p/brief-${c.slug}`}
+                className="group block h-full rounded-xl border border-popory-border bg-popory-card p-5 transition hover:border-popory-accent"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-base font-bold text-popory-fg">{c.name}</span>
+                </div>
+                {c.description && <p className="mt-1 text-xs text-popory-muted">{c.description}</p>}
+                {c.latest ? (
+                  <div className="mt-3 border-t border-dashed border-popory-border pt-3">
+                    <p className="line-clamp-2 text-sm font-medium leading-relaxed text-popory-fg2">
+                      {c.latest.title}
+                    </p>
+                    <p className="mt-1.5 text-[11px] text-popory-muted">최신 · {formatDate(c.latest.published_at)}</p>
+                  </div>
+                ) : (
+                  <p className="mt-3 border-t border-dashed border-popory-border pt-3 text-xs text-popory-muted">
+                    아직 발행된 브리핑이 없습니다.
+                  </p>
+                )}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </main>
+  );
 ```
 
-(기존에 `Card`를 import했다면, 더 이상 쓰지 않으면 import에서 제거한다.)
+(기존 `formatDate(unixSeconds)`는 그대로 사용 — `published_at`이 유닉스 초이므로 시그니처 변경 불필요.)
 
 - [ ] **Step 2: 타입체크**
 
-Run: `cd apps/portal && npx tsc --noEmit`
+Run: `pnpm -C apps/portal typecheck`
 Expected: 에러 0.
 
 - [ ] **Step 3: 육안 확인**
 
-`npm run dev` → `http://localhost:3000/p/brief`. 키커·세리프 제목·카테고리 카드(호버 시 accent 보더)·빈 상태를 라이트/다크로 확인.
+`pnpm -C apps/portal dev` → `http://localhost:3000/p/brief`. 키커·세리프 제목·카테고리 카드(호버 시 accent 보더)·빈 상태를 라이트/다크로 확인.
 
 - [ ] **Step 4: 커밋**
 
@@ -521,74 +549,158 @@ git commit -m "feat(portal): 브리핑 허브 에디토리얼 리디자인"
 - Modify: `apps/portal/src/app/p/[area]/page.tsx`
 - Modify: `apps/portal/src/app/p/page.tsx`
 
-- [ ] **Step 1: 두 파일의 현재 구조 확인**
+- [ ] **Step 1: 영역 목록을 날짜 중심 리스트로 교체**
 
-Run: `sed -n '1,80p' apps/portal/src/app/p/[area]/page.tsx; echo "====="; sed -n '1,80p' apps/portal/src/app/p/page.tsx`
-Expected: `[area]`는 발행물 목록(제목·요약·날짜)을, `p`는 영역별 카운트를 fetch해 보여준다. fetch 로직·변수명을 메모한다.
-
-- [ ] **Step 2: 영역 목록을 날짜 중심 리스트로 교체**
-
-`apps/portal/src/app/p/[area]/page.tsx`의 fetch 로직은 유지하고, return 마크업을 아래 형태로 교체한다. `Kicker` import 추가. `items` 변수명·필드명은 Step 1 확인값에 맞춘다.
+`apps/portal/src/app/p/[area]/page.tsx` 전체를 아래로 교체한다. fetch 로직·타입은 유지하고 날짜 헬퍼와 마크업만 바꾼다.
 
 ```tsx
-return (
-  <main className="mx-auto max-w-3xl px-4 py-10">
-    <div className="text-xs text-popory-muted">브리핑 · {categoryLabel}</div>
-    <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight text-popory-fg">{categoryLabel} 일일 브리핑</h1>
-    <div className="mt-6">
-      {items.length === 0 ? (
-        <p className="text-sm text-popory-muted">아직 발행된 글이 없습니다.</p>
+// 영역별 발행물 목록 페이지.
+import Link from "next/link";
+import { Kicker } from "@popory/ui";
+import { API_BASE } from "@/lib/env";
+
+export const dynamic = "force-dynamic";
+export const runtime = "edge";
+
+interface Item {
+  id: string;
+  title: string;
+  summary: string | null;
+  published_at: number;
+}
+
+async function fetchItems(area: string): Promise<Item[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/published_items?area=${area}&limit=50`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    const { items } = (await res.json()) as { items: Item[] };
+    return items;
+  } catch {
+    return [];
+  }
+}
+
+function dayOf(unixSeconds: number): string {
+  return String(new Date(unixSeconds * 1000).getDate());
+}
+function monthOf(unixSeconds: number): string {
+  return `${new Date(unixSeconds * 1000).getMonth() + 1}월`;
+}
+
+export default async function AreaListPage({
+  params,
+}: {
+  params: Promise<{ area: string }>;
+}) {
+  const { area } = await params;
+  const items = await fetchItems(area);
+  const categoryLabel = area.replace(/^brief-/, "");
+
+  return (
+    <main className="mx-auto max-w-3xl px-4 py-10">
+      <Kicker>{categoryLabel}</Kicker>
+      <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">
+        {categoryLabel} 브리핑
+      </h1>
+      <div className="mt-6">
+        {items.length === 0 ? (
+          <p className="text-sm text-popory-muted">아직 발행된 글이 없습니다.</p>
+        ) : (
+          items.map((it) => (
+            <Link
+              key={it.id}
+              href={`/p/${area}/${it.id}`}
+              className="flex gap-4 border-b border-popory-border py-4 transition hover:bg-popory-accent-soft/40"
+            >
+              <div className="w-14 shrink-0 text-center">
+                <div className="font-serif text-2xl font-semibold leading-none text-popory-fg">{dayOf(it.published_at)}</div>
+                <div className="mt-1 text-[10px] uppercase tracking-widest text-popory-muted">{monthOf(it.published_at)}</div>
+              </div>
+              <div>
+                <h2 className="text-[15px] font-bold leading-snug text-popory-fg">{it.title}</h2>
+                {it.summary && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-popory-muted">{it.summary}</p>}
+              </div>
+            </Link>
+          ))
+        )}
+      </div>
+    </main>
+  );
+}
+```
+
+- [ ] **Step 2: 아카이브 홈(/p) 교체**
+
+`apps/portal/src/app/p/page.tsx` 전체를 아래로 교체한다. fetch·타입 유지, 헤더와 카드 스타일만 허브와 통일.
+
+```tsx
+// 공개 아카이브 홈. 영역별 발행물 개수 카드.
+import Link from "next/link";
+import { Kicker } from "@popory/ui";
+import { API_BASE } from "@/lib/env";
+
+export const dynamic = "force-dynamic";
+export const runtime = "edge";
+
+interface AreaCount {
+  area: string;
+  count: number;
+}
+
+async function fetchAreas(): Promise<AreaCount[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/areas`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const { areas } = (await res.json()) as { areas: AreaCount[] };
+    return areas;
+  } catch {
+    return [];
+  }
+}
+
+export default async function ArchiveHome() {
+  const areas = await fetchAreas();
+  return (
+    <main className="mx-auto max-w-3xl px-4 py-10">
+      <Kicker>Archive</Kicker>
+      <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">popory 아카이브</h1>
+      {areas.length === 0 ? (
+        <p className="mt-10 text-sm text-popory-muted">아직 발행물이 없습니다.</p>
       ) : (
-        items.map((it) => (
-          <Link key={it.id} href={`/p/${area}/${it.id}`} className="flex gap-4 border-b border-popory-border py-4 hover:bg-popory-accent-soft/40">
-            <div className="w-14 shrink-0 text-center">
-              <div className="font-serif text-2xl font-semibold leading-none text-popory-fg">{dayOf(it.published_at)}</div>
-              <div className="mt-1 text-[10px] uppercase tracking-widest text-popory-muted">{monthOf(it.published_at)}</div>
-            </div>
-            <div>
-              <h2 className="text-[15px] font-bold leading-snug text-popory-fg">{it.title}</h2>
-              {it.summary && <p className="mt-1 text-xs leading-relaxed text-popory-muted line-clamp-2">{it.summary}</p>}
-            </div>
-          </Link>
-        ))
+        <ul className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {areas.map((a) => (
+            <li key={a.area}>
+              <Link
+                href={`/p/${a.area}`}
+                className="group block rounded-xl border border-popory-border bg-popory-card p-5 transition hover:border-popory-accent"
+              >
+                <div className="text-base font-bold text-popory-fg">{a.area}</div>
+                <div className="mt-1 text-sm text-popory-muted">{a.count}개 발행물</div>
+              </Link>
+            </li>
+          ))}
+        </ul>
       )}
-    </div>
-  </main>
-);
-```
-
-파일 상단(컴포넌트 밖)에 헬퍼를 둔다.
-
-```tsx
-function dayOf(iso?: string): string {
-  if (!iso) return "·";
-  return String(new Date(iso).getDate());
-}
-function monthOf(iso?: string): string {
-  if (!iso) return "";
-  return `${new Date(iso).getMonth() + 1}월`;
+    </main>
+  );
 }
 ```
 
-`categoryLabel`은 `const categoryLabel = area.replace(/^brief-/, "");` 로 컴포넌트 안에서 만든다(필요 시 Link href의 `area` 사용도 일관되게).
+- [ ] **Step 3: 타입체크**
 
-- [ ] **Step 3: 아카이브 홈(/p)을 키커+카드 톤으로 정리**
-
-`apps/portal/src/app/p/page.tsx`의 fetch 로직은 유지하고, 제목을 세리프로, 영역 카드를 허브와 같은 카드 스타일(`rounded-xl border border-popory-border bg-popory-card p-5 ... hover:border-popory-accent`)로 맞춘다. 상단에 `<Kicker>Archive</Kicker>` + `<h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">popory 아카이브</h1>`를 둔다. 카드 내부 구조(영역명·카운트)는 기존 데이터 필드를 그대로 사용한다.
-
-- [ ] **Step 4: 타입체크**
-
-Run: `cd apps/portal && npx tsc --noEmit`
+Run: `pnpm -C apps/portal typecheck`
 Expected: 에러 0.
 
-- [ ] **Step 5: 육안 확인**
+- [ ] **Step 4: 육안 확인**
 
-`npm run dev` → `/p` 와 `/p/brief-<slug>`. 날짜 컬럼·세리프 숫자·빈 상태를 라이트/다크로 확인.
+`pnpm -C apps/portal dev` → `/p` 와 `/p/brief-<slug>`. 날짜 컬럼·세리프 숫자·빈 상태를 라이트/다크로 확인.
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 5: 커밋**
 
 ```bash
-git add apps/portal/src/app/p/\[area\]/page.tsx apps/portal/src/app/p/page.tsx
+git add "apps/portal/src/app/p/[area]/page.tsx" apps/portal/src/app/p/page.tsx
 git commit -m "feat(portal): 영역 목록 날짜 중심 리스트 + 아카이브 홈 정리"
 ```
 
@@ -599,54 +711,73 @@ git commit -m "feat(portal): 영역 목록 날짜 중심 리스트 + 아카이�
 **Files:**
 - Modify: `apps/portal/src/app/(authed)/dashboard/page.tsx`
 
-- [ ] **Step 1: 대시보드 마크업 교체 (세션·서비스 배열 유지)**
+- [ ] **Step 1: 대시보드 전체 교체 (세션·AREAS·Header 시그니처 유지)**
 
-`apps/portal/src/app/(authed)/dashboard/page.tsx`에서 `getSession`/`redirect`/`SERVICES` 정의는 유지하고, return 마크업을 아래로 교체한다. `Header`·`Card` import는 유지하고 `Kicker`를 추가한다. (Card를 더 안 쓰면 import에서 제거.)
-
-```tsx
-return (
-  <div>
-    <Header email={session.email} role={session.role} showAdmin={session.role === "admin"} />
-    <main className="mx-auto max-w-5xl px-4 py-10">
-      <Kicker>{todayLabel}</Kicker>
-      <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">오늘의 popory</h1>
-      <p className="mt-2 text-sm text-popory-muted">가족이 함께 보는 브리핑과 서비스를 한곳에서.</p>
-      <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {SERVICES.map((s) => (
-          <a key={s.href} href={s.href} className="group block" {...(s.external ? { target: "_blank", rel: "noreferrer" } : {})}>
-            <div className="h-full rounded-xl border border-popory-border bg-popory-card p-5 transition group-hover:border-popory-accent">
-              <h2 className="text-base font-bold text-popory-fg">{s.title}</h2>
-              <p className="mt-1 text-sm text-popory-muted">{s.description}</p>
-            </div>
-          </a>
-        ))}
-      </div>
-    </main>
-  </div>
-);
-```
-
-컴포넌트 안 `const session` 직후에 날짜 라벨을 만든다.
+`apps/portal/src/app/(authed)/dashboard/page.tsx` 전체를 아래로 교체한다. `getCurrentUser`·`AREAS`·`Header({email, role, apiBase})` 호출은 유지하고, 인사말 헤더 + 서비스 카드 그리드를 에디토리얼로 바꾼다. Header는 max-w main 밖으로 빼서 풀폭 바로 둔다. `Card`는 더 이상 쓰지 않으므로 import에서 제거(고아 제거).
 
 ```tsx
-const todayLabel = new Intl.DateTimeFormat("ko-KR", { dateStyle: "full" }).format(new Date());
-```
+// 로그인 사용자의 대시보드. 영역 카드와 admin 진입 링크.
+import { redirect } from "next/navigation";
+import { Header, Kicker } from "@popory/ui";
+import { getCurrentUser } from "@/lib/session";
+import { API_BASE } from "@/lib/env";
 
-import에 `Kicker` 추가: `import { Header, Card, Kicker } from "@popory/ui";` (Card 미사용 시 제거).
+type AreaCard = { key: string; label: string; href: (apiBase: string) => string; external?: boolean };
+
+const AREAS: AreaCard[] = [
+  { key: "brief", label: "뉴스 브리핑", href: () => "/p/brief" },
+  { key: "content", label: "컨텐츠 관리", href: (b) => `${b}/go/content` },
+  { key: "finance", label: "금융 자산", href: (b) => `${b}/go/finance` },
+  { key: "baduk", label: "바둑", href: () => "https://www.inkbaduk.com", external: true },
+];
+
+export default async function Dashboard() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/");
+  const todayLabel = new Intl.DateTimeFormat("ko-KR", { dateStyle: "full" }).format(new Date());
+
+  return (
+    <div>
+      <Header email={user.email} role={user.role} apiBase={API_BASE} />
+      <main className="mx-auto max-w-5xl px-4 py-10">
+        <Kicker>{todayLabel}</Kicker>
+        <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">오늘의 popory</h1>
+        <p className="mt-2 text-sm text-popory-muted">가족이 함께 보는 브리핑과 서비스를 한곳에서.</p>
+        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {AREAS.map((a) => (
+            <a
+              key={a.key}
+              href={a.href(API_BASE)}
+              target={a.external ? "_blank" : undefined}
+              rel={a.external ? "noopener noreferrer" : undefined}
+              className="group block"
+            >
+              <div className="h-full rounded-xl border border-popory-border bg-popory-card p-5 transition group-hover:border-popory-accent">
+                <h2 className="text-base font-bold text-popory-fg">{a.label}</h2>
+                <p className="mt-1 text-sm text-popory-muted">{a.external ? "외부 사이트" : "바로 진입"}</p>
+              </div>
+            </a>
+          ))}
+        </div>
+      </main>
+    </div>
+  );
+}
+```
 
 - [ ] **Step 2: 타입체크**
 
-Run: `cd apps/portal && npx tsc --noEmit`
+Run: `pnpm -C apps/portal typecheck`
 Expected: 에러 0.
 
 - [ ] **Step 3: 육안 확인**
 
-`npm run dev` → `/dashboard`. 인사말 키커·세리프 제목·서비스 카드 라이트/다크 확인.
+`pnpm -C apps/portal dev` → `/dashboard`. 풀폭 헤더·인사말 키커·세리프 제목·서비스 카드 라이트/다크 확인.
 
 - [ ] **Step 4: 커밋**
 
 ```bash
-git add apps/portal/src/app/\(authed\)/dashboard/page.tsx
+git add "apps/portal/src/app/(authed)/dashboard/page.tsx"
 git commit -m "feat(portal): 대시보드 에디토리얼 리디자인 (인사말·서비스 카드)"
 ```
 
@@ -657,40 +788,53 @@ git commit -m "feat(portal): 대시보드 에디토리얼 리디자인 (인사�
 **Files:**
 - Modify: `apps/portal/src/app/page.tsx`
 
-- [ ] **Step 1: 랜딩 현재 구조 확인**
+- [ ] **Step 1: 랜딩 전체 교체 (세션 리다이렉트·구글 로그인 링크 유지)**
 
-Run: `sed -n '1,80p' apps/portal/src/app/page.tsx`
-Expected: 비로그인 시 로그인 랜딩, 로그인 시 `/dashboard` 리다이렉트. 로그인 진입(구글 등) 마크업·링크를 메모한다.
-
-- [ ] **Step 2: 랜딩 히어로를 에디토리얼로 교체 (리다이렉트·로그인 링크 유지)**
-
-세션 체크/리다이렉트와 로그인 URL은 그대로 두고, 비로그인 화면 마크업만 교체한다. 중앙 정렬 히어로: `<Kicker>popory family</Kicker>` + 세리프 대제목 + 부제 + 기존 로그인 버튼/링크(원래 href·action 유지). 예:
+`apps/portal/src/app/page.tsx` 전체를 아래로 교체한다. `getCurrentUser`/리다이렉트, 구글 로그인 링크(`${API_BASE}/api/login/google`)는 그대로 유지하고 히어로만 에디토리얼로.
 
 ```tsx
-return (
-  <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center px-4 text-center">
-    <Kicker>popory family</Kicker>
-    <h1 className="mt-4 font-serif text-4xl font-semibold tracking-tight text-popory-fg">매일 아침, 우리 가족의 브리핑</h1>
-    <p className="mt-3 text-sm leading-relaxed text-popory-muted">AI가 큐레이션한 일일 브리핑과 가족 서비스를 한곳에서.</p>
-    <div className="mt-8">
-      {/* 기존 로그인 버튼/링크를 여기로 옮긴다 (href·action 변경 금지) */}
-    </div>
-  </main>
-);
+// 비로그인 랜딩(구글 로그인 유도) 또는 로그인 시 대시보드로 이동.
+import { redirect } from "next/navigation";
+import { Kicker } from "@popory/ui";
+import { getCurrentUser } from "@/lib/session";
+import { API_BASE } from "@/lib/env";
+
+export const dynamic = "force-dynamic";
+export const runtime = "edge";
+
+export default async function Home() {
+  const user = await getCurrentUser();
+  if (user) redirect("/dashboard");
+  return (
+    <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center px-4 text-center">
+      <Kicker>popory family</Kicker>
+      <h1 className="mt-4 font-serif text-4xl font-semibold tracking-tight text-popory-fg">
+        매일 아침, 우리 가족의 브리핑
+      </h1>
+      <p className="mt-3 text-sm leading-relaxed text-popory-muted">
+        AI가 큐레이션한 일일 브리핑과 가족 서비스를 한곳에서. 가족 전용 포털입니다.
+      </p>
+      <a
+        href={`${API_BASE}/api/login/google`}
+        className="mt-8 rounded-md bg-popory-accent px-5 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
+      >
+        구글로 로그인
+      </a>
+    </main>
+  );
+}
 ```
 
-`Kicker` import 추가. 기존 로그인 진입 요소를 그대로 옮겨 넣는다.
+- [ ] **Step 2: 타입체크**
 
-- [ ] **Step 3: 타입체크**
-
-Run: `cd apps/portal && npx tsc --noEmit`
+Run: `pnpm -C apps/portal typecheck`
 Expected: 에러 0.
 
-- [ ] **Step 4: 육안 확인**
+- [ ] **Step 3: 육안 확인**
 
-`npm run dev` → `http://localhost:3000/` (로그아웃 상태). 히어로·로그인 버튼 동작·라이트/다크 확인.
+`pnpm -C apps/portal dev` → `http://localhost:3000/` (로그아웃 상태). 히어로·로그인 버튼·라이트/다크 확인.
 
-- [ ] **Step 5: 커밋**
+- [ ] **Step 4: 커밋**
 
 ```bash
 git add apps/portal/src/app/page.tsx
@@ -704,36 +848,40 @@ git commit -m "feat(portal): 랜딩 히어로 에디토리얼 리디자인"
 **Files:**
 - Modify: `apps/portal/src/app/admin/layout.tsx`
 
-- [ ] **Step 1: 어드민 레이아웃 현재 구조 확인**
+- [ ] **Step 1: `.ledger` 스코프와 세리프 헤딩 적용**
 
-Run: `sed -n '1,80p' apps/portal/src/app/admin/layout.tsx`
-Expected: admin role 가드 + 자식 렌더. 래퍼 엘리먼트 구조를 메모한다.
-
-- [ ] **Step 2: `.ledger` 스코프와 세리프 헤딩 적용**
-
-가드 로직은 유지하고, children을 감싸는 최상위 엘리먼트에 `ledger` 클래스 + 배경/폰트를 적용한다. 예(실제 가드 변수명은 Step 1 확인값 유지):
+`apps/portal/src/app/admin/layout.tsx` 전체를 아래로 교체한다. 가드 로직은 유지하고, 최상위 래퍼에 `ledger` 클래스 + 배경/세리프 헤딩을 적용한다.
 
 ```tsx
-return (
-  <div className="ledger min-h-screen bg-popory-bg text-popory-fg [&_h1]:font-serif [&_h2]:font-serif [&_h3]:font-serif">
-    {/* 기존 admin nav/헤더가 있으면 그대로 둔다 */}
-    <div className="mx-auto max-w-4xl px-4 py-10">{children}</div>
-  </div>
-);
+// 어드민 영역 가드. role!=admin 이면 / 로 redirect. Ledger 테마 적용.
+import { redirect } from "next/navigation";
+import type { ReactNode } from "react";
+import { getCurrentUser } from "@/lib/session";
+
+export default async function AdminLayout({ children }: { children: ReactNode }) {
+  const user = await getCurrentUser();
+  if (!user) redirect("/");
+  if (user.role !== "admin") redirect("/dashboard");
+  return (
+    <div className="ledger min-h-screen bg-popory-bg text-popory-fg [&_h1]:font-serif [&_h2]:font-serif [&_h3]:font-serif">
+      <div className="mx-auto max-w-4xl px-6 py-10">{children}</div>
+    </div>
+  );
+}
 ```
 
 `.ledger`가 Task 1에서 정의한 종이 톤 토큰을 자식 전체에 재매핑하므로, 기존 `popory-*` 유틸리티가 자동으로 Ledger 색을 받는다.
 
-- [ ] **Step 3: 타입체크 + 빌드**
+- [ ] **Step 2: 타입체크 + 빌드**
 
-Run: `cd apps/portal && npx tsc --noEmit && npm run build`
+Run: `pnpm -C apps/portal typecheck && pnpm -C apps/portal build`
 Expected: 둘 다 성공.
 
-- [ ] **Step 4: 육안 확인**
+- [ ] **Step 3: 육안 확인**
 
-`npm run dev` → `/admin`. 배경이 종이 톤으로, 헤딩이 세리프로, 강조가 잉크 레드로 바뀌었는지 라이트/다크 확인.
+`pnpm -C apps/portal dev` → `/admin`. 배경이 종이 톤, 헤딩이 세리프, 강조가 잉크 레드로 바뀌었는지 라이트/다크 확인.
 
-- [ ] **Step 5: 커밋**
+- [ ] **Step 4: 커밋**
 
 ```bash
 git add apps/portal/src/app/admin/layout.tsx
@@ -742,7 +890,7 @@ git commit -m "feat(portal): 어드민 Ledger 테마 레이아웃 (.ledger 토�
 
 ---
 
-## Task 10: 어드민 폼·테이블 정리
+## Task 10: 어드민 폼·테이블 톤 정리
 
 **Files:**
 - Modify: `apps/portal/src/app/admin/page.tsx`
@@ -752,34 +900,49 @@ git commit -m "feat(portal): 어드민 Ledger 테마 레이아웃 (.ledger 토�
 - Modify: `apps/portal/src/app/admin/brief-categories/new/NewForm.tsx`
 - Modify: `apps/portal/src/app/admin/brief-categories/[slug]/EditForm.tsx`
 
-- [ ] **Step 1: 각 파일의 헤딩·input·table·button 클래스 확인**
+대부분의 색은 Task 9의 `.ledger` 토큰 재매핑으로 이미 적용된다. 이 태스크는 **위계·여백·세리프 헤딩·강조 포인트**를 Ledger 톤에 맞게 마감하는 작업이다. 기능(Server Action, form action, fetch, 핸들러)·구조는 변경하지 않는다.
 
-Run: `grep -rn "className" apps/portal/src/app/admin/page.tsx apps/portal/src/app/admin/whitelist/page.tsx apps/portal/src/app/admin/users/page.tsx apps/portal/src/app/admin/brief-categories/page.tsx apps/portal/src/app/admin/brief-categories/new/NewForm.tsx apps/portal/src/app/admin/brief-categories/[slug]/EditForm.tsx`
-Expected: 현재 사용 중인 input/table/button 클래스 목록. Ledger 톤으로 통일할 대상을 식별한다.
+- [ ] **Step 1: 각 파일의 현재 className 파악**
 
-- [ ] **Step 2: 공통 클래스 토큰 통일**
+Run: `grep -rn "className" "apps/portal/src/app/admin/page.tsx" "apps/portal/src/app/admin/whitelist/page.tsx" "apps/portal/src/app/admin/users/page.tsx" "apps/portal/src/app/admin/brief-categories/page.tsx" "apps/portal/src/app/admin/brief-categories/new/NewForm.tsx" "apps/portal/src/app/admin/brief-categories/[slug]/EditForm.tsx"`
+Expected: 현재 input/table/button/링크 클래스 목록. 정리 대상 식별.
 
-각 파일에서 다음 규칙으로 정리한다. 기능(Server Action, form action, 핸들러)·구조는 변경하지 않는다.
-- 페이지 제목 `h1`/`h2`는 `font-serif`가 layout에서 이미 적용됨 — 별도 폰트 클래스 추가 불필요. 크기·여백만 필요 시 정리.
-- input/textarea: `w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg` 로 통일.
-- 라벨: `text-xs font-medium text-popory-muted`.
-- primary 버튼: `rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white`.
-- secondary 버튼: `rounded-md border border-popory-border px-4 py-2 text-sm text-popory-fg`.
-- 테이블: 헤더 `text-left text-xs uppercase tracking-wide text-popory-muted`, 행 구분 `border-b border-popory-border`, 셀 `py-2 text-sm text-popory-fg`.
-- 에러 배너: `rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700`(다크 대응 필요 시 `dark:` 변형 유지/추가).
+- [ ] **Step 2: admin/page.tsx 헤더·네비 다듬기**
 
-`NewForm.tsx`·`EditForm.tsx`에 이미 정의된 `INPUT`/`Field` 상수가 있으면 그 상수 값만 위 규칙으로 바꾼다(중복 정의 금지, DRY).
+`admin/page.tsx`의 제목은 layout이 세리프를 입히므로 폰트 클래스 추가 불필요. 네비 링크 톤만 통일한다. `<nav className="mt-4 flex gap-4 text-sm">`의 각 링크 `className="text-popory-accent"`를 `className="text-popory-accent hover:underline"`로 바꾸고, 통계 카드가 있으면 `rounded-xl border border-popory-border bg-popory-card p-5` 카드 스타일로 맞춘다.
 
-- [ ] **Step 3: 타입체크 + 빌드**
+- [ ] **Step 3: NewForm.tsx / EditForm.tsx 입력 상수 통일**
 
-Run: `cd apps/portal && npx tsc --noEmit && npm run build`
+두 폼에 정의된 공통 상수만 아래 값으로 바꾼다(중복 정의 금지, DRY). 두 파일 모두 동일 상수명을 쓴다.
+
+```tsx
+const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
+const LABEL = "block text-xs font-medium text-popory-muted mb-1";
+```
+
+제출 버튼이 있으면 `className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"`로, 보조 버튼/취소 링크는 `className="rounded-md border border-popory-border px-4 py-2 text-sm text-popory-fg"`로 통일한다. 에러 배너(`rounded-md border border-red-300 bg-red-50 ...`)는 그대로 둔다.
+
+- [ ] **Step 4: whitelist / users / brief-categories 테이블·목록 다듬기**
+
+각 페이지의 테이블/목록을 다음 규칙으로 통일한다.
+- 테이블 헤더 셀: `className="text-left text-xs uppercase tracking-wide text-popory-muted"`
+- 행: `className="border-b border-popory-border"`
+- 데이터 셀: `className="py-2 text-sm text-popory-fg"`
+- 행 안의 액션 버튼: Step 3의 primary/secondary 버튼 클래스 재사용.
+- 입력(이메일 추가 등): Step 3의 `INPUT` 동일 클래스.
+
+기능/Server Action/form action은 변경 금지.
+
+- [ ] **Step 5: 타입체크 + 빌드**
+
+Run: `pnpm -C apps/portal typecheck && pnpm -C apps/portal build`
 Expected: 둘 다 성공.
 
-- [ ] **Step 4: 육안 확인**
+- [ ] **Step 6: 육안 확인**
 
-`npm run dev` → `/admin`, `/admin/whitelist`, `/admin/users`, `/admin/brief-categories`, `/admin/brief-categories/new`. 폼·테이블이 Ledger 톤으로 일관된지, 폼 제출(추가/삭제/저장)이 그대로 동작하는지 라이트/다크 확인.
+`pnpm -C apps/portal dev` → `/admin`, `/admin/whitelist`, `/admin/users`, `/admin/brief-categories`, `/admin/brief-categories/new`. 폼·테이블이 Ledger 톤으로 일관되고, 폼 제출(추가/삭제/저장)이 그대로 동작하는지 라이트/다크 확인.
 
-- [ ] **Step 5: 커밋**
+- [ ] **Step 7: 커밋**
 
 ```bash
 git add apps/portal/src/app/admin
@@ -790,24 +953,21 @@ git commit -m "feat(portal): 어드민 폼·테이블 Ledger 톤 통일"
 
 ## Task 11: 마감 — 라이트/다크·반응형·빌드
 
-**Files:**
-- (필요 시) 위 모든 페이지 미세 조정
-
 - [ ] **Step 1: 전체 빌드**
 
-Run: `cd apps/portal && npm run build`
+Run: `pnpm -C apps/portal build`
 Expected: 성공. 경고가 있으면 읽고 의미 있는 것만 처리.
 
 - [ ] **Step 2: 라이트/다크 전수 확인**
 
-`npm run dev` 상태에서 브라우저 devtools의 Rendering → `Emulate CSS prefers-color-scheme`를 light/dark로 토글하며 다음 경로를 모두 확인한다.
+`pnpm -C apps/portal dev` 상태에서 브라우저 devtools의 Rendering → `Emulate CSS prefers-color-scheme`를 light/dark로 토글하며 확인한다.
 - 공개: `/`, `/dashboard`, `/p`, `/p/brief`, `/p/brief-<slug>`, `/p/brief-<slug>/<id>`
 - 어드민: `/admin`, `/admin/whitelist`, `/admin/users`, `/admin/brief-categories`, `/admin/brief-categories/new`, `/admin/brief-categories/<slug>`
-대비가 깨지거나 읽기 어려운 곳이 있으면 해당 페이지에서 토큰 클래스로 수정.
+대비가 깨지거나 읽기 어려운 곳은 해당 페이지의 토큰 클래스로 수정.
 
 - [ ] **Step 3: 반응형 확인**
 
-각 화면을 모바일 폭(375px)·데스크톱 폭에서 확인. 그리드(`sm:`/`lg:`)·본문 폭·헤더가 깨지지 않는지 본다. 깨진 곳만 수정.
+각 화면을 모바일 폭(375px)·데스크톱에서 확인. 그리드(`sm:`/`lg:`)·본문 폭·헤더가 깨지지 않는지 본다. 깨진 곳만 수정.
 
 - [ ] **Step 4: 최종 커밋(수정이 있었다면)**
 
@@ -824,19 +984,17 @@ git commit -m "fix(portal): 리브랜딩 라이트/다크·반응형 마감 정�
 
 ## Self-Review (작성자 점검 결과)
 
-**스펙 커버리지.**
-- 두 디자인 언어(공개 The Brief / 어드민 Ledger) → Task 1(토큰)·Task 3~8(공개)·Task 9~10(어드민). ✓
-- 토큰 아키텍처 확장(신규 토큰·`.ledger` 재매핑) → Task 1. ✓
-- 폰트(next/font, Fraunces/Inter/Noto KR) → Task 1. ✓
-- 공유 컴포넌트(Kicker/BriefCard/WhyBlock, Nav, MarkdownBody/prose) → Task 2·3·4. ✓
-- 공개 6개 화면 → Task 4(본문)·5(허브)·6(목록+아카이브)·7(대시보드)·8(랜딩). ✓
-- 어드민 5개 화면 → Task 9(레이아웃)·10(폼·테이블). ✓
-- 라이트/다크 양 모드 → 각 태스크 육안 + Task 11 전수. ✓
-- 빈 상태(empty state) → Task 5·6에 포함. ✓
-- 비범위(라우팅·인증·API·데이터 불변) → 각 태스크가 "fetch/로직 유지, 마크업만 교체" 원칙을 명시. ✓
+**스펙 커버리지.** 두 디자인 언어(공개 The Brief / 어드민 Ledger) → Task 1·3~8(공개)·9~10(어드민). 토큰 확장 → Task 1. 폰트 → Task 1. 공유 컴포넌트 → Task 2·3. 공개 6개 화면 → Task 4(본문)·5(허브)·6(목록+아카이브)·7(대시보드)·8(랜딩). 어드민 5개 화면 → Task 9·10. 라이트/다크 → 각 태스크 + Task 11. 빈 상태 → Task 5·6. 비범위(라우팅·인증·API·데이터 불변) → 각 태스크가 "fetch/로직 유지, 마크업만 교체" 명시.
 
-**플레이스홀더 스캔.** 본문 셸(Task 4)·목록(Task 6)·랜딩(Task 8)은 실제 변수/필드명을 사전 "Step 1 확인"으로 잡은 뒤 적용하도록 구성 — 저장소의 실제 props 이름을 모르는 상태에서의 불가피한 안전장치이며, 코드 자체는 완전하다. "적절히 처리" 식 모호 지시는 없다.
+**실 코드 정합성 점검(수정 반영됨).**
+- `Header` props `{email, role, apiBase}` + `${apiBase}/api/logout` 유지 → 호출부(dashboard) 불변.
+- `index.ts`의 `import "./tokens.css";` 유지. `MarkdownBody`는 `@popory/ui`에 없으므로 export 안 함 — 본문은 로컬 `./markdown-body` 사용.
+- `published_at`은 유닉스 초 → 모든 날짜 헬퍼가 `* 1000` 적용.
+- 브리핑 허브는 실제 `cards`/`c.latest` 구조와 기존 `formatDate(unixSeconds)`를 그대로 사용.
+- 명령은 pnpm 워크스페이스 기준(`pnpm -C apps/portal ...`).
 
-**타입/이름 일관성.** `Kicker`/`BriefCard`/`WhyBlock` 시그니처는 Task 2 정의와 이후 사용처가 일치. `Header` props(`email`/`role`/`showAdmin`)는 기존 호출부와 동일하게 유지. `.ledger` 클래스명은 Task 1 정의와 Task 9 사용이 일치.
+**플레이스홀더 스캔.** "적절히 처리" 식 모호 지시 없음. Task 10만 기존 폼/테이블이 길어 전체 코드 대신 클래스 통일 규칙 + Step 1 grep 확인으로 구성 — 기능 불변이 핵심이라 의도적 선택.
 
-**참고.** `BriefCard`/`WhyBlock`은 본문 마크다운이 해당 구조일 때 활용하는 프리미티브로 export까지만 하고 페이지 강제 적용은 하지 않는다(브리핑 본문은 마크다운 렌더가 기본). 향후 구조화 본문에서 사용.
+**타입/이름 일관성.** `Kicker`/`BriefCard`/`WhyBlock` 시그니처는 Task 2 정의와 사용처 일치. `.ledger` 클래스명은 Task 1 정의 ↔ Task 9 사용 일치. `formatDate`/`dayOf`/`monthOf`는 각 파일 내 정의와 사용 일치.
+
+**참고.** `BriefCard`/`WhyBlock`은 향후 구조화 본문에서 쓸 프리미티브로 export까지만 하고, 현재 마크다운 본문 렌더에는 강제 적용하지 않는다.
