@@ -21,7 +21,7 @@ interface Props {
   initialSha: string;
 }
 
-const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm";
+const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
 
 export function EditForm({ slug, initialFields, initialBody, initialSha }: Props) {
   const router = useRouter();

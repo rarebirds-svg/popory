@@ -37,24 +37,24 @@ export default async function BriefCategoriesPage() {
       </p>
       <table className="mt-6 w-full text-sm">
         <thead>
-          <tr className="text-left text-popory-muted">
-            <th className="py-2">slug</th>
-            <th>이름</th>
-            <th>모드</th>
-            <th>활성</th>
-            <th>sha</th>
-            <th></th>
+          <tr className="border-b border-popory-border">
+            <th className="py-2 text-left text-xs uppercase tracking-wide text-popory-muted">slug</th>
+            <th className="py-2 text-left text-xs uppercase tracking-wide text-popory-muted">이름</th>
+            <th className="py-2 text-left text-xs uppercase tracking-wide text-popory-muted">모드</th>
+            <th className="py-2 text-left text-xs uppercase tracking-wide text-popory-muted">활성</th>
+            <th className="py-2 text-left text-xs uppercase tracking-wide text-popory-muted">sha</th>
+            <th className="py-2 text-left text-xs uppercase tracking-wide text-popory-muted"></th>
           </tr>
         </thead>
         <tbody>
           {items.map((c) => (
-            <tr key={c.slug} className="border-t border-popory-border">
-              <td className="py-2 font-mono text-xs">{c.slug}</td>
-              <td>{c.name}</td>
-              <td>{c.delivery_mode}</td>
-              <td>{c.enabled ? "✓" : "—"}</td>
-              <td className="font-mono text-[11px] text-popory-muted">{c.sha.slice(0, 7)}</td>
-              <td>
+            <tr key={c.slug} className="border-b border-popory-border">
+              <td className="py-2 font-mono text-xs text-popory-fg">{c.slug}</td>
+              <td className="py-2 text-sm text-popory-fg">{c.name}</td>
+              <td className="py-2 text-sm text-popory-fg">{c.delivery_mode}</td>
+              <td className="py-2 text-sm text-popory-fg">{c.enabled ? "✓" : "—"}</td>
+              <td className="py-2 font-mono text-[11px] text-popory-muted">{c.sha.slice(0, 7)}</td>
+              <td className="py-2 text-sm text-popory-fg">
                 <Link href={`/admin/brief-categories/${c.slug}`} className="text-popory-accent">편집</Link>
               </td>
             </tr>

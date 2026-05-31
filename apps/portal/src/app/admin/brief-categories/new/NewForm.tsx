@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
 
-const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm";
+const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
 const SLUG_PATTERN = "[a-z][a-z0-9-]{1,30}";
 
 const DEFAULT_SUBJECT = "[{name} 이슈 브리핑] {date}";
