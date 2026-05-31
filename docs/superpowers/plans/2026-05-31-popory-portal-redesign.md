@@ -381,69 +381,38 @@ git commit -m "feat(ui): Nav 헤더 리워크 (로고 dot·아바타)"
 
 - [ ] **Step 1: 본문 셸을 에디토리얼 레이아웃으로 교체**
 
-`apps/portal/src/app/p/[area]/[id]/page.tsx` 전체를 아래로 교체한다. fetch 로직·타입·`MarkdownBody` 로컬 import는 그대로, return 마크업만 에디토리얼로 바꾼다. `Kicker`를 `@popory/ui`에서 추가 import.
+`apps/portal/src/app/p/[area]/[id]/page.tsx` 전체를 아래로 교체한다. 실제 fetch는 `/api/published_items/{id}`(area 쿼리 없음)이고 응답은 `{title, summary, body}`(published_at 없음), `MarkdownBody`는 **children**으로 본문을 받는다 — 이 형태를 그대로 유지하고 마크업만 에디토리얼로 바꾼다. `params`의 `area`로 카테고리 라벨을 만든다.
 
 ```tsx
-// 발행물 상세 페이지. published_items에서 단건 조회 후 markdown 렌더.
-import { notFound } from "next/navigation";
+// 단일 publish 본문 (Markdown 렌더). 에디토리얼 셸.
 import { Kicker } from "@popory/ui";
 import { API_BASE } from "@/lib/env";
 import { MarkdownBody } from "./markdown-body";
 
-export const dynamic = "force-dynamic";
-export const runtime = "edge";
-
-interface ItemDetail {
-  id: string;
-  area: string;
-  title: string;
-  body: string;
-  published_at: number;
-}
-
-async function fetchItem(area: string, id: string): Promise<ItemDetail | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/published_items/${id}?area=${area}`, {
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as ItemDetail;
-  } catch {
-    return null;
-  }
-}
-
-function formatDate(unixSeconds: number): string {
-  const d = new Date(unixSeconds * 1000);
-  return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`;
-}
-
-export default async function ItemDetailPage({
-  params,
-}: {
-  params: Promise<{ area: string; id: string }>;
-}) {
+export default async function ItemPage({ params }: { params: Promise<{ area: string; id: string }> }) {
   const { area, id } = await params;
-  const item = await fetchItem(area, id);
-  if (!item) notFound();
-
+  const res = await fetch(`${API_BASE}/api/published_items/${id}`, { cache: "no-store" });
+  if (!res.ok) {
+    return <main className="mx-auto max-w-2xl px-4 py-12 text-sm text-popory-muted">없는 글입니다.</main>;
+  }
+  const item = (await res.json()) as { title: string; summary: string | null; body: string };
   const categoryLabel = area.replace(/^brief-/, "");
-
   return (
     <main className="mx-auto max-w-2xl px-4 py-10">
       <a href={`/p/${area}`} className="text-sm text-popory-muted hover:text-popory-fg">← 목록으로</a>
       <div className="mt-4">
-        <Kicker>{categoryLabel} · {formatDate(item.published_at)}</Kicker>
+        <Kicker>{categoryLabel}</Kicker>
       </div>
       <h1 className="mt-3 font-serif text-3xl font-semibold leading-tight tracking-tight text-popory-fg">
         {item.title}
       </h1>
+      {item.summary && <p className="mt-3 text-base leading-relaxed text-popory-fg2">{item.summary}</p>}
       <div className="mt-3 flex items-center gap-2 border-b border-popory-border pb-5 text-xs text-popory-muted">
         <span>popory 브리핑</span>
       </div>
-      <div className="prose prose-popory mt-6 max-w-none">
-        <MarkdownBody content={item.body} />
-      </div>
+      <article className="prose prose-popory mt-6 max-w-none">
+        <MarkdownBody>{item.body}</MarkdownBody>
+      </article>
     </main>
   );
 }
@@ -633,56 +602,45 @@ export default async function AreaListPage({
 
 - [ ] **Step 2: 아카이브 홈(/p) 교체**
 
-`apps/portal/src/app/p/page.tsx` 전체를 아래로 교체한다. fetch·타입 유지, 헤더와 카드 스타일만 허브와 통일.
+`apps/portal/src/app/p/page.tsx` 전체를 아래로 교체한다. 실제 구조(하드코딩 `AREAS` + `/api/published_items?limit=100` 집계 `counts()`)를 그대로 유지하고 헤더·카드 스타일만 허브와 통일한다.
 
 ```tsx
-// 공개 아카이브 홈. 영역별 발행물 개수 카드.
+// 공개 published_items 의 영역별 카드.
 import Link from "next/link";
 import { Kicker } from "@popory/ui";
 import { API_BASE } from "@/lib/env";
 
-export const dynamic = "force-dynamic";
-export const runtime = "edge";
+const AREAS = [
+  { key: "brief", label: "뉴스 브리핑" },
+];
 
-interface AreaCount {
-  area: string;
-  count: number;
+async function counts() {
+  const res = await fetch(`${API_BASE}/api/published_items?limit=100`, { cache: "no-store" });
+  const { items } = (await res.json()) as { items: { area: string }[] };
+  const map = new Map<string, number>();
+  for (const i of items) map.set(i.area, (map.get(i.area) ?? 0) + 1);
+  return map;
 }
 
-async function fetchAreas(): Promise<AreaCount[]> {
-  try {
-    const res = await fetch(`${API_BASE}/api/areas`, { cache: "no-store" });
-    if (!res.ok) return [];
-    const { areas } = (await res.json()) as { areas: AreaCount[] };
-    return areas;
-  } catch {
-    return [];
-  }
-}
-
-export default async function ArchiveHome() {
-  const areas = await fetchAreas();
+export default async function PublicHome() {
+  const c = await counts();
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
       <Kicker>Archive</Kicker>
-      <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">popory 아카이브</h1>
-      {areas.length === 0 ? (
-        <p className="mt-10 text-sm text-popory-muted">아직 발행물이 없습니다.</p>
-      ) : (
-        <ul className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {areas.map((a) => (
-            <li key={a.area}>
-              <Link
-                href={`/p/${a.area}`}
-                className="group block rounded-xl border border-popory-border bg-popory-card p-5 transition hover:border-popory-accent"
-              >
-                <div className="text-base font-bold text-popory-fg">{a.area}</div>
-                <div className="mt-1 text-sm text-popory-muted">{a.count}개 발행물</div>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
+      <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">공개 아카이브</h1>
+      <ul className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {AREAS.map((a) => (
+          <li key={a.key}>
+            <Link
+              href={`/p/${a.key}`}
+              className="group block rounded-xl border border-popory-border bg-popory-card p-5 transition hover:border-popory-accent"
+            >
+              <div className="text-base font-bold text-popory-fg">{a.label}</div>
+              <div className="mt-1 text-sm text-popory-muted">{c.get(a.key) ?? 0}개 발행물</div>
+            </Link>
+          </li>
+        ))}
+      </ul>
     </main>
   );
 }
@@ -790,19 +748,17 @@ git commit -m "feat(portal): 대시보드 에디토리얼 리디자인 (인사�
 
 - [ ] **Step 1: 랜딩 전체 교체 (세션 리다이렉트·구글 로그인 링크 유지)**
 
-`apps/portal/src/app/page.tsx` 전체를 아래로 교체한다. `getCurrentUser`/리다이렉트, 구글 로그인 링크(`${API_BASE}/api/login/google`)는 그대로 유지하고 히어로만 에디토리얼로.
+`apps/portal/src/app/page.tsx` 전체를 아래로 교체한다. `getCurrentUser`/리다이렉트, 구글 로그인 링크(`${API_BASE}/auth/google/start`)는 그대로 유지하고 히어로만 에디토리얼로.
 
 ```tsx
-// 비로그인 랜딩(구글 로그인 유도) 또는 로그인 시 대시보드로 이동.
+// 비로그인 랜딩 + 로그인된 경우 dashboard 로 redirect.
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { Kicker } from "@popory/ui";
-import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
+import { getCurrentUser } from "@/lib/session";
 
-export const dynamic = "force-dynamic";
-export const runtime = "edge";
-
-export default async function Home() {
+export default async function Page() {
   const user = await getCurrentUser();
   if (user) redirect("/dashboard");
   return (
@@ -814,12 +770,12 @@ export default async function Home() {
       <p className="mt-3 text-sm leading-relaxed text-popory-muted">
         AI가 큐레이션한 일일 브리핑과 가족 서비스를 한곳에서. 가족 전용 포털입니다.
       </p>
-      <a
-        href={`${API_BASE}/api/login/google`}
-        className="mt-8 rounded-md bg-popory-accent px-5 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
+      <Link
+        href={`${API_BASE}/auth/google/start`}
+        className="mt-8 inline-block rounded-md bg-popory-accent px-5 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
       >
-        구글로 로그인
-      </a>
+        Google로 시작
+      </Link>
     </main>
   );
 }
@@ -907,20 +863,13 @@ git commit -m "feat(portal): 어드민 Ledger 테마 레이아웃 (.ledger 토�
 Run: `grep -rn "className" "apps/portal/src/app/admin/page.tsx" "apps/portal/src/app/admin/whitelist/page.tsx" "apps/portal/src/app/admin/users/page.tsx" "apps/portal/src/app/admin/brief-categories/page.tsx" "apps/portal/src/app/admin/brief-categories/new/NewForm.tsx" "apps/portal/src/app/admin/brief-categories/[slug]/EditForm.tsx"`
 Expected: 현재 input/table/button/링크 클래스 목록. 정리 대상 식별.
 
-- [ ] **Step 2: admin/page.tsx 헤더·네비 다듬기**
+- [ ] **Step 2: admin/page.tsx 다듬기**
 
-`admin/page.tsx`의 제목은 layout이 세리프를 입히므로 폰트 클래스 추가 불필요. 네비 링크 톤만 통일한다. `<nav className="mt-4 flex gap-4 text-sm">`의 각 링크 `className="text-popory-accent"`를 `className="text-popory-accent hover:underline"`로 바꾸고, 통계 카드가 있으면 `rounded-xl border border-popory-border bg-popory-card p-5` 카드 스타일로 맞춘다.
+`admin/page.tsx`는 `Card`(@popory/ui)와 `<nav className="mt-4 flex gap-4 text-popory-accent">`를 쓰며, 색은 layout의 `.ledger`로 자동 재매핑된다. 제목도 layout이 세리프를 입히므로 폰트 클래스 추가 불필요. 선택적으로 nav에 `hover:underline`만 더하는 정도로 마감한다(구조 변경 없음).
 
-- [ ] **Step 3: NewForm.tsx / EditForm.tsx 입력 상수 통일**
+- [ ] **Step 3: NewForm.tsx / EditForm.tsx 마감**
 
-두 폼에 정의된 공통 상수만 아래 값으로 바꾼다(중복 정의 금지, DRY). 두 파일 모두 동일 상수명을 쓴다.
-
-```tsx
-const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
-const LABEL = "block text-xs font-medium text-popory-muted mb-1";
-```
-
-제출 버튼이 있으면 `className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"`로, 보조 버튼/취소 링크는 `className="rounded-md border border-popory-border px-4 py-2 text-sm text-popory-fg"`로 통일한다. 에러 배너(`rounded-md border border-red-300 bg-red-50 ...`)는 그대로 둔다.
+두 폼은 이미 `const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm"` 상수와 `Field`(라벨은 `text-popory-muted`) 컴포넌트, popory-accent 버튼을 쓴다. 이 토큰들은 `.ledger` 스코프에서 자동으로 종이 톤으로 재매핑되므로 **구조 변경은 불필요**하다. 텍스트 대비를 명시하고 싶으면 `INPUT` 상수 끝에 ` text-popory-fg`만 덧붙인다(두 파일 동일하게, 중복 정의 금지). 에러 배너(`rounded-md border border-red-300 bg-red-50 ...`)는 그대로 둔다. 그 외 form action·핸들러·필드 구성은 절대 변경하지 않는다.
 
 - [ ] **Step 4: whitelist / users / brief-categories 테이블·목록 다듬기**
 
