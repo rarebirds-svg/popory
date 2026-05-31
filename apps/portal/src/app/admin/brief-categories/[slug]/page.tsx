@@ -28,8 +28,15 @@ async function fetchDetail(slug: string, cookie: string): Promise<CategoryDetail
   return (await res.json()) as CategoryDetail;
 }
 
-export default async function EditCategoryPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function EditCategoryPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ err?: string }>;
+}) {
   const { slug } = await params;
+  const { err } = await searchParams;
   const cookie = (await headers()).get("cookie") ?? "";
   const data = await fetchDetail(slug, cookie);
   if (!data) notFound();
@@ -41,6 +48,12 @@ export default async function EditCategoryPage({ params }: { params: Promise<{ s
         <span className="font-mono text-xs text-popory-muted">{slug} · sha {data.sha.slice(0, 7)}</span>
         <Link href="/admin/brief-categories" className="ml-auto text-sm text-popory-muted">← 목록</Link>
       </div>
+      {err && (
+        <div className="mt-4 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+          <div className="font-semibold">저장 실패</div>
+          <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{err}</pre>
+        </div>
+      )}
       <form action={saveCategory} className="mt-6 space-y-4">
         <input type="hidden" name="slug" value={slug} />
         <input type="hidden" name="sha" value={data.sha} />
