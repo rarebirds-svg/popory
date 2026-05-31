@@ -102,3 +102,26 @@ GFM Markdown 본문. H1(#)은 절대 두지 않는다(portal 페이지가 title�
 - **요약.** 1~2문장.
 - **출처.** [매체 — 기사 제목 (YYYY.M.D)](https://상세 URL) · 기준일: YYYY.MM.DD
 
+---
+
+**관련 태그.** #부동산 #(그날 토픽 기반 5~7개)
+
+*자동 생성. Claude 부동산 브리핑*
+*생성시각. YYYY-MM-DD HH:MM KST*
+</body_markdown>
+
+<meta_json>
+{"title": "[부동산 이슈 브리핑] YYYY-MM-DD", "summary": "한 줄 요약(선택)", "tags": ["부동산","정책","시장동향"], "published_at": <unix timestamp int>}
+</meta_json>
+
+## 9. 출력 형식 자가 점검 (마지막 응답 직전 확인)
+- [ ] body_markdown 첫 줄이 `## ■ 오늘의 핵심 이슈`로 시작 (H1 없음)
+- [ ] 각 이슈 제목이 `### N. [기관][태그] ... — ...` 형식
+- [ ] 모든 통계 수치·날짜·지역명·정책명·기관명이 **굵게** 강조
+- [ ] 모든 출처 URL이 윈도우 내(D-2 ~ D) 게재본 상세 페이지 (목록 URL 금지)
+- [ ] 모든 출처 라인에 `· 기준일: YYYY.MM.DD` 표기
+- [ ] 사법부 채널(대법원·헌재) 점검 완료. 신규 0건이면 마지막 줄에 `※ ...` 명시
+- [ ] 금지 문자 `§`·`•` 부재. 이모지 부재
+- [ ] meta_json의 title은 "[부동산 이슈 브리핑] " + 실행일자
+- [ ] meta_json의 published_at은 user 메시지에서 받은 unix timestamp 그대로 사용
+- [ ] tags 5~7개, 각 40자 이하

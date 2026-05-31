@@ -46,6 +46,36 @@ describe("parseSkillMd", () => {
   });
 });
 
+describe("parseSkillMd body 안의 --- 구분선 보존", () => {
+  it("body에 ---가 여러 번 등장해도 잘리지 않음 (round-trip 무손실)", () => {
+    const txt = `---
+slug: foo
+name: Foo
+delivery_mode: bundled
+subject_template: "x"
+sender_name: "x"
+enabled: true
+---
+
+본문 시작.
+
+---
+
+본문 가운데 구분선 이후 줄.
+
+---
+
+본문 마지막 구분선 이후 줄.
+`;
+    const r = parseSkillMd(txt);
+    expect(r.errors).toEqual([]);
+    expect(r.body).toContain("본문 가운데 구분선 이후 줄.");
+    expect(r.body).toContain("본문 마지막 구분선 이후 줄.");
+    const re = serializeSkillMd({ fields: r.fields!, body: r.body });
+    expect(re).toBe(txt);
+  });
+});
+
 describe("serializeSkillMd", () => {
   it("parse → serialize round-trip", () => {
     const r = parseSkillMd(SAMPLE);

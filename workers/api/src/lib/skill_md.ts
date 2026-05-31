@@ -23,12 +23,13 @@ export function parseSkillMd(text: string): ParseResult {
   if (!text.startsWith("---\n")) {
     return { fields: null, body: "", errors: ["frontmatter not found"] };
   }
-  const parts = text.split("---\n", 3);
-  if (parts.length < 3) {
+  // split("---\n", 3)을 쓰면 body 안의 추가 "---" 구분선부터가 잘려나가므로 indexOf로 정확히 끊는다.
+  const closeIdx = text.indexOf("\n---\n", 4);
+  if (closeIdx === -1) {
     return { fields: null, body: "", errors: ["frontmatter not closed"] };
   }
-  const fmText = parts[1]!;
-  const body = parts[2]!.replace(/^\n/, "");
+  const fmText = text.slice(4, closeIdx + 1);
+  const body = text.slice(closeIdx + 5).replace(/^\n/, "");
   const raw: Record<string, unknown> = {};
   for (const line of fmText.split("\n")) {
     const m = /^([a-zA-Z_][a-zA-Z0-9_]*):\s*(.*)$/.exec(line);
