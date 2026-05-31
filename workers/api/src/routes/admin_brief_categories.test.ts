@@ -245,4 +245,45 @@ describe("admin_brief_categories", () => {
     });
     expect([401, 403]).toContain(res.status);
   });
+
+  it("public GET /api/brief-categories — 인증 없이 200 + enabled=true만", async () => {
+    const SKILL_ENABLED = `---\nslug: realestate\nname: 부동산\ndelivery_mode: standalone\nsubject_template: "x"\nsender_name: "x"\nenabled: true\ndescription: "부동산 desc"\n---\n\n본문\n`;
+    const SKILL_DISABLED = `---\nslug: hidden\nname: 숨김\ndelivery_mode: bundled\nsubject_template: "x"\nsender_name: "x"\nenabled: false\ndescription: "hidden desc"\n---\n\n본문\n`;
+    mockGithub({
+      "contents/services/brief/categories?ref=main": () =>
+        Response.json([
+          { type: "dir", name: "realestate", path: "services/brief/categories/realestate", sha: "d1" },
+          { type: "dir", name: "hidden", path: "services/brief/categories/hidden", sha: "d2" },
+        ]),
+      "contents/services/brief/categories/realestate/SKILL.md?ref=main": () =>
+        Response.json({ content: btoa(unescape(encodeURIComponent(SKILL_ENABLED))), sha: "f1", path: "services/brief/categories/realestate/SKILL.md" }),
+      "contents/services/brief/categories/hidden/SKILL.md?ref=main": () =>
+        Response.json({ content: btoa(unescape(encodeURIComponent(SKILL_DISABLED))), sha: "f2", path: "services/brief/categories/hidden/SKILL.md" }),
+    });
+    // cookie 없이 호출
+    const res = await SELF.fetch("https://example.com/api/brief-categories");
+    expect(res.status).toBe(200);
+    const body = await res.json<{ items: Array<{ slug: string; name: string; description: string; enabled: boolean }> }>();
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({ slug: "realestate", name: "부동산", description: "부동산 desc", enabled: true });
+  });
+
+  it("public GET — GitHub API 502 시 502 반환", async () => {
+    mockGithub({
+      "contents/services/brief/categories?ref=main": () =>
+        new Response(JSON.stringify({ message: "Server Error" }), { status: 500 }),
+    });
+    const res = await SELF.fetch("https://example.com/api/brief-categories");
+    expect(res.status).toBe(502);
+  });
+
+  it("public GET — 빈 디렉토리 시 빈 items", async () => {
+    mockGithub({
+      "contents/services/brief/categories?ref=main": () => Response.json([]),
+    });
+    const res = await SELF.fetch("https://example.com/api/brief-categories");
+    expect(res.status).toBe(200);
+    const body = await res.json<{ items: unknown[] }>();
+    expect(body.items).toEqual([]);
+  });
 });

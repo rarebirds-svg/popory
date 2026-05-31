@@ -15,6 +15,37 @@ function decodeBase64Utf8(b64: string): string {
 }
 
 export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: AppVars }>) {
+  // public 목록 — enabled=true 만 + 인증 없음
+  app.get("/api/brief-categories", async (c) => {
+    const token = c.env.BRIEF_CATEGORIES_GITHUB_TOKEN;
+    try {
+      const entries = await getDir(token, CATEGORIES_PATH);
+      const dirs = entries.filter((e) => e.type === "dir");
+      const all = await Promise.all(
+        dirs.map(async (d) => {
+          const file = await getFile(token, `${CATEGORIES_PATH}/${d.name}/SKILL.md`);
+          const text = decodeBase64Utf8(file.content);
+          const parsed = parseSkillMd(text);
+          return parsed.fields
+            ? {
+                slug: d.name,
+                name: parsed.fields.name,
+                description: parsed.fields.description,
+                delivery_mode: parsed.fields.delivery_mode,
+                enabled: parsed.fields.enabled,
+                sha: file.sha,
+              }
+            : null;
+        }),
+      );
+      const items = all.filter((i): i is NonNullable<typeof i> => i !== null && i.enabled);
+      return c.json({ items });
+    } catch (e) {
+      if (e instanceof GitHubApiError) return c.text(`github: ${e.message}`, 502);
+      throw e;
+    }
+  });
+
   // GET 목록 — categories/ 디렉토리 + 각 SKILL.md frontmatter 요약
   app.get("/api/admin/brief-categories", async (c) => {
     const denied = requireAdmin(c); if (denied) return denied;
