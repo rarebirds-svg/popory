@@ -26,7 +26,12 @@ export default async function BriefCategoriesPage() {
   const items = await fetchList(cookie);
   return (
     <main>
-      <h1 className="text-xl font-semibold">브리핑 카테고리</h1>
+      <div className="flex items-baseline gap-3">
+        <h1 className="text-xl font-semibold">브리핑 카테고리</h1>
+        <Link href="/admin/brief-categories/new" className="ml-auto text-sm text-popory-accent">
+          + 새 카테고리
+        </Link>
+      </div>
       <p className="mt-2 text-sm text-popory-muted">
         services/brief/categories/&#123;slug&#125;/SKILL.md 를 GitHub에서 read/edit. 저장 시 main 브랜치에 commit.
       </p>
