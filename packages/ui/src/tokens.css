@@ -1,20 +1,49 @@
 /* popory 포털·영역 사이트가 공통으로 사용하는 디자인 토큰 (라이트/다크). */
 :root {
-  --popory-bg: #fafafa;
-  --popory-fg: #111111;
-  --popory-muted: #6b7280;
-  --popory-accent: #2563eb;
+  /* 공개 "The Brief" 팔레트 */
+  --popory-bg: #f7f8fa;
+  --popory-fg: #0d1b2a;
+  --popory-fg2: #33414f;
+  --popory-muted: #7b8794;
+  --popory-accent: #1f3a93;
+  --popory-accent-soft: #eef1fb;
   --popory-card: #ffffff;
-  --popory-border: #e5e7eb;
+  --popory-border: #e9ecf1;
   --popory-radius: 12px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --popory-bg: #0b0b0c;
-    --popory-fg: #f5f5f5;
-    --popory-muted: #9ca3af;
-    --popory-accent: #60a5fa;
-    --popory-card: #161618;
-    --popory-border: #27272a;
+    --popory-bg: #0b0f15;
+    --popory-fg: #f2f5fa;
+    --popory-fg2: #c2cdd9;
+    --popory-muted: #8b97a5;
+    --popory-accent: #6f8bdc;
+    --popory-accent-soft: #16203a;
+    --popory-card: #131922;
+    --popory-border: #232c38;
+  }
+}
+
+/* 어드민 "The Ledger" 테마: 같은 변수를 종이 톤으로 재매핑한다. */
+.ledger {
+  --popory-bg: #f6f1e7;
+  --popory-fg: #1b1b18;
+  --popory-fg2: #46443d;
+  --popory-muted: #5a5750;
+  --popory-accent: #9a3b2e;
+  --popory-accent-soft: #f1e7df;
+  --popory-card: #fffdf8;
+  --popory-border: #d6cdba;
+}
+@media (prefers-color-scheme: dark) {
+  .ledger {
+    --popory-bg: #17150f;
+    --popory-fg: #efe9dc;
+    --popory-fg2: #cdc4b3;
+    --popory-muted: #a39a86;
+    --popory-accent: #c97a5f;
+    --popory-accent-soft: #2a2418;
+    --popory-card: #1f1c14;
+    --popory-border: #34301f;
   }
 }
