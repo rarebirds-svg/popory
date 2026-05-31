@@ -21,6 +21,13 @@ log() {
 
 log "\"start dry_run=${DRY_RUN}\""
 
+# 0) git pull — portal admin이 GitHub에 commit한 SKILL.md 변경을 가져옴
+GIT_PULL_OUT=$(git -C "${BRIEF_DIR}/.." pull --ff-only origin main 2>&1)
+GIT_PULL_EXIT=$?
+log "\"git pull exit=${GIT_PULL_EXIT}\""
+echo "${GIT_PULL_OUT}" >> "${LOG_FILE}"
+# 실패해도 진행 (기존 SKILL.md로 generate). conflict·dirty tree는 운영자가 수동 정리.
+
 # 1) secrets 환경변수 source
 if [ ! -f "${BRIEF_DIR}/secrets/portal_endpoints.env" ]; then
   log "\"missing portal_endpoints.env\""
