@@ -1,6 +1,6 @@
 ---
 slug: sanction
-name: 경제제재(Sanction)
+name: Sanction
 delivery_mode: bundled
 subject_template: "[{name} 이슈 브리핑] {date}"
 sender_name: "{name} 이슈 브리핑"
