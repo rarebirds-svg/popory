@@ -35,7 +35,7 @@ popory portal은 Next.js 15 + React 19 + Tailwind 기반의 가족용 통합 진
 
 ## 3. 토큰 아키텍처
 
-현재 `packages/ui/src/components/tokens.css`는 6개 변수(`--popory-bg/fg/muted/accent/card/border`)를 라이트/다크로 정의하고, `tailwind.config.ts`가 이를 색으로 매핑한다. 이 구조를 확장한다.
+현재 `packages/ui/src/tokens.css`(portal `globals.css`가 상대 경로로 import)는 6개 변수(`--popory-bg/fg/muted/accent/card/border`)를 라이트/다크로 정의하고, `tailwind.config.ts`가 이를 색으로 매핑한다. 이 구조를 확장한다.
 
 **확장 방침.**
 - 기존 6개 변수는 유지하되 값을 에디토리얼 팔레트로 재조정한다.
