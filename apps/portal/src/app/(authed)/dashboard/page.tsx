@@ -1,6 +1,6 @@
 // 로그인 사용자의 대시보드. 영역 카드와 admin 진입 링크.
 import { redirect } from "next/navigation";
-import { Card, Header } from "@popory/ui";
+import { Header, Kicker } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
 
@@ -16,25 +16,32 @@ const AREAS: AreaCard[] = [
 export default async function Dashboard() {
   const user = await getCurrentUser();
   if (!user) redirect("/");
+  const todayLabel = new Intl.DateTimeFormat("ko-KR", { dateStyle: "full" }).format(new Date());
+
   return (
-    <main className="mx-auto max-w-3xl px-6 py-12">
+    <div>
       <Header email={user.email} role={user.role} apiBase={API_BASE} />
-      <section className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {AREAS.map((a) => (
-          <a
-            key={a.key}
-            href={a.href(API_BASE)}
-            target={a.external ? "_blank" : undefined}
-            rel={a.external ? "noopener noreferrer" : undefined}
-            className="block hover:opacity-90"
-          >
-            <Card>
-              <div className="text-lg font-medium">{a.label}</div>
-              <div className="mt-1 text-sm text-popory-muted">{a.external ? "외부 사이트" : "바로 진입"}</div>
-            </Card>
-          </a>
-        ))}
-      </section>
-    </main>
+      <main className="mx-auto max-w-5xl px-4 py-10">
+        <Kicker>{todayLabel}</Kicker>
+        <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">오늘의 popory</h1>
+        <p className="mt-2 text-sm text-popory-muted">가족이 함께 보는 브리핑과 서비스를 한곳에서.</p>
+        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {AREAS.map((a) => (
+            <a
+              key={a.key}
+              href={a.href(API_BASE)}
+              target={a.external ? "_blank" : undefined}
+              rel={a.external ? "noopener noreferrer" : undefined}
+              className="group block"
+            >
+              <div className="h-full rounded-xl border border-popory-border bg-popory-card p-5 transition group-hover:border-popory-accent">
+                <h2 className="text-base font-bold text-popory-fg">{a.label}</h2>
+                <p className="mt-1 text-sm text-popory-muted">{a.external ? "외부 사이트" : "바로 진입"}</p>
+              </div>
+            </a>
+          ))}
+        </div>
+      </main>
+    </div>
   );
 }
