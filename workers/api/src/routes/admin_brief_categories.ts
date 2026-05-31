@@ -99,4 +99,40 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
       throw e;
     }
   });
+
+  // POST 단건 — 신규 slug 생성 (sha 없이 putFile = create)
+  app.post("/api/admin/brief-categories", async (c) => {
+    const denied = requireAdmin(c); if (denied) return denied;
+    const user = c.get("user")!;
+    const token = c.env.BRIEF_CATEGORIES_GITHUB_TOKEN;
+    const payload = await c.req.json<{ fields: SkillFields; body: string }>();
+    const errs = validateFields(payload.fields);
+    if (errs.length > 0) return c.json({ errors: errs }, 422);
+    const slug = payload.fields.slug;
+    const path = `${CATEGORIES_PATH}/${slug}/SKILL.md`;
+    // 중복 검사. getFile 200 = 이미 존재
+    try {
+      await getFile(token, path);
+      return c.json({ errors: ["slug already exists"] }, 422);
+    } catch (e) {
+      if (!(e instanceof GitHubApiError) || e.status !== 404) {
+        if (e instanceof GitHubApiError) return c.text(`github: ${e.message}`, 502);
+        throw e;
+      }
+      // 404 → 진행
+    }
+    const text = serializeSkillMd({ fields: payload.fields, body: payload.body });
+    try {
+      const result = await putFile(token, {
+        path,
+        message: `chore(brief): create categories/${slug}/SKILL.md via portal admin (by ${user.email})`,
+        contentText: text,
+        actorEmail: user.email,
+      });
+      return c.json({ sha: result.sha });
+    } catch (e) {
+      if (e instanceof GitHubApiError) return c.text(`github: ${e.message}`, 502);
+      throw e;
+    }
+  });
 }

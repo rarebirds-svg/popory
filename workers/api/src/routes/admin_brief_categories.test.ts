@@ -169,4 +169,79 @@ describe("admin_brief_categories", () => {
     });
     expect(res.status).toBe(422);
   });
+
+  it("POST 정상 — 신규 slug 생성, getFile 404 후 putFile create", async () => {
+    let putBody: any = null;
+    mockGithub({
+      "contents/services/brief/categories/newcat/SKILL.md?ref=main": () =>
+        new Response(JSON.stringify({ message: "Not Found" }), { status: 404 }),
+      "contents/services/brief/categories/newcat/SKILL.md": async (req) => {
+        if (req.method === "PUT") {
+          putBody = await req.json();
+          return new Response(JSON.stringify({ content: { sha: "f_new" } }), { status: 201 });
+        }
+        return new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      },
+    });
+    const ck = await makeAdminCookie();
+    const res = await SELF.fetch("https://example.com/api/admin/brief-categories", {
+      method: "POST",
+      headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({
+        fields: { slug: "newcat", name: "신규", delivery_mode: "bundled", subject_template: "[{name}] {date}", sender_name: "{name}", enabled: false },
+        body: "신규 카테고리 본문.\n",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const out = await res.json<{ sha: string }>();
+    expect(out.sha).toBe("f_new");
+    expect(putBody.message).toContain("create categories/newcat/SKILL.md");
+    expect(putBody.message).toContain(ADMIN_EMAIL);
+    expect(putBody.sha).toBeUndefined();
+  });
+
+  it("POST slug 중복 — getFile 200 → 422", async () => {
+    mockGithub({
+      "contents/services/brief/categories/realestate/SKILL.md?ref=main": () =>
+        Response.json({ content: btoa(unescape(encodeURIComponent(SKILL_REALESTATE))), sha: "f1", path: "services/brief/categories/realestate/SKILL.md" }),
+    });
+    const ck = await makeAdminCookie();
+    const res = await SELF.fetch("https://example.com/api/admin/brief-categories", {
+      method: "POST",
+      headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({
+        fields: { slug: "realestate", name: "x", delivery_mode: "bundled", subject_template: "x", sender_name: "x", enabled: false },
+        body: "x\n",
+      }),
+    });
+    expect(res.status).toBe(422);
+    const out = await res.json<{ errors: string[] }>();
+    expect(out.errors.join(",")).toContain("slug already exists");
+  });
+
+  it("POST validate 실패 — 예약어 new → 422", async () => {
+    const ck = await makeAdminCookie();
+    const res = await SELF.fetch("https://example.com/api/admin/brief-categories", {
+      method: "POST",
+      headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({
+        fields: { slug: "new", name: "x", delivery_mode: "bundled", subject_template: "x", sender_name: "x", enabled: false },
+        body: "x\n",
+      }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("POST 비admin → 401/403", async () => {
+    const ck = await makeMemberCookie();
+    const res = await SELF.fetch("https://example.com/api/admin/brief-categories", {
+      method: "POST",
+      headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({
+        fields: { slug: "x1", name: "x", delivery_mode: "bundled", subject_template: "x", sender_name: "x", enabled: false },
+        body: "x\n",
+      }),
+    });
+    expect([401, 403]).toContain(res.status);
+  });
 });
