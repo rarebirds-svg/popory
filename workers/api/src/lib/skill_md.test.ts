@@ -158,4 +158,10 @@ describe("validateFields", () => {
       expect.stringContaining("sender_name"),
     );
   });
+
+  it("예약어 slug (new) 거부", () => {
+    expect(validateFields({ ...base, slug: "new" })).toContainEqual(
+      expect.stringContaining("예약어"),
+    );
+  });
 });

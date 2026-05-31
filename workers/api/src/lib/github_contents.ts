@@ -48,7 +48,7 @@ export interface PutFileInput {
   path: string;
   message: string;
   contentText: string;
-  sha: string;
+  sha?: string;          // optional. 없으면 새 파일 create
   actorEmail: string;
 }
 
@@ -56,14 +56,15 @@ export async function putFile(token: string, input: PutFileInput): Promise<{ sha
   const url = `${API}/repos/${REPO}/contents/${encodeURIComponent(input.path).replace(/%2F/g, "/")}`;
   // Web Crypto / btoa 없는 환경 대비. TextEncoder + 수동 base64
   const contentB64 = base64FromUtf8(input.contentText);
-  const body = JSON.stringify({
+  const bodyObj: Record<string, unknown> = {
     message: input.message,
     content: contentB64,
-    sha: input.sha,
     branch: BRANCH,
     committer: { name: "popory-portal-admin", email: "noreply@popory.local" },
     author: { name: "popory-portal-admin", email: "noreply@popory.local" },
-  });
+  };
+  if (input.sha) bodyObj.sha = input.sha;
+  const body = JSON.stringify(bodyObj);
   const res = await fetch(url, {
     method: "PUT",
     headers: { ...COMMON_HEADERS(token), "Content-Type": "application/json" },
