@@ -23,6 +23,7 @@ export default async function AdminHome() {
       <nav className="mt-4 flex gap-4 text-popory-accent">
         <Link href="/admin/whitelist">화이트리스트</Link>
         <Link href="/admin/users">사용자</Link>
+        <Link href="/admin/brief-categories">브리핑 카테고리</Link>
       </nav>
       <section className="mt-8 grid grid-cols-2 gap-4">
         <Card>
