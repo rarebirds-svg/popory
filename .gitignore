@@ -26,3 +26,6 @@ services/*/*.egg-info/
 # OAuth client credentials JSON 등 자격증명 다운로드본 (절대 커밋 금지).
 google_*.json
 client_secret_*.json
+
+# Superpowers brainstorm 시각 컴패니언 산출물
+.superpowers/
