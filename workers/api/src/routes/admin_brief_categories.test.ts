@@ -38,6 +38,7 @@ delivery_mode: standalone
 subject_template: "[{name} 이슈 브리핑] {date}"
 sender_name: "{name} 이슈 브리핑"
 enabled: true
+description: "국토부·한국부동산원·기재부 정책·시장·판례"
 ---
 
 본문.
@@ -122,7 +123,7 @@ describe("admin_brief_categories", () => {
       method: "PUT",
       headers: { cookie: ck, "content-type": "application/json" },
       body: JSON.stringify({
-        fields: { slug: "realestate", name: "부동산", delivery_mode: "standalone", subject_template: "[{name}] {date}", sender_name: "{name}", enabled: false },
+        fields: { slug: "realestate", name: "부동산", delivery_mode: "standalone", subject_template: "[{name}] {date}", sender_name: "{name}", enabled: false, description: "desc" },
         body: "새 본문.\n",
         sha: "f1",
       }),
@@ -146,7 +147,7 @@ describe("admin_brief_categories", () => {
       method: "PUT",
       headers: { cookie: ck, "content-type": "application/json" },
       body: JSON.stringify({
-        fields: { slug: "realestate", name: "부동산", delivery_mode: "standalone", subject_template: "x", sender_name: "x", enabled: true },
+        fields: { slug: "realestate", name: "부동산", delivery_mode: "standalone", subject_template: "x", sender_name: "x", enabled: true, description: "desc" },
         body: "a\n",
         sha: "f1_stale",
       }),
@@ -162,7 +163,7 @@ describe("admin_brief_categories", () => {
       method: "PUT",
       headers: { cookie: ck, "content-type": "application/json" },
       body: JSON.stringify({
-        fields: { slug: "Bad_Slug", name: "X", delivery_mode: "standalone", subject_template: "x", sender_name: "x", enabled: true },
+        fields: { slug: "Bad_Slug", name: "X", delivery_mode: "standalone", subject_template: "x", sender_name: "x", enabled: true, description: "desc" },
         body: "x\n",
         sha: "f1",
       }),
@@ -188,7 +189,7 @@ describe("admin_brief_categories", () => {
       method: "POST",
       headers: { cookie: ck, "content-type": "application/json" },
       body: JSON.stringify({
-        fields: { slug: "newcat", name: "신규", delivery_mode: "bundled", subject_template: "[{name}] {date}", sender_name: "{name}", enabled: false },
+        fields: { slug: "newcat", name: "신규", delivery_mode: "bundled", subject_template: "[{name}] {date}", sender_name: "{name}", enabled: false, description: "desc" },
         body: "신규 카테고리 본문.\n",
       }),
     });
@@ -210,7 +211,7 @@ describe("admin_brief_categories", () => {
       method: "POST",
       headers: { cookie: ck, "content-type": "application/json" },
       body: JSON.stringify({
-        fields: { slug: "realestate", name: "x", delivery_mode: "bundled", subject_template: "x", sender_name: "x", enabled: false },
+        fields: { slug: "realestate", name: "x", delivery_mode: "bundled", subject_template: "x", sender_name: "x", enabled: false, description: "desc" },
         body: "x\n",
       }),
     });
@@ -225,7 +226,7 @@ describe("admin_brief_categories", () => {
       method: "POST",
       headers: { cookie: ck, "content-type": "application/json" },
       body: JSON.stringify({
-        fields: { slug: "new", name: "x", delivery_mode: "bundled", subject_template: "x", sender_name: "x", enabled: false },
+        fields: { slug: "new", name: "x", delivery_mode: "bundled", subject_template: "x", sender_name: "x", enabled: false, description: "desc" },
         body: "x\n",
       }),
     });
@@ -238,7 +239,7 @@ describe("admin_brief_categories", () => {
       method: "POST",
       headers: { cookie: ck, "content-type": "application/json" },
       body: JSON.stringify({
-        fields: { slug: "x1", name: "x", delivery_mode: "bundled", subject_template: "x", sender_name: "x", enabled: false },
+        fields: { slug: "x1", name: "x", delivery_mode: "bundled", subject_template: "x", sender_name: "x", enabled: false, description: "desc" },
         body: "x\n",
       }),
     });

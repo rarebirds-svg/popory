@@ -14,6 +14,7 @@ delivery_mode: standalone
 subject_template: "[{name} 이슈 브리핑] {date}"
 sender_name: "{name} 이슈 브리핑"
 enabled: true
+description: "국토부·한국부동산원·기재부 정책·시장·판례"
 ---
 
 본문 system prompt 첫 줄.
@@ -30,6 +31,7 @@ describe("parseSkillMd", () => {
       subject_template: "[{name} 이슈 브리핑] {date}",
       sender_name: "{name} 이슈 브리핑",
       enabled: true,
+      description: "국토부·한국부동산원·기재부 정책·시장·판례",
     });
     expect(r.body).toBe("본문 system prompt 첫 줄.\n");
   });
@@ -55,6 +57,7 @@ delivery_mode: bundled
 subject_template: "x"
 sender_name: "x"
 enabled: true
+description: "desc"
 ---
 
 본문 시작.
@@ -92,6 +95,7 @@ describe("serializeSkillMd", () => {
         subject_template: 'A "B" C',
         sender_name: "S",
         enabled: false,
+        description: "desc",
       },
       body: "body\n",
     });
@@ -107,6 +111,7 @@ describe("serializeSkillMd", () => {
       subject_template: "x",
       sender_name: 'a "b" \\\\c',
       enabled: true,
+      description: "desc",
     };
     const out = serializeSkillMd({ fields, body: "body\n" });
     const back = parseSkillMd(out);
@@ -123,6 +128,7 @@ describe("validateFields", () => {
     subject_template: "[{name}] {date}",
     sender_name: "{name}",
     enabled: true,
+    description: "국토부 정책·시장 동향",
   };
 
   it("정상 → 빈 error 배열", () => {
@@ -162,6 +168,12 @@ describe("validateFields", () => {
   it("예약어 slug (new) 거부", () => {
     expect(validateFields({ ...base, slug: "new" })).toContainEqual(
       expect.stringContaining("예약어"),
+    );
+  });
+
+  it("description 빈 문자열 위반", () => {
+    expect(validateFields({ ...base, description: "" })).toContainEqual(
+      expect.stringContaining("description"),
     );
   });
 });

@@ -6,6 +6,7 @@ export interface SkillFields {
   subject_template: string;
   sender_name: string;
   enabled: boolean;
+  description: string;
 }
 
 export interface ParseResult {
@@ -14,7 +15,7 @@ export interface ParseResult {
   errors: string[];
 }
 
-const REQUIRED = ["slug", "name", "delivery_mode", "subject_template", "sender_name", "enabled"] as const;
+const REQUIRED = ["slug", "name", "delivery_mode", "subject_template", "sender_name", "enabled", "description"] as const;
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}$/;
 const RESERVED_SLUGS = new Set(["new"]); // /admin/brief-categories/new 정적 라우트 충돌 회피
 const VALID_MODES = new Set(["standalone", "bundled"]);
@@ -49,6 +50,7 @@ export function parseSkillMd(text: string): ParseResult {
     subject_template: String(raw.subject_template),
     sender_name: String(raw.sender_name),
     enabled: raw.enabled === true || raw.enabled === "true",
+    description: String(raw.description),
   };
   return { fields, body, errors: [] };
 }
@@ -74,6 +76,7 @@ export function serializeSkillMd(input: { fields: SkillFields; body: string }): 
     `subject_template: "${esc(fields.subject_template)}"`,
     `sender_name: "${esc(fields.sender_name)}"`,
     `enabled: ${fields.enabled ? "true" : "false"}`,
+    `description: "${esc(fields.description)}"`,
   ].join("\n");
   const bodyOut = body.startsWith("\n") ? body : "\n" + body;
   return `---\n${fm}\n---\n${bodyOut}`;
@@ -87,5 +90,6 @@ export function validateFields(f: SkillFields): string[] {
   if (!f.name.trim()) errs.push("name 비어있음");
   if (!f.subject_template.trim()) errs.push("subject_template 비어있음");
   if (!f.sender_name.trim()) errs.push("sender_name 비어있음");
+  if (!f.description.trim()) errs.push("description 비어있음");
   return errs;
 }
