@@ -16,6 +16,7 @@ interface CategoryDetail {
     subject_template: string;
     sender_name: string;
     enabled: boolean;
+    description: string;
   };
   body: string;
   sha: string;

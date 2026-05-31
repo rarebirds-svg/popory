@@ -11,6 +11,7 @@ interface InitialFields {
   subject_template: string;
   sender_name: string;
   enabled: boolean;
+  description: string;
 }
 
 interface Props {
@@ -29,6 +30,7 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
   const [err, setErr] = useState<string | null>(null);
 
   const [name, setName] = useState(initialFields.name);
+  const [description, setDescription] = useState(initialFields.description);
   const [deliveryMode, setDeliveryMode] = useState<"standalone" | "bundled">(initialFields.delivery_mode);
   const [subjectTemplate, setSubjectTemplate] = useState(initialFields.subject_template);
   const [senderName, setSenderName] = useState(initialFields.sender_name);
@@ -52,6 +54,7 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
             subject_template: subjectTemplate,
             sender_name: senderName,
             enabled,
+            description,
           },
           body,
           sha: initialSha,
@@ -86,6 +89,10 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
 
       <Field label="이름 (name)">
         <input value={name} onChange={(e) => setName(e.target.value)} required className={INPUT} />
+      </Field>
+
+      <Field label="설명 (description). 카드에 노출되는 1~2줄 카테고리 소개">
+        <input value={description} onChange={(e) => setDescription(e.target.value)} required className={INPUT} />
       </Field>
 
       <Field label="전송 모드 (delivery_mode)">

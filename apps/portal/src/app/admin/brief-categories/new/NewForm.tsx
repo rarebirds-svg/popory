@@ -48,6 +48,7 @@ export function NewForm() {
 
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [deliveryMode, setDeliveryMode] = useState<"standalone" | "bundled">("bundled");
   const [subjectTemplate, setSubjectTemplate] = useState(DEFAULT_SUBJECT);
   const [senderName, setSenderName] = useState(DEFAULT_SENDER);
@@ -71,6 +72,7 @@ export function NewForm() {
             subject_template: subjectTemplate,
             sender_name: senderName,
             enabled,
+            description,
           },
           body,
         }),
@@ -119,6 +121,16 @@ export function NewForm() {
           onChange={(e) => setName(e.target.value)}
           required
           placeholder="예. ESG, 제재"
+          className={INPUT}
+        />
+      </Field>
+
+      <Field label="설명 (description). 카드에 노출되는 1~2줄 카테고리 소개">
+        <input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          required
+          placeholder="예. AI 기본법·EU AI Act·LegalTech"
           className={INPUT}
         />
       </Field>
