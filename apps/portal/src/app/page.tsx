@@ -10,31 +10,20 @@ export default async function Page() {
   if (user) redirect("/dashboard");
 
   return (
-    <main className="relative min-h-screen overflow-hidden">
-      {/* 배경 그라데이션 */}
-      <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-[#faf7f2] via-white to-[#f5f1ea]" />
-
-      <section className="mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center gap-10 px-6 text-center">
-        <Kicker>daily intelligence</Kicker>
-
-        <div className="space-y-6">
-          <h1 className="text-5xl font-bold tracking-tight text-neutral-900 sm:text-6xl">
-            popory
-          </h1>
-          <p className="text-balance text-lg leading-relaxed text-neutral-600 sm:text-xl">
-            매일 아침, 당신을 위한 브리핑.
-            <br />
-            관심사를 고르면 매일 정리해서 보내드립니다.
-          </p>
-        </div>
-
-        <Link
-          href={`${API_BASE}/auth/google/start`}
-          className="inline-flex items-center gap-2 rounded-full bg-neutral-900 px-8 py-4 text-base font-medium text-white shadow-lg transition hover:bg-neutral-700"
-        >
-          구글로 시작하기
-        </Link>
-      </section>
+    <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center px-4 text-center">
+      <Kicker>popory family</Kicker>
+      <h1 className="mt-4 font-serif text-4xl font-semibold tracking-tight text-popory-fg">
+        매일 아침, 우리 가족의 브리핑
+      </h1>
+      <p className="mt-3 text-sm leading-relaxed text-popory-muted">
+        AI가 큐레이션한 일일 브리핑과 가족 서비스를 한곳에서. 가족 전용 포털입니다.
+      </p>
+      <Link
+        href={`${API_BASE}/auth/google/start`}
+        className="mt-8 inline-block rounded-md bg-popory-accent px-5 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
+      >
+        Google로 시작
+      </Link>
     </main>
   );
 }
