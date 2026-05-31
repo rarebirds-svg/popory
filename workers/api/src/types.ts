@@ -9,4 +9,5 @@ export interface Env {
   PUBLIC_BASE_URL: string;
   PORTAL_ORIGIN: string;
   COOKIE_DOMAIN: string;
+  BRIEF_CATEGORIES_GITHUB_TOKEN: string;
 }

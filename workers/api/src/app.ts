@@ -10,6 +10,7 @@ import { mountLogout } from "./routes/logout";
 import { mountAdminWhitelist } from "./routes/admin_whitelist";
 import { mountAdminUsers } from "./routes/admin_users";
 import { mountAdminOverview } from "./routes/admin_overview";
+import { mountAdminBriefCategories } from "./routes/admin_brief_categories";
 import { mountJwks } from "./routes/jwks";
 import { mountGo } from "./routes/go";
 import { mountPublished } from "./routes/published";
@@ -32,6 +33,7 @@ export function createApp() {
   mountAdminWhitelist(app);
   mountAdminUsers(app);
   mountAdminOverview(app);
+  mountAdminBriefCategories(app);
   mountJwks(app);
   mountGo(app);
   mountPublished(app);
