@@ -48,6 +48,11 @@ const BRIEF_CATEGORIES: CategoryDef[] = [
     label: "공정거래",
     description: "공정위 카르텔·M&A·표시광고·플랫폼 규제",
   },
+  {
+    slug: "legal-ai",
+    label: "Legal AI",
+    description: "AI 기본법·EU AI Act·LegalTech·알고리즘 거버넌스",
+  },
 ];
 
 async function fetchLatest(slug: string): Promise<Item | null> {
