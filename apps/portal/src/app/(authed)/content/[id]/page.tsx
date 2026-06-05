@@ -29,7 +29,10 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
   if (!res.ok) throw new Error(`job ${res.status}`);
   const job = (await res.json()) as JobDetail;
 
-  const meta = job.meta_json ? (JSON.parse(job.meta_json) as Record<string, unknown>) : null;
+  let meta: Record<string, unknown> | null = null;
+  if (job.meta_json) {
+    try { meta = JSON.parse(job.meta_json) as Record<string, unknown>; } catch { meta = null; }
+  }
 
   return (
     <div>

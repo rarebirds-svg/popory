@@ -19,6 +19,14 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  function copy() {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(draft).then(() => setMsg("복사됨")).catch(() => setMsg("복사 실패"));
+    } else {
+      setMsg("복사 미지원 환경");
+    }
+  }
+
   async function patch(body: Record<string, unknown>) {
     setBusy(true);
     setMsg(null);
@@ -68,7 +76,7 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources
       <div className="flex items-center gap-3">
         <button onClick={() => patch({ draft })} disabled={busy}
           className="rounded-md border border-popory-border px-4 py-2 text-sm disabled:opacity-50">초안 저장</button>
-        <button onClick={() => navigator.clipboard.writeText(draft)} type="button"
+        <button onClick={copy} type="button"
           className="rounded-md border border-popory-border px-4 py-2 text-sm">복사</button>
         {!done && (
           <button onClick={() => patch({ draft, status: "done" })} disabled={busy}

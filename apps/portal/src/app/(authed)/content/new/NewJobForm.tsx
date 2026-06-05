@@ -7,7 +7,7 @@ import { API_BASE } from "@/lib/env";
 const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
 
 interface StyleProfile { id: string; name: string; }
-interface SourceInput { url: string; note: string; }
+interface SourceInput { id: string; url: string; note: string; }
 
 export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
   const router = useRouter();
@@ -19,7 +19,7 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
   const [styleId, setStyleId] = useState("");
   const [sources, setSources] = useState<SourceInput[]>([]);
 
-  function addSource() { setSources((s) => [...s, { url: "", note: "" }]); }
+  function addSource() { setSources((s) => [...s, { id: crypto.randomUUID(), url: "", note: "" }]); }
   function updateSource(i: number, patch: Partial<SourceInput>) {
     setSources((s) => s.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
   }
@@ -46,7 +46,6 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
       });
       if (!res.ok) {
         setErr(`worker-${res.status}: ${(await res.text()).slice(0, 300)}`);
-        setSubmitting(false);
         return;
       }
       const { id } = (await res.json()) as { id: string };
@@ -56,6 +55,7 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
       });
     } catch (e) {
       setErr(`fetch: ${String(e).slice(0, 200)}`);
+    } finally {
       setSubmitting(false);
     }
   }
@@ -91,7 +91,7 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
         </div>
         <div className="mt-2 space-y-2">
           {sources.map((s, i) => (
-            <div key={i} className="flex gap-2">
+            <div key={s.id} className="flex gap-2">
               <input value={s.url} onChange={(e) => updateSource(i, { url: e.target.value })}
                 placeholder="https://…" className={`${INPUT} flex-1`} />
               <input value={s.note} onChange={(e) => updateSource(i, { note: e.target.value })}

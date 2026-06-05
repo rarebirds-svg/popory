@@ -6,35 +6,38 @@ import { API_BASE } from "@/lib/env";
 
 const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
 
+interface Sample { id: string; text: string; }
+
 export function StyleProfileForm() {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [samples, setSamples] = useState<string[]>([""]);
+  const [samples, setSamples] = useState<Sample[]>([{ id: crypto.randomUUID(), text: "" }]);
 
-  function updateSample(i: number, v: string) { setSamples((s) => s.map((row, idx) => (idx === i ? v : row))); }
-  function addSample() { setSamples((s) => (s.length < 10 ? [...s, ""] : s)); }
-  function removeSample(i: number) { setSamples((s) => s.filter((_, idx) => idx !== i)); }
+  function updateSample(id: string, v: string) { setSamples((s) => s.map((row) => (row.id === id ? { ...row, text: v } : row))); }
+  function addSample() { setSamples((s) => (s.length < 10 ? [...s, { id: crypto.randomUUID(), text: "" }] : s)); }
+  function removeSample(id: string) { setSamples((s) => s.filter((row) => row.id !== id)); }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setErr(null);
     setSubmitting(true);
     try {
-      const clean = samples.map((s) => s.trim()).filter((s) => s.length > 0);
-      if (clean.length === 0) { setErr("샘플을 1개 이상 입력하세요."); setSubmitting(false); return; }
+      const clean = samples.map((s) => s.text.trim()).filter((s) => s.length > 0);
+      if (clean.length === 0) { setErr("샘플을 1개 이상 입력하세요."); return; }
       const res = await fetch(`${API_BASE}/api/content/style-profiles`, {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name, samples: clean }),
       });
-      if (!res.ok) { setErr(`worker-${res.status}: ${(await res.text()).slice(0, 300)}`); setSubmitting(false); return; }
+      if (!res.ok) { setErr(`worker-${res.status}: ${(await res.text()).slice(0, 300)}`); return; }
       startTransition(() => { router.push("/content/styles"); router.refresh(); });
     } catch (e) {
       setErr(`fetch: ${String(e).slice(0, 200)}`);
+    } finally {
       setSubmitting(false);
     }
   }
@@ -56,12 +59,12 @@ export function StyleProfileForm() {
 
       <div className="space-y-3">
         {samples.map((s, i) => (
-          <div key={i}>
+          <div key={s.id}>
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-popory-muted">샘플 {i + 1}</span>
-              {samples.length > 1 && <button type="button" onClick={() => removeSample(i)} className="text-xs text-popory-muted">삭제</button>}
+              {samples.length > 1 && <button type="button" onClick={() => removeSample(s.id)} className="text-xs text-popory-muted">삭제</button>}
             </div>
-            <textarea value={s} onChange={(e) => updateSample(i, e.target.value)} rows={6}
+            <textarea value={s.text} onChange={(e) => updateSample(s.id, e.target.value)} rows={6}
               placeholder="기존 글 본문을 붙여넣으세요" maxLength={20000}
               className="mt-1 w-full rounded-md border border-popory-border bg-popory-card p-3 text-sm text-popory-fg" />
           </div>
