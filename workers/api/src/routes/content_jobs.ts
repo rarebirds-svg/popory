@@ -25,6 +25,12 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const u = c.get("user")!;
     const parsed = ContentJobCreateSchema.safeParse(await c.req.json());
     if (!parsed.success) return c.text("bad request", 400);
+    if (parsed.data.style_profile_id) {
+      const sp = await c.env.DB.prepare(
+        "SELECT id FROM style_profiles WHERE id=? AND owner_sub=?",
+      ).bind(parsed.data.style_profile_id, u.sub).first();
+      if (!sp) return c.text("style profile not found", 404);
+    }
     const id = ulid();
     const now = Math.floor(Date.now() / 1000);
     await c.env.DB.prepare(
@@ -60,7 +66,8 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const { results: sources } = await c.env.DB.prepare(
       "SELECT id, kind, url, title, note FROM content_sources WHERE job_id=? ORDER BY created_at",
     ).bind(row.id).all();
-    return c.json({ ...row, draft, sources });
+    const { draft_r2_key: _k, ...rest } = row;
+    return c.json({ ...rest, draft, sources });
   });
 
   app.patch("/api/content/jobs/:id", async (c) => {
@@ -113,8 +120,9 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const parsed = ContentJobResultSchema.safeParse(await c.req.json());
     if (!parsed.success) return c.text("bad request", 400);
     const id = c.req.param("id");
-    const row = await c.env.DB.prepare("SELECT id FROM content_jobs WHERE id=?").bind(id).first<{ id: string }>();
+    const row = await c.env.DB.prepare("SELECT id, status FROM content_jobs WHERE id=?").bind(id).first<{ id: string; status: string }>();
     if (!row) return c.text("not found", 404);
+    if (row.status !== "running") return c.text("conflict", 409);
     const now = Math.floor(Date.now() / 1000);
     let draftKey: string | null = null;
     if (parsed.data.draft !== undefined) {
@@ -122,7 +130,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
       await c.env.R2.put(draftKey, parsed.data.draft, { httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
     }
     await c.env.DB.prepare(
-      "UPDATE content_jobs SET status=?, draft_r2_key=COALESCE(?, draft_r2_key), meta_json=?, error=?, updated_at=? WHERE id=?",
+      "UPDATE content_jobs SET status=?, draft_r2_key=COALESCE(?, draft_r2_key), meta_json=COALESCE(?, meta_json), error=?, updated_at=? WHERE id=?",
     ).bind(parsed.data.status, draftKey, parsed.data.meta ? JSON.stringify(parsed.data.meta) : null, parsed.data.error ?? null, now, id).run();
     return c.json({ ok: true });
   });

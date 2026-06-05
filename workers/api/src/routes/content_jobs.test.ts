@@ -92,6 +92,19 @@ describe("PATCH /api/content/jobs/:id", () => {
     const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}`, { method: "PATCH", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ draft: "x" }) });
     expect(res.status).toBe(409);
   });
+
+  it("done 상태에서도 초안 재편집 허용", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t" }) });
+    const { id } = await create.json<{ id: string }>();
+    await env.DB.prepare("UPDATE content_jobs SET status='done' WHERE id=?").bind(id).run();
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}`, {
+      method: "PATCH", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ draft: "# 재편집" }),
+    });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT draft_r2_key FROM content_jobs WHERE id=?").bind(id).first<{ draft_r2_key: string }>();
+    expect(await (await env.R2.get(row!.draft_r2_key))?.text()).toBe("# 재편집");
+  });
 });
 
 async function workerToken(area = "content-worker") {
@@ -147,7 +160,9 @@ describe("PATCH /api/content/jobs/:id/result", () => {
     const ck = await userCookie();
     const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t" }) });
     const { id } = await create.json<{ id: string }>();
+    // claim 해서 running 상태로 만들기
     const token = await workerToken();
+    await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST", headers: { authorization: `Bearer ${token}` } });
     const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/result`, {
       method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ status: "review", draft: "# 생성된 글", meta: { seo: 82 } }),
@@ -157,5 +172,42 @@ describe("PATCH /api/content/jobs/:id/result", () => {
     expect(row?.status).toBe("review");
     expect(await (await env.R2.get(row!.draft_r2_key))?.text()).toBe("# 생성된 글");
     expect(JSON.parse(row!.meta_json).seo).toBe(82);
+  });
+
+  it("running 아닌 작업에 result 는 409", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t" }) });
+    const { id } = await create.json<{ id: string }>();
+    // 작업은 아직 queued (claim 안 함)
+    const token = await workerToken();
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/result`, {
+      method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ status: "review", draft: "x" }),
+    });
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("POST /api/content/jobs — style_profile_id 소유권", () => {
+  it("남의 스타일 프로필 참조는 404", async () => {
+    // u2 가 프로필 생성
+    await userCookie("u2", "u2@e.com");
+    await env.DB.prepare("INSERT INTO style_profiles (id, owner_sub, name, platform, sample_count, created_at) VALUES ('spX','u2','톤','naver-blog',1,1)").run();
+    // u1 이 그 프로필로 작업 시도
+    const a = await userCookie("u1", "u1@e.com");
+    const res = await SELF.fetch("https://example.com/api/content/jobs", {
+      method: "POST", headers: { cookie: a, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", style_profile_id: "spX" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("존재하지 않는 프로필 참조는 404", async () => {
+    const a = await userCookie();
+    const res = await SELF.fetch("https://example.com/api/content/jobs", {
+      method: "POST", headers: { cookie: a, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", style_profile_id: "nope" }),
+    });
+    expect(res.status).toBe(404);
   });
 });
