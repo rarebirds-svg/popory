@@ -27,7 +27,7 @@ describe("ContentJobResultSchema", () => {
 
 describe("StyleProfileCreateSchema", () => {
   it("샘플 1~10개 허용", () => {
-    expect(StyleProfileCreateSchema.parse({ name: "내 톤", samples: ["글1"] }).sample_count).toBeUndefined();
+    expect(StyleProfileCreateSchema.parse({ name: "내 톤", samples: ["글1"] }).samples).toHaveLength(1);
   });
   it("샘플 11개 거부", () => {
     const samples = Array.from({ length: 11 }, (_, i) => `글${i}`);
