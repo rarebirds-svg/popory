@@ -25,12 +25,20 @@ def run_once(client) -> bool:
     job_id = job["id"]
     try:
         draft, meta = generate(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
-        client.patch(f"/api/content/jobs/{job_id}/result", json={"status": "review", "draft": draft, "meta": meta})
-        append_log(LOGS_DIR, {"worker": "content", "status": "review", "job": job_id})
-    except Exception as e:  # noqa: BLE001 — 어떤 실패든 작업을 failed 로 회신
-        client.patch(f"/api/content/jobs/{job_id}/result", json={"status": "failed", "error": str(e)[:2000]})
-        append_log(LOGS_DIR, {"worker": "content", "status": "failed", "job": job_id, "error": str(e)[:300]})
+    except Exception as e:  # noqa: BLE001 — 생성 실패는 failed 로 회신
+        _report(client, job_id, {"status": "failed", "error": str(e)[:2000]}, "failed")
+        return True
+    _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
     return True
+
+
+def _report(client, job_id: str, body: dict, status_label: str) -> None:
+    """결과 회신. 회신 자체가 실패해도 poll 루프를 죽이지 않는다(작업은 running 으로 남음)."""
+    try:
+        client.patch(f"/api/content/jobs/{job_id}/result", json=body)
+        append_log(LOGS_DIR, {"worker": "content", "status": status_label, "job": job_id})
+    except Exception as e:  # noqa: BLE001 — 회신 실패는 로그만 남긴다
+        append_log(LOGS_DIR, {"worker": "content", "status": "report_failed", "job": job_id, "error": str(e)[:300]})
 
 
 def _build_client() -> PortalClient:

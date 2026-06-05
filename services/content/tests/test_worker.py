@@ -42,3 +42,15 @@ def test_failure_posts_failed(monkeypatch):
     assert path == "/api/content/jobs/j2/result"
     assert body["status"] == "failed"
     assert "ng" in body["error"]
+
+
+class RaisingPatchClient(FakeClient):
+    def patch(self, path, *, json):
+        raise worker.PortalError("boom", exit_code=5)
+
+
+def test_patch_failure_does_not_crash(monkeypatch):
+    monkeypatch.setattr(worker, "generate", lambda **kw: ("# 글", {}))
+    client = RaisingPatchClient({"job": {"id": "j3", "topic": "t"}, "sources": [], "style_samples": []})
+    # 회신 PATCH 가 실패해도 run_once 는 예외 없이 True 를 반환해야 한다.
+    assert worker.run_once(client) is True
