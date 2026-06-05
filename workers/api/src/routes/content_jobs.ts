@@ -1,9 +1,8 @@
-// 컨텐츠 작업 큐 라우트 — 사용자 생성/조회/편집 + 로컬 워커 claim/result.
+// 컨텐츠 작업 큐 라우트 — 사용자 생성·조회·편집.
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { ContentJobCreateSchema, ContentJobEditSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
-import type { ServiceVars } from "../middleware/service_auth";
 
 function ulid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -15,9 +14,7 @@ type ContentJobRow = {
   meta_json: string | null; error: string | null; created_at: number; updated_at: number;
 };
 
-type Vars = AppVars & ServiceVars;
-
-export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) {
+export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: AppVars }>) {
   app.post("/api/content/jobs", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
