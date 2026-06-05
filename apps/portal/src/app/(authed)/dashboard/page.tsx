@@ -8,7 +8,7 @@ type AreaCard = { key: string; label: string; href: (apiBase: string) => string;
 
 const AREAS: AreaCard[] = [
   { key: "brief", label: "뉴스 브리핑", href: () => "/p/brief" },
-  { key: "content", label: "컨텐츠 관리", href: (b) => `${b}/go/content` },
+  { key: "content", label: "컨텐츠 관리", href: () => "/content" },
   { key: "finance", label: "금융 자산", href: (b) => `${b}/go/finance` },
   { key: "baduk", label: "바둑", href: () => "https://www.inkbaduk.com", external: true },
 ];
