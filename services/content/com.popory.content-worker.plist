@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 컨텐츠 워커를 상주 실행하는 launchd 정의. 종료 시 자동 재시작. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.popory.content-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/daegong/projects/popory/services/content/run_worker.sh</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/daegong/projects/popory/services/content/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/daegong/projects/popory/services/content/logs/launchd.err.log</string>
+</dict>
+</plist>
