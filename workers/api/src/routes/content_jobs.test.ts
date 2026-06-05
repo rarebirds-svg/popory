@@ -81,7 +81,7 @@ describe("PATCH /api/content/jobs/:id", () => {
     expect(res.status).toBe(200);
     const row = await env.DB.prepare("SELECT status, draft_r2_key FROM content_jobs WHERE id=?").bind(id).first<{ status: string; draft_r2_key: string }>();
     expect(row?.status).toBe("done");
-    expect(await (await env.R2.get(row!.draft_r2_key)).text()).toBe("# 수정본");
+    expect(await (await env.R2.get(row!.draft_r2_key))?.text()).toBe("# 수정본");
   });
 
   it("queued 상태에서는 편집 불가 409", async () => {
