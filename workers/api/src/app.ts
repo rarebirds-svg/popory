@@ -14,6 +14,7 @@ import { mountAdminBriefCategories } from "./routes/admin_brief_categories";
 import { mountJwks } from "./routes/jwks";
 import { mountGo } from "./routes/go";
 import { mountPublished } from "./routes/published";
+import { mountContentJobs } from "./routes/content_jobs";
 import { mountAreas } from "./routes/areas";
 import { mountAreasSubscribers } from "./routes/areas_subscribers";
 import type { ServiceVars } from "./middleware/service_auth";
@@ -37,6 +38,7 @@ export function createApp() {
   mountJwks(app);
   mountGo(app);
   mountPublished(app);
+  mountContentJobs(app);
   mountAreas(app);
   mountAreasSubscribers(app);
   return app;
