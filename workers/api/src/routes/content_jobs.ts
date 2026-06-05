@@ -67,14 +67,14 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: AppVars }
     if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
     if (row.status !== "review" && row.status !== "done") return c.text("not editable", 409);
     const now = Math.floor(Date.now() / 1000);
+    let draftKey = row.draft_r2_key;
     if (parsed.data.draft !== undefined) {
-      const key = row.draft_r2_key ?? `content/draft/${row.id}`;
-      await c.env.R2.put(key, parsed.data.draft, { httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
-      await c.env.DB.prepare("UPDATE content_jobs SET draft_r2_key=?, updated_at=? WHERE id=?").bind(key, now, row.id).run();
+      draftKey = row.draft_r2_key ?? `content/draft/${row.id}`;
+      await c.env.R2.put(draftKey, parsed.data.draft, { httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
     }
-    if (parsed.data.status === "done") {
-      await c.env.DB.prepare("UPDATE content_jobs SET status='done', updated_at=? WHERE id=?").bind(now, row.id).run();
-    }
+    const newStatus = parsed.data.status === "done" ? "done" : row.status;
+    await c.env.DB.prepare("UPDATE content_jobs SET draft_r2_key=?, status=?, updated_at=? WHERE id=?")
+      .bind(draftKey, newStatus, now, row.id).run();
     return c.json({ ok: true });
   });
 }
