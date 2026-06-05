@@ -1,8 +1,8 @@
 // 사용자가 쿠키 인증으로 컨텐츠 작업을 생성·조회·편집한다.
 import { env, SELF } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
-import { ensureActiveKey } from "../db/signing_keys";
-import { signSession } from "@popory/auth";
+import { ensureActiveKey, loadActivePrivate } from "../db/signing_keys";
+import { signSession, signAreaToken } from "@popory/auth";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -19,6 +19,7 @@ async function userCookie(sub = "u1", email = "u1@e.com") {
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_sources");
   await env.DB.exec("DELETE FROM content_jobs");
+  await env.DB.exec("DELETE FROM style_profiles");
 });
 
 describe("POST /api/content/jobs", () => {
@@ -90,5 +91,71 @@ describe("PATCH /api/content/jobs/:id", () => {
     const { id } = await create.json<{ id: string }>();
     const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}`, { method: "PATCH", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ draft: "x" }) });
     expect(res.status).toBe(409);
+  });
+});
+
+async function workerToken(area = "content-worker") {
+  await ensureActiveKey(env.DB);
+  const k = await loadActivePrivate(env.DB);
+  return signAreaToken({
+    privateJwk: k.privateJwk, kid: k.kid,
+    claims: { sub: "service:content-worker", email: "worker@svc", area, aud: "popory-portal" },
+    ttlSeconds: 600,
+  });
+}
+
+describe("POST /api/content/jobs/claim", () => {
+  it("queued 작업을 running 으로 claim 하고 source·style 동봉", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO style_profiles (id, owner_sub, name, platform, sample_count, created_at) VALUES ('sp1','u1','톤','naver-blog',1,1)").run();
+    await env.R2.put("content/style/sp1/samples.json", JSON.stringify(["예시 글"]));
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t", style_profile_id: "sp1", sources: [{ url: "https://a" }] }) });
+    const { id } = await create.json<{ id: string }>();
+
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    const body = await res.json<{ job: { id: string; status: string }; sources: unknown[]; style_samples: string[] }>();
+    expect(body.job.id).toBe(id);
+    expect(body.job.status).toBe("running");
+    expect(body.sources.length).toBe(1);
+    expect(body.style_samples).toEqual(["예시 글"]);
+    const row = await env.DB.prepare("SELECT status FROM content_jobs WHERE id=?").bind(id).first<{ status: string }>();
+    expect(row?.status).toBe("running");
+  });
+
+  it("queued 없으면 204", async () => {
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(204);
+  });
+
+  it("잘못된 area 의 서비스 JWT 는 403", async () => {
+    const token = await workerToken("brief");
+    const res = await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(403);
+  });
+
+  it("서비스 JWT 없으면 401", async () => {
+    const res = await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST" });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("PATCH /api/content/jobs/:id/result", () => {
+  it("초안·메타를 저장하고 review 로 전이", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t" }) });
+    const { id } = await create.json<{ id: string }>();
+    const token = await workerToken();
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/result`, {
+      method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ status: "review", draft: "# 생성된 글", meta: { seo: 82 } }),
+    });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT status, draft_r2_key, meta_json FROM content_jobs WHERE id=?").bind(id).first<{ status: string; draft_r2_key: string; meta_json: string }>();
+    expect(row?.status).toBe("review");
+    expect(await (await env.R2.get(row!.draft_r2_key))?.text()).toBe("# 생성된 글");
+    expect(JSON.parse(row!.meta_json).seo).toBe(82);
   });
 });

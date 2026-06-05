@@ -1,12 +1,17 @@
-// 컨텐츠 작업 큐 라우트 — 사용자 생성·조회·편집.
+// 컨텐츠 작업 큐 라우트 — 사용자 생성·조회·편집 + 로컬 워커 claim·result.
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { ContentJobCreateSchema, ContentJobEditSchema } from "@popory/types";
+import { ContentJobCreateSchema, ContentJobEditSchema, ContentJobResultSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
+import { requireService, type ServiceVars } from "../middleware/service_auth";
 
 function ulid(): string {
   return crypto.randomUUID().replace(/-/g, "");
 }
+
+const WORKER_AREA = "content-worker";
+
+type Vars = AppVars & ServiceVars;
 
 type ContentJobRow = {
   id: string; owner_sub: string; topic: string; platform: string; status: string;
@@ -14,7 +19,7 @@ type ContentJobRow = {
   meta_json: string | null; error: string | null; created_at: number; updated_at: number;
 };
 
-export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: AppVars }>) {
+export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) {
   app.post("/api/content/jobs", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
@@ -75,6 +80,50 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: AppVars }
     const newStatus = parsed.data.status === "done" ? "done" : row.status;
     await c.env.DB.prepare("UPDATE content_jobs SET draft_r2_key=?, status=?, updated_at=? WHERE id=?")
       .bind(draftKey, newStatus, now, row.id).run();
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/content/jobs/claim", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const now = Math.floor(Date.now() / 1000);
+    const candidate = await c.env.DB.prepare(
+      "SELECT id FROM content_jobs WHERE status='queued' ORDER BY created_at LIMIT 1",
+    ).first<{ id: string }>();
+    if (!candidate) return c.body(null, 204);
+    const claim = await c.env.DB.prepare(
+      "UPDATE content_jobs SET status='running', updated_at=? WHERE id=? AND status='queued'",
+    ).bind(now, candidate.id).run();
+    if (!claim.meta.changes) return c.body(null, 204);
+    const job = await c.env.DB.prepare("SELECT * FROM content_jobs WHERE id=?").bind(candidate.id).first<ContentJobRow>();
+    const { results: sources } = await c.env.DB.prepare(
+      "SELECT kind, url, title, note FROM content_sources WHERE job_id=? ORDER BY created_at",
+    ).bind(candidate.id).all();
+    let styleSamples: string[] = [];
+    if (job!.style_profile_id) {
+      const obj = await c.env.R2.get(`content/style/${job!.style_profile_id}/samples.json`);
+      if (obj) styleSamples = JSON.parse(await obj.text());
+    }
+    return c.json({ job, sources, style_samples: styleSamples });
+  });
+
+  app.patch("/api/content/jobs/:id/result", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const parsed = ContentJobResultSchema.safeParse(await c.req.json());
+    if (!parsed.success) return c.text("bad request", 400);
+    const id = c.req.param("id");
+    const row = await c.env.DB.prepare("SELECT id FROM content_jobs WHERE id=?").bind(id).first<{ id: string }>();
+    if (!row) return c.text("not found", 404);
+    const now = Math.floor(Date.now() / 1000);
+    let draftKey: string | null = null;
+    if (parsed.data.draft !== undefined) {
+      draftKey = `content/draft/${id}`;
+      await c.env.R2.put(draftKey, parsed.data.draft, { httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
+    }
+    await c.env.DB.prepare(
+      "UPDATE content_jobs SET status=?, draft_r2_key=COALESCE(?, draft_r2_key), meta_json=?, error=?, updated_at=? WHERE id=?",
+    ).bind(parsed.data.status, draftKey, parsed.data.meta ? JSON.stringify(parsed.data.meta) : null, parsed.data.error ?? null, now, id).run();
     return c.json({ ok: true });
   });
 }
