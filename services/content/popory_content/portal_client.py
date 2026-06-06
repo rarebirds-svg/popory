@@ -41,6 +41,17 @@ class PortalClient:
     def post(self, path: str, *, json: Any = None) -> Any:
         return self._call("POST", path, body=json)
 
+    def put_binary(self, path: str, *, data: bytes, content_type: str) -> Any:
+        url = f"{self.base_url}{path}"
+        headers = {"Authorization": f"Bearer {self.token_provider()}", "Content-Type": content_type}
+        try:
+            resp = requests.put(url, headers=headers, data=data, timeout=60)
+        except requests.RequestException as e:
+            raise PortalError(f"network: {e}", exit_code=5) from e
+        if resp.status_code >= 400:
+            raise PortalError(f"video upload {resp.status_code}: {resp.text[:200]}", exit_code=4)
+        return resp.json() if resp.content else {}
+
     def _call(self, method: str, path: str, *, body: Any) -> Any:
         url = f"{self.base_url}{path}"
         attempts = 2  # 원호출 + 5xx 재시도 1회

@@ -62,3 +62,26 @@ def test_patch_failure_does_not_crash(monkeypatch):
     client = RaisingPatchClient({"job": {"id": "j3", "topic": "t"}, "sources": [], "style_samples": []})
     # 회신 PATCH 가 실패해도 run_once 는 예외 없이 True 를 반환해야 한다.
     assert worker.run_once(client) is True
+
+
+def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
+    mp4 = tmp_path / "v.mp4"
+    mp4.write_bytes(b"\x00\x01\x02")
+    monkeypatch.setattr(worker, "make_video", lambda **kw: (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"}))
+
+    class VidClient(FakeClient):
+        def __init__(self, claim):
+            super().__init__(claim)
+            self.put_bin = []
+
+        def put_binary(self, path, *, data, content_type):
+            self.put_bin.append((path, len(data), content_type))
+            return {"ok": True}
+
+    client = VidClient({"job": {"id": "yt1", "topic": "t", "platform": "youtube"}, "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    assert client.put_bin[0][0] == "/api/content/jobs/yt1/video"
+    assert client.put_bin[0][2] == "video/mp4"
+    path, body = client.patched[0]
+    assert path == "/api/content/jobs/yt1/result"
+    assert body["status"] == "review"

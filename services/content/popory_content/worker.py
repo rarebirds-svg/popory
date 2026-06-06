@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from popory_content.generate import generate, GenerateError
+from popory_content.video import make_video, VideoError
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log
@@ -25,12 +26,18 @@ def run_once(client) -> bool:
     sources = data.get("sources", [])
     samples = data.get("style_samples", [])
     job_id = job["id"]
+    platform = job.get("platform", "naver-blog")
     try:
-        draft, meta = generate(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
+        if platform == "youtube":
+            mp4, scenes, meta = make_video(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
+            client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
+            script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
+            _report(client, job_id, {"status": "review", "draft": script, "meta": meta}, "review")
+        else:
+            draft, meta = generate(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
+            _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
     except Exception as e:  # noqa: BLE001 — 생성 실패는 failed 로 회신
         _report(client, job_id, {"status": "failed", "error": str(e)[:2000]}, "failed")
-        return True
-    _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
     return True
 
 
