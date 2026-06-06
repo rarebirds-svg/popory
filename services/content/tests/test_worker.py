@@ -67,7 +67,13 @@ def test_patch_failure_does_not_crash(monkeypatch):
 def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
     mp4 = tmp_path / "v.mp4"
     mp4.write_bytes(b"\x00\x01\x02")
-    monkeypatch.setattr(worker, "make_video", lambda **kw: (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"}))
+    captured = {}
+
+    def fake_make_video(**kw):
+        captured.update(kw)
+        return (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"})
+
+    monkeypatch.setattr(worker, "make_video", fake_make_video)
 
     class VidClient(FakeClient):
         def __init__(self, claim):
@@ -85,3 +91,18 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
     path, body = client.patched[0]
     assert path == "/api/content/jobs/yt1/result"
     assert body["status"] == "review"
+    assert callable(captured.get("image_fetcher"))
+
+
+def test_safe_image_returns_none_on_error():
+    class C:
+        def post_for_bytes(self, path, *, json):
+            raise worker.PortalError("boom", exit_code=4)
+    assert worker._safe_image(C(), "prompt") is None
+
+
+def test_safe_image_returns_bytes():
+    class C:
+        def post_for_bytes(self, path, *, json):
+            return b"\x89PNG"
+    assert worker._safe_image(C(), "prompt") == b"\x89PNG"

@@ -29,7 +29,10 @@ def run_once(client) -> bool:
     platform = job.get("platform", "naver-blog")
     try:
         if platform == "youtube":
-            mp4, scenes, meta = make_video(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
+            mp4, scenes, meta = make_video(
+                topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
+                image_fetcher=lambda p: _safe_image(client, p),
+            )
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
             _report(client, job_id, {"status": "review", "draft": script, "meta": meta}, "review")
@@ -48,6 +51,14 @@ def _report(client, job_id: str, body: dict, status_label: str) -> None:
         append_log(LOGS_DIR, {"worker": "content", "status": status_label, "job": job_id})
     except Exception as e:  # noqa: BLE001 — 회신 실패는 로그만 남긴다
         append_log(LOGS_DIR, {"worker": "content", "status": "report_failed", "job": job_id, "error": str(e)[:300]})
+
+
+def _safe_image(client, prompt: str):
+    """AI 이미지 1장. 실패하면 None(단색 폴백)."""
+    try:
+        return client.post_for_bytes("/api/content/ai-image", json={"prompt": prompt})
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _build_client() -> PortalClient:
