@@ -1,0 +1,57 @@
+// YouTube 연결 라우트 — connect 리다이렉트·status·disconnect·인증.
+import { env, SELF } from "cloudflare:test";
+import { describe, it, expect, beforeEach } from "vitest";
+import { ensureActiveKey } from "../db/signing_keys";
+import { signSession } from "@popory/auth";
+
+declare module "cloudflare:test" {
+  interface ProvidedEnv extends Env {}
+}
+import type { Env } from "../types";
+
+async function userCookie(sub = "u1", email = "u1@e.com") {
+  await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES (?,?, 'member', 1)").bind(sub, email).run();
+  const k = await ensureActiveKey(env.DB);
+  const t = await signSession({ privateJwk: k.privateJwk, kid: k.kid, claims: { sub, email, role: "member" } });
+  return `popory_session=${t}`;
+}
+
+beforeEach(async () => { await env.DB.exec("DELETE FROM youtube_connections"); });
+
+describe("YouTube connect", () => {
+  it("connect 는 google 인가로 302 + state KV 저장", async () => {
+    const ck = await userCookie();
+    const res = await SELF.fetch("https://example.com/api/content/youtube/connect", { headers: { cookie: ck }, redirect: "manual" });
+    expect(res.status).toBe(302);
+    const loc = res.headers.get("location")!;
+    expect(loc).toContain("accounts.google.com");
+    expect(loc).toContain("youtube.upload");
+    expect(loc).toContain("access_type=offline");
+  });
+  it("미인증 connect 는 401", async () => {
+    const res = await SELF.fetch("https://example.com/api/content/youtube/connect", { redirect: "manual" });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("YouTube status·disconnect", () => {
+  it("미연결이면 connected false", async () => {
+    const ck = await userCookie();
+    const res = await SELF.fetch("https://example.com/api/content/youtube/status", { headers: { cookie: ck } });
+    expect(await res.json()).toEqual({ connected: false, channel_title: null });
+  });
+  it("연결 행 있으면 connected true + 채널명", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO youtube_connections (sub, channel_id, channel_title, refresh_token, connected_at) VALUES ('u1','c','내 채널','enc',1)").run();
+    const res = await SELF.fetch("https://example.com/api/content/youtube/status", { headers: { cookie: ck } });
+    expect(await res.json()).toEqual({ connected: true, channel_title: "내 채널" });
+  });
+  it("disconnect 는 행 삭제 204", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO youtube_connections (sub, refresh_token, connected_at) VALUES ('u1','enc',1)").run();
+    const res = await SELF.fetch("https://example.com/api/content/youtube/connect", { method: "DELETE", headers: { cookie: ck } });
+    expect(res.status).toBe(204);
+    const row = await env.DB.prepare("SELECT sub FROM youtube_connections WHERE sub='u1'").first();
+    expect(row).toBeNull();
+  });
+});
