@@ -2,6 +2,7 @@
 import shutil
 import subprocess
 import textwrap
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +51,22 @@ def _duration(path: Path) -> float:
     return float(r.stdout.strip())
 
 
-def _render_card(caption: str, narration: str, out_png: Path) -> None:
-    img = Image.new("RGB", (WIDTH, HEIGHT), BG)
+def _cover(im: Image.Image, w: int, h: int) -> Image.Image:
+    """이미지를 w×h 를 꽉 채우도록 비율 유지 크롭."""
+    scale = max(w / im.width, h / im.height)
+    nw, nh = int(im.width * scale), int(im.height * scale)
+    im = im.resize((nw, nh))
+    left, top = (nw - w) // 2, (nh - h) // 2
+    return im.crop((left, top, left + w, top + h))
+
+
+def _render_card(caption: str, narration: str, out_png: Path, bg_image_bytes: bytes | None = None) -> None:
+    if bg_image_bytes:
+        bg = Image.open(BytesIO(bg_image_bytes)).convert("RGB")
+        img = _cover(bg, WIDTH, HEIGHT)
+        img = Image.blend(img, Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0)), 0.45)
+    else:
+        img = Image.new("RGB", (WIDTH, HEIGHT), BG)
     d = ImageDraw.Draw(img)
     head = ImageFont.truetype(FONT_PATH, 96)
     body = ImageFont.truetype(FONT_PATH, 48)
@@ -62,8 +77,8 @@ def _render_card(caption: str, narration: str, out_png: Path) -> None:
     img.save(out_png)
 
 
-def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc") -> Path:
-    """장면 배열 → MP4 경로. 각 장면 = Pillow 텍스트카드 + 내레이션 음성."""
+def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc", image_fetcher: Any = None) -> Path:
+    """장면 배열 → MP4 경로. image_fetcher(prompt)->bytes|None 가 있으면 AI 이미지 배경 사용."""
     if not Path(FONT_PATH).exists():
         raise VideoError(f"한국어 폰트 없음: {FONT_PATH}")
     work = TMP / f"video_{job_id}"
@@ -75,8 +90,15 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc") -> Path:
         aiff = work / f"{i}.aiff"
         _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(aiff), narration])
         dur = _duration(aiff)
+        bg_bytes = None
+        prompt = scene.get("image_prompt")
+        if image_fetcher and prompt:
+            try:
+                bg_bytes = image_fetcher(prompt)
+            except Exception:  # noqa: BLE001 — 이미지 실패는 단색 폴백
+                bg_bytes = None
         png = work / f"{i}.png"
-        _render_card(caption, narration, png)
+        _render_card(caption, narration, png, bg_image_bytes=bg_bytes)
         clip = work / f"{i}.mp4"
         _run([
             FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(aiff),
@@ -93,7 +115,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc") -> Path:
 
 
 def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
-               job_id: str = "adhoc") -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+               job_id: str = "adhoc", image_fetcher: Any = None) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
     scenes, meta = generate_scenes(topic=topic, sources=sources, style_samples=style_samples, job_id=job_id)
-    mp4 = render_video(scenes, job_id=job_id)
+    mp4 = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher)
     return mp4, scenes, meta
