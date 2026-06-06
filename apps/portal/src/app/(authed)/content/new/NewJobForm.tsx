@@ -16,6 +16,7 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
   const [err, setErr] = useState<string | null>(null);
 
   const [topic, setTopic] = useState("");
+  const [platform, setPlatform] = useState<"naver-blog" | "youtube">("naver-blog");
   const [styleId, setStyleId] = useState("");
   const [sources, setSources] = useState<SourceInput[]>([]);
 
@@ -40,6 +41,7 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           topic,
+          platform,
           style_profile_id: styleId || undefined,
           sources: cleanSources.length ? cleanSources : undefined,
         }),
@@ -74,6 +76,14 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
         <span className="block text-xs font-semibold text-popory-muted mb-1">주제</span>
         <input value={topic} onChange={(e) => setTopic(e.target.value)} required maxLength={200}
           placeholder="예. 전세사기 예방 체크리스트" className={INPUT} />
+      </label>
+
+      <label className="block">
+        <span className="block text-xs font-semibold text-popory-muted mb-1">콘텐츠 종류</span>
+        <select value={platform} onChange={(e) => setPlatform(e.target.value as "naver-blog" | "youtube")} className={INPUT}>
+          <option value="naver-blog">네이버 블로그 (리치 HTML)</option>
+          <option value="youtube">YouTube 영상 (슬라이드쇼)</option>
+        </select>
       </label>
 
       <label className="block">

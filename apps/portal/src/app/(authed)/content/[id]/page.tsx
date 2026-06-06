@@ -15,6 +15,7 @@ interface JobDetail {
   id: string;
   topic: string;
   status: "queued" | "running" | "review" | "done" | "failed";
+  platform: "naver-blog" | "youtube";
   draft?: string;
   meta_json: string | null;
   error: string | null;
@@ -65,7 +66,17 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
           </div>
         )}
 
-        {(job.status === "review" || job.status === "done") && (
+        {(job.status === "review" || job.status === "done") && job.platform === "youtube" && (
+          <div className="mt-8 space-y-4">
+            <video controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video`} />
+            <details>
+              <summary className="cursor-pointer text-xs text-popory-accent">대본 보기</summary>
+              <pre className="mt-2 whitespace-pre-wrap rounded-md border border-popory-border bg-popory-card p-3 text-xs text-popory-fg">{job.draft}</pre>
+            </details>
+          </div>
+        )}
+
+        {(job.status === "review" || job.status === "done") && job.platform !== "youtube" && (
           <DraftEditor
             jobId={job.id}
             initialDraft={job.draft ?? ""}
