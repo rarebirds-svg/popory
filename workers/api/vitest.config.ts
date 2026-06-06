@@ -18,6 +18,7 @@ export default defineWorkersConfig(async () => {
               GOOGLE_CLIENT_SECRET: "test-secret",
               SEED_ADMIN_EMAIL: "admin@example.com",
               BRIEF_CATEGORIES_GITHUB_TOKEN: "test-gh-token",
+              YOUTUBE_TOKEN_KEY: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
             },
           },
         },

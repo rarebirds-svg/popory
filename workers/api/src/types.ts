@@ -11,4 +11,5 @@ export interface Env {
   COOKIE_DOMAIN: string;
   BRIEF_CATEGORIES_GITHUB_TOKEN: string;
   AI: { run(model: string, inputs: { prompt: string }): Promise<{ image?: string }> };
+  YOUTUBE_TOKEN_KEY: string;
 }
