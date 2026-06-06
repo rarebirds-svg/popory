@@ -9,7 +9,7 @@ export const ContentSourceInputSchema = z.object({
 
 export const ContentJobCreateSchema = z.object({
   topic: z.string().min(1).max(200),
-  platform: z.literal("naver-blog").default("naver-blog"),
+  platform: z.enum(["naver-blog", "youtube"]).default("naver-blog"),
   style_profile_id: z.string().max(64).optional(),
   sources: z.array(ContentSourceInputSchema).max(20).optional(),
 });

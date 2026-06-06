@@ -14,6 +14,12 @@ describe("ContentJobCreateSchema", () => {
     const sources = Array.from({ length: 21 }, () => ({ url: "https://x.com" }));
     expect(ContentJobCreateSchema.safeParse({ topic: "t", sources }).success).toBe(false);
   });
+  it("platform youtube 허용", () => {
+    expect(ContentJobCreateSchema.parse({ topic: "t", platform: "youtube" }).platform).toBe("youtube");
+  });
+  it("알 수 없는 platform 거부", () => {
+    expect(ContentJobCreateSchema.safeParse({ topic: "t", platform: "tiktok" }).success).toBe(false);
+  });
 });
 
 describe("ContentJobResultSchema", () => {
