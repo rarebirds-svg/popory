@@ -1,5 +1,6 @@
 # claude CLI(비대화형, Claude Max)로 네이버 블로그 초안을 생성하고 (draft, meta) 를 돌려준다.
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,8 @@ from popory_content.prompt import build_system_prompt, build_user_message
 CLAUDE_BIN = "/opt/homebrew/bin/claude"
 DEFAULT_MODEL = "claude-sonnet-4-6"
 TIMEOUT_SECONDS = 1200
+MAX_ATTEMPTS = 2
+RETRY_BACKOFF_SECONDS = 10
 
 
 class GenerateError(Exception):
@@ -40,18 +43,34 @@ def generate(
         "--output-format", "text",
     ]
     try:
-        result = subprocess.run(
-            cmd, input=user_msg, capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise GenerateError(f"claude CLI timeout after {TIMEOUT_SECONDS}s") from e
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            last = attempt == MAX_ATTEMPTS
+            try:
+                result = subprocess.run(
+                    cmd, input=user_msg, capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                if not last:
+                    time.sleep(RETRY_BACKOFF_SECONDS)
+                    continue
+                raise GenerateError(f"claude CLI timeout after {TIMEOUT_SECONDS}s (시도 {attempt})")
+
+            if result.returncode != 0:
+                # claude CLI 는 에러도 stdout 에 쓰므로 stderr·stdout 둘 다 남긴다.
+                tail = ((result.stderr or "")[-300:] + " || stdout: " + (result.stdout or "")[-600:]).strip()
+                if not last:
+                    time.sleep(RETRY_BACKOFF_SECONDS)
+                    continue
+                raise GenerateError(f"claude CLI exit {result.returncode} (시도 {attempt}): {tail}")
+
+            try:
+                return parse_generation(result.stdout)
+            except ContractError as e:
+                if not last:
+                    time.sleep(RETRY_BACKOFF_SECONDS)
+                    continue
+                raise GenerateError(f"{e} (시도 {attempt})") from e
     finally:
         sys_path.unlink(missing_ok=True)
 
-    if result.returncode != 0:
-        raise GenerateError(f"claude CLI exit {result.returncode}: {result.stderr[-500:]}")
-
-    try:
-        return parse_generation(result.stdout)
-    except ContractError as e:
-        raise GenerateError(str(e)) from e
+    raise GenerateError("generate 도달 불가 경로")  # 방어적: 루프는 항상 return/raise
