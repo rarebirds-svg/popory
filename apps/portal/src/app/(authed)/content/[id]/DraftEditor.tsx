@@ -1,5 +1,5 @@
 "use client";
-// 초안 검토·편집 client — PATCH /api/content/jobs/:id (draft 저장 / done 표시).
+// 초안 미리보기(샌드박스 iframe)·HTML 소스 편집 client — PATCH /api/content/jobs/:id.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
@@ -16,16 +16,9 @@ interface Props {
 export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources }: Props) {
   const router = useRouter();
   const [draft, setDraft] = useState(initialDraft);
+  const [showSource, setShowSource] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-
-  function copy() {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(draft).then(() => setMsg("복사됨")).catch(() => setMsg("복사 실패"));
-    } else {
-      setMsg("복사 미지원 환경");
-    }
-  }
 
   async function patch(body: Record<string, unknown>) {
     setBusy(true);
@@ -37,11 +30,22 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) { setMsg(`저장 실패 ${res.status}`); return; }
+      if (!res.ok) {
+        setMsg(`저장 실패 ${res.status}`);
+        return;
+      }
       setMsg("저장됨");
       router.refresh();
     } finally {
       setBusy(false);
+    }
+  }
+
+  function copy() {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(draft).then(() => setMsg("복사됨")).catch(() => setMsg("복사 실패"));
+    } else {
+      setMsg("복사 미지원 환경");
     }
   }
 
@@ -55,14 +59,32 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources
       )}
 
       <div>
-        <span className="block text-xs font-semibold text-popory-muted mb-1">초안 (네이버 블로그에 붙여넣기)</span>
-        <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={28}
-          className="w-full rounded-md border border-popory-border bg-popory-card p-3 font-mono text-xs leading-relaxed text-popory-fg" />
+        <span className="mb-1 block text-xs font-semibold text-popory-muted">미리보기</span>
+        <iframe
+          title="콘텐츠 미리보기"
+          srcDoc={draft}
+          sandbox="allow-scripts allow-popups"
+          className="h-[70vh] w-full rounded-md border border-popory-border bg-white"
+        />
+      </div>
+
+      <div>
+        <button type="button" onClick={() => setShowSource((s) => !s)} className="text-xs text-popory-accent">
+          {showSource ? "HTML 소스 숨기기" : "HTML 소스 편집"}
+        </button>
+        {showSource && (
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={20}
+            className="mt-2 w-full rounded-md border border-popory-border bg-popory-card p-3 font-mono text-xs leading-relaxed text-popory-fg"
+          />
+        )}
       </div>
 
       {sources.length > 0 && (
         <div>
-          <span className="block text-xs font-semibold text-popory-muted mb-1">출처</span>
+          <span className="mb-1 block text-xs font-semibold text-popory-muted">출처</span>
           <ul className="space-y-1 text-xs text-popory-muted">
             {sources.map((s) => (
               <li key={s.id}>
@@ -73,14 +95,13 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources
         </div>
       )}
 
+      <p className="text-xs text-popory-muted">네이버 블로그는 HTML 붙여넣기가 제한적입니다. 복사한 HTML은 일부 수동 조정이 필요할 수 있습니다.</p>
+
       <div className="flex items-center gap-3">
-        <button onClick={() => patch({ draft })} disabled={busy}
-          className="rounded-md border border-popory-border px-4 py-2 text-sm disabled:opacity-50">초안 저장</button>
-        <button onClick={copy} type="button"
-          className="rounded-md border border-popory-border px-4 py-2 text-sm">복사</button>
+        <button onClick={() => patch({ draft })} disabled={busy} className="rounded-md border border-popory-border px-4 py-2 text-sm disabled:opacity-50">초안 저장</button>
+        <button onClick={copy} type="button" className="rounded-md border border-popory-border px-4 py-2 text-sm">HTML 복사</button>
         {!done && (
-          <button onClick={() => patch({ draft, status: "done" })} disabled={busy}
-            className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">완료 표시</button>
+          <button onClick={() => patch({ draft, status: "done" })} disabled={busy} className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">완료 표시</button>
         )}
         {done && <span className="text-sm text-popory-muted">완료됨</span>}
         {msg && <span className="text-xs text-popory-muted">{msg}</span>}
