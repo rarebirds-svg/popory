@@ -1,5 +1,13 @@
 # 워커가 claim→generate→result 를 올바른 상태로 호출하는지 검증.
+import pytest
+
 from popory_content import worker
+
+
+@pytest.fixture(autouse=True)
+def _isolate_logs(tmp_path, monkeypatch):
+    """테스트가 실제 services/content/logs/ 를 오염시키지 않도록 LOGS_DIR 격리."""
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path / "logs")
 
 
 class FakeClient:
