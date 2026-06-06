@@ -51,3 +51,74 @@ describe("GET /api/content/style-profiles", () => {
     expect(profiles[0]!.name).toBe("톤");
   });
 });
+
+describe("GET /api/content/style-profiles/:id", () => {
+  it("소유자에게 name·samples 반환", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/style-profiles", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ name: "톤", samples: ["글1", "글2"] }) });
+    const { id } = await create.json<{ id: string }>();
+    const res = await SELF.fetch(`https://example.com/api/content/style-profiles/${id}`, { headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const body = await res.json<{ name: string; samples: string[] }>();
+    expect(body.name).toBe("톤");
+    expect(body.samples).toEqual(["글1", "글2"]);
+  });
+
+  it("남의 프로필은 404", async () => {
+    const a = await userCookie("u1", "u1@e.com");
+    const create = await SELF.fetch("https://example.com/api/content/style-profiles", { method: "POST", headers: { cookie: a, "content-type": "application/json" }, body: JSON.stringify({ name: "톤", samples: ["x"] }) });
+    const { id } = await create.json<{ id: string }>();
+    const b = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/style-profiles/${id}`, { headers: { cookie: b } });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("PUT /api/content/style-profiles/:id", () => {
+  it("name·samples·sample_count 갱신 + R2 재기록", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/style-profiles", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ name: "옛이름", samples: ["a"] }) });
+    const { id } = await create.json<{ id: string }>();
+    const res = await SELF.fetch(`https://example.com/api/content/style-profiles/${id}`, {
+      method: "PUT", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ name: "새이름", samples: ["b", "c"] }),
+    });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT name, sample_count FROM style_profiles WHERE id=?").bind(id).first<{ name: string; sample_count: number }>();
+    expect(row?.name).toBe("새이름");
+    expect(row?.sample_count).toBe(2);
+    const samples = JSON.parse(await (await env.R2.get(`content/style/${id}/samples.json`))!.text());
+    expect(samples).toEqual(["b", "c"]);
+  });
+
+  it("남의 프로필 PUT 은 404", async () => {
+    const a = await userCookie("u1", "u1@e.com");
+    const create = await SELF.fetch("https://example.com/api/content/style-profiles", { method: "POST", headers: { cookie: a, "content-type": "application/json" }, body: JSON.stringify({ name: "톤", samples: ["x"] }) });
+    const { id } = await create.json<{ id: string }>();
+    const b = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/style-profiles/${id}`, { method: "PUT", headers: { cookie: b, "content-type": "application/json" }, body: JSON.stringify({ name: "x", samples: ["y"] }) });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("DELETE /api/content/style-profiles/:id", () => {
+  it("소유자 프로필 삭제 + R2 정리", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/style-profiles", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ name: "톤", samples: ["x"] }) });
+    const { id } = await create.json<{ id: string }>();
+    const res = await SELF.fetch(`https://example.com/api/content/style-profiles/${id}`, { method: "DELETE", headers: { cookie: ck } });
+    expect(res.status).toBe(204);
+    const row = await env.DB.prepare("SELECT id FROM style_profiles WHERE id=?").bind(id).first();
+    expect(row).toBeNull();
+    expect(await env.R2.get(`content/style/${id}/samples.json`)).toBeNull();
+  });
+
+  it("남의 프로필 DELETE 은 404", async () => {
+    const a = await userCookie("u1", "u1@e.com");
+    const create = await SELF.fetch("https://example.com/api/content/style-profiles", { method: "POST", headers: { cookie: a, "content-type": "application/json" }, body: JSON.stringify({ name: "톤", samples: ["x"] }) });
+    const { id } = await create.json<{ id: string }>();
+    const b = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/style-profiles/${id}`, { method: "DELETE", headers: { cookie: b } });
+    expect(res.status).toBe(404);
+  });
+});

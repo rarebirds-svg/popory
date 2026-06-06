@@ -37,4 +37,45 @@ export function mountContentStyleProfiles(app: Hono<{ Bindings: Env; Variables: 
     ).bind(u.sub).all();
     return c.json({ profiles: results });
   });
+
+  app.get("/api/content/style-profiles/:id", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const row = await c.env.DB.prepare("SELECT id, owner_sub, name, platform, sample_count FROM style_profiles WHERE id=?")
+      .bind(c.req.param("id")).first<{ id: string; owner_sub: string; name: string; platform: string; sample_count: number }>();
+    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    const obj = await c.env.R2.get(`content/style/${row.id}/samples.json`);
+    const samples: string[] = obj ? JSON.parse(await obj.text()) : [];
+    const { owner_sub: _o, ...rest } = row;
+    return c.json({ ...rest, samples });
+  });
+
+  app.put("/api/content/style-profiles/:id", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const parsed = StyleProfileCreateSchema.safeParse(await c.req.json());
+    if (!parsed.success) return c.text("bad request", 400);
+    const id = c.req.param("id");
+    const row = await c.env.DB.prepare("SELECT id, owner_sub FROM style_profiles WHERE id=?")
+      .bind(id).first<{ id: string; owner_sub: string }>();
+    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    await c.env.R2.put(`content/style/${id}/samples.json`, JSON.stringify(parsed.data.samples), {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+    });
+    await c.env.DB.prepare("UPDATE style_profiles SET name=?, platform=?, sample_count=? WHERE id=?")
+      .bind(parsed.data.name, parsed.data.platform, parsed.data.samples.length, id).run();
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/content/style-profiles/:id", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const id = c.req.param("id");
+    const row = await c.env.DB.prepare("SELECT id, owner_sub FROM style_profiles WHERE id=?")
+      .bind(id).first<{ id: string; owner_sub: string }>();
+    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    await c.env.R2.delete(`content/style/${id}/samples.json`);
+    await c.env.DB.prepare("DELETE FROM style_profiles WHERE id=?").bind(id).run();
+    return c.body(null, 204);
+  });
 }
