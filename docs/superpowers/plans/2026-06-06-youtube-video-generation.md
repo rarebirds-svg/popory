@@ -385,6 +385,8 @@ git commit -m "refactor(content-worker): claude 호출을 run_claude_cli 로 추
 
 ---
 
+> **구현 보정(2026-06-06).** 설치된 ffmpeg(brew 8.1)에 `drawtext`/`subtitles` 필터가 없어(libfreetype/libass 미포함), 아래 Task 5의 ffmpeg drawtext 방식은 폐기됨. 대신 **Pillow로 장면 텍스트카드 PNG를 렌더**하고 ffmpeg는 이미지+오디오만 조립한다. `pyproject.toml` 에 `Pillow>=10` 추가. 실제 구현은 `services/content/popory_content/video.py`(`_render_card` = Pillow) 참조.
+
 ## Task 5: video.py — 장면 생성 + 영상 조립
 
 **Files:**
