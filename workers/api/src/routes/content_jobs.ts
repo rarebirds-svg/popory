@@ -82,7 +82,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     let draftKey = row.draft_r2_key;
     if (parsed.data.draft !== undefined) {
       draftKey = row.draft_r2_key ?? `content/draft/${row.id}`;
-      await c.env.R2.put(draftKey, parsed.data.draft, { httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
+      await c.env.R2.put(draftKey, parsed.data.draft, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
     }
     const newStatus = parsed.data.status === "done" ? "done" : row.status;
     await c.env.DB.prepare("UPDATE content_jobs SET draft_r2_key=?, status=?, updated_at=? WHERE id=?")
@@ -140,7 +140,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     let draftKey: string | null = null;
     if (parsed.data.draft !== undefined) {
       draftKey = `content/draft/${id}`;
-      await c.env.R2.put(draftKey, parsed.data.draft, { httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
+      await c.env.R2.put(draftKey, parsed.data.draft, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
     }
     await c.env.DB.prepare(
       "UPDATE content_jobs SET status=?, draft_r2_key=COALESCE(?, draft_r2_key), meta_json=COALESCE(?, meta_json), error=?, updated_at=? WHERE id=?",
