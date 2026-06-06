@@ -17,8 +17,8 @@ def test_render_card_with_and_without_bg(tmp_path):
     bg = buf.getvalue()
     p1 = tmp_path / "with_bg.png"
     p2 = tmp_path / "no_bg.png"
-    _render_card("제목", "본문 내레이션", p1, bg_image_bytes=bg)
-    _render_card("제목", "본문 내레이션", p2, bg_image_bytes=None)
+    _render_card("짧은 캡션", p1, bg_image_bytes=bg)
+    _render_card("짧은 캡션", p2, bg_image_bytes=None)
     assert p1.exists() and p1.stat().st_size > 1000
     assert p2.exists() and p2.stat().st_size > 1000
 

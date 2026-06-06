@@ -9,6 +9,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from popory_content.generate import run_claude_cli
+from popory_content.tts import synthesize
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
 from popory_content.video_contract import parse_video
 
@@ -60,20 +61,28 @@ def _cover(im: Image.Image, w: int, h: int) -> Image.Image:
     return im.crop((left, top, left + w, top + h))
 
 
-def _render_card(caption: str, narration: str, out_png: Path, bg_image_bytes: bytes | None = None) -> None:
+def _scrim_bottom(img: Image.Image) -> None:
+    """하단 그라데이션 스크림(아래로 갈수록 어두움)으로 캡션 가독성 확보."""
+    grad_h = int(HEIGHT * 0.4)
+    grad = Image.new("L", (1, grad_h))
+    for y in range(grad_h):
+        grad.putpixel((0, y), int(190 * y / grad_h))
+    grad = grad.resize((WIDTH, grad_h))
+    black = Image.new("RGB", (WIDTH, grad_h), (0, 0, 0))
+    img.paste(black, (0, HEIGHT - grad_h), grad)
+
+
+def _render_card(caption: str, out_png: Path, bg_image_bytes: bytes | None = None) -> None:
     if bg_image_bytes:
         bg = Image.open(BytesIO(bg_image_bytes)).convert("RGB")
         img = _cover(bg, WIDTH, HEIGHT)
-        img = Image.blend(img, Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0)), 0.45)
+        _scrim_bottom(img)
     else:
         img = Image.new("RGB", (WIDTH, HEIGHT), BG)
     d = ImageDraw.Draw(img)
-    head = ImageFont.truetype(FONT_PATH, 96)
-    body = ImageFont.truetype(FONT_PATH, 48)
-    cap = "\n".join(textwrap.wrap(caption, width=16)) or " "
-    d.multiline_text((WIDTH / 2, HEIGHT / 2 - 120), cap, font=head, fill=HEAD_COLOR, anchor="mm", align="center", spacing=18)
-    nar = "\n".join(textwrap.wrap(narration, width=34)) or " "
-    d.multiline_text((WIDTH / 2, HEIGHT - 300), nar, font=body, fill=BODY_COLOR, anchor="ma", align="center", spacing=14)
+    head = ImageFont.truetype(FONT_PATH, 76)
+    cap = "\n".join(textwrap.wrap(caption, width=20)) or " "
+    d.multiline_text((90, HEIGHT - 240), cap, font=head, fill=HEAD_COLOR, anchor="la", align="left", spacing=14)
     img.save(out_png)
 
 
@@ -87,9 +96,14 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc", image_fetc
     for i, scene in enumerate(scenes):
         narration = str(scene["narration"]).strip()
         caption = str(scene["caption"]).strip()
-        aiff = work / f"{i}.aiff"
-        _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(aiff), narration])
-        dur = _duration(aiff)
+        audio_bytes = synthesize(narration)
+        if audio_bytes:
+            audio = work / f"{i}.mp3"
+            audio.write_bytes(audio_bytes)
+        else:
+            audio = work / f"{i}.aiff"
+            _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), narration])
+        dur = _duration(audio)
         bg_bytes = None
         prompt = scene.get("image_prompt")
         if image_fetcher and prompt:
@@ -98,10 +112,10 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc", image_fetc
             except Exception:  # noqa: BLE001 — 이미지 실패는 단색 폴백
                 bg_bytes = None
         png = work / f"{i}.png"
-        _render_card(caption, narration, png, bg_image_bytes=bg_bytes)
+        _render_card(caption, png, bg_image_bytes=bg_bytes)
         clip = work / f"{i}.mp4"
         _run([
-            FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(aiff),
+            FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(audio),
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{dur:.3f}",
             "-c:a", "aac", "-shortest", str(clip),
         ])
