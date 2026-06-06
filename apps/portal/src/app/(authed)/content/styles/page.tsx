@@ -36,6 +36,7 @@ export default async function StylesPage() {
               <li key={p.id} className="flex items-center gap-3 py-3">
                 <span className="flex-1 text-sm text-popory-fg">{p.name}</span>
                 <span className="text-xs text-popory-muted">샘플 {p.sample_count}개</span>
+                <Link href={`/content/styles/${p.id}`} className="text-xs text-popory-accent">편집</Link>
               </li>
             ))}
           </ul>
