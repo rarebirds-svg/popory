@@ -147,4 +147,26 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     ).bind(parsed.data.status, draftKey, parsed.data.meta ? JSON.stringify(parsed.data.meta) : null, parsed.data.error ?? null, now, id).run();
     return c.json({ ok: true });
   });
+
+  app.put("/api/content/jobs/:id/video", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const id = c.req.param("id");
+    const row = await c.env.DB.prepare("SELECT id FROM content_jobs WHERE id=?").bind(id).first<{ id: string }>();
+    if (!row) return c.text("not found", 404);
+    const body = await c.req.arrayBuffer();
+    await c.env.R2.put(`content/video/${id}.mp4`, body, { httpMetadata: { contentType: "video/mp4" } });
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/content/jobs/:id/video", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const id = c.req.param("id");
+    const row = await c.env.DB.prepare("SELECT id, owner_sub FROM content_jobs WHERE id=?").bind(id).first<{ id: string; owner_sub: string }>();
+    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    const obj = await c.env.R2.get(`content/video/${id}.mp4`);
+    if (!obj) return c.text("not found", 404);
+    return new Response(obj.body, { headers: { "content-type": "video/mp4" } });
+  });
 }

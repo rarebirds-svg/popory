@@ -220,6 +220,39 @@ describe("PATCH /api/content/jobs/:id/result", () => {
   });
 });
 
+describe("video PUT/GET", () => {
+  it("워커가 PUT 으로 MP4 저장, 소유자가 GET 으로 받음", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t", platform: "youtube" }) });
+    const { id } = await create.json<{ id: string }>();
+    const token = await workerToken();
+    const bytes = new Uint8Array([0, 1, 2, 3, 4]);
+    const put = await SELF.fetch(`https://example.com/api/content/jobs/${id}/video`, {
+      method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "video/mp4" }, body: bytes,
+    });
+    expect(put.status).toBe(200);
+    const get = await SELF.fetch(`https://example.com/api/content/jobs/${id}/video`, { headers: { cookie: ck } });
+    expect(get.status).toBe(200);
+    expect(new Uint8Array(await get.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("워커 PUT 은 서비스 JWT 없으면 401", async () => {
+    const res = await SELF.fetch("https://example.com/api/content/jobs/x/video", { method: "PUT", body: new Uint8Array([1]) });
+    expect(res.status).toBe(401);
+  });
+
+  it("남의 영상 GET 은 404", async () => {
+    const a = await userCookie("u1", "u1@e.com");
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: a, "content-type": "application/json" }, body: JSON.stringify({ topic: "t", platform: "youtube" }) });
+    const { id } = await create.json<{ id: string }>();
+    const token = await workerToken();
+    await SELF.fetch(`https://example.com/api/content/jobs/${id}/video`, { method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "video/mp4" }, body: new Uint8Array([9]) });
+    const b = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/video`, { headers: { cookie: b } });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("POST /api/content/jobs — style_profile_id 소유권", () => {
   it("남의 스타일 프로필 참조는 404", async () => {
     // u2 가 프로필 생성
