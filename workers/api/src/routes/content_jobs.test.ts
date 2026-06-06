@@ -107,6 +107,38 @@ describe("PATCH /api/content/jobs/:id", () => {
   });
 });
 
+describe("POST /api/content/jobs/:id/retry", () => {
+  it("failed 작업을 queued 로 재설정하고 error 를 비운다", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t" }) });
+    const { id } = await create.json<{ id: string }>();
+    await env.DB.prepare("UPDATE content_jobs SET status='failed', error='boom' WHERE id=?").bind(id).run();
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/retry`, { method: "POST", headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT status, error FROM content_jobs WHERE id=?").bind(id).first<{ status: string; error: string | null }>();
+    expect(row?.status).toBe("queued");
+    expect(row?.error).toBeNull();
+  });
+
+  it("failed 아닌 작업은 409", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t" }) });
+    const { id } = await create.json<{ id: string }>();
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/retry`, { method: "POST", headers: { cookie: ck } });
+    expect(res.status).toBe(409);
+  });
+
+  it("남의 작업 retry 는 404", async () => {
+    const a = await userCookie("u1", "u1@e.com");
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: a, "content-type": "application/json" }, body: JSON.stringify({ topic: "t" }) });
+    const { id } = await create.json<{ id: string }>();
+    await env.DB.prepare("UPDATE content_jobs SET status='failed' WHERE id=?").bind(id).run();
+    const b = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/retry`, { method: "POST", headers: { cookie: b } });
+    expect(res.status).toBe(404);
+  });
+});
+
 async function workerToken(area = "content-worker") {
   await ensureActiveKey(env.DB);
   const k = await loadActivePrivate(env.DB);

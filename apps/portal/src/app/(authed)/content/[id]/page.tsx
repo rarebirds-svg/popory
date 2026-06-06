@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
 import { DraftEditor } from "./DraftEditor";
 import { AutoRefresh } from "./AutoRefresh";
+import { RetryButton } from "./RetryButton";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -55,9 +56,12 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
         )}
 
         {job.status === "failed" && (
-          <div className="mt-8 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-            <div className="font-semibold">생성 실패</div>
-            <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{job.error ?? "원인 미상"}</pre>
+          <div className="mt-8">
+            <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+              <div className="font-semibold">생성 실패</div>
+              <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{job.error ?? "원인 미상"}</pre>
+            </div>
+            <RetryButton jobId={job.id} />
           </div>
         )}
 
