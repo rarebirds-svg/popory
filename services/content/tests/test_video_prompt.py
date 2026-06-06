@@ -8,6 +8,7 @@ def test_system_prompt_has_contract():
     assert "video_meta" in sp
     assert "narration" in sp
     assert "caption" in sp
+    assert "image_prompt" in sp
 
 
 def test_system_prompt_embeds_style():
