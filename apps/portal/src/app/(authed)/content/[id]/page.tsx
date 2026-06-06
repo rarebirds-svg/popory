@@ -5,6 +5,7 @@ import { Header, Kicker } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
 import { DraftEditor } from "./DraftEditor";
+import { AutoRefresh } from "./AutoRefresh";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -16,6 +17,7 @@ interface JobDetail {
   draft?: string;
   meta_json: string | null;
   error: string | null;
+  created_at: number;
   sources: Array<{ id: string; kind: string; url: string | null; title: string | null; note: string | null }>;
 }
 
@@ -42,9 +44,14 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
         <h1 className="mt-3 font-serif text-2xl font-semibold tracking-tight text-popory-fg">{job.topic}</h1>
 
         {(job.status === "queued" || job.status === "running") && (
-          <p className="mt-8 text-sm text-popory-muted">
-            {job.status === "queued" ? "대기 중입니다. 워커가 작업을 가져가면 생성을 시작합니다." : "생성 중입니다. 잠시 후 새로고침하세요."}
-          </p>
+          <div className="mt-8 space-y-3">
+            <p className="text-sm text-popory-muted">
+              {job.status === "queued"
+                ? "대기 중입니다. 워커가 작업을 가져가면 생성을 시작합니다."
+                : "생성 중입니다. 리서치·작성·검토에 보통 2~5분 걸립니다."}
+            </p>
+            <AutoRefresh since={job.created_at} />
+          </div>
         )}
 
         {job.status === "failed" && (
