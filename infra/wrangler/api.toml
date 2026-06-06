@@ -43,6 +43,9 @@ bucket_name = "popory-portal-public"
 binding = "KV"
 id = "8c0a1bc35a984176b08faab18227c43e"
 
+[env.prod.ai]
+binding = "AI"
+
 [env.prod.vars]
 PUBLIC_BASE_URL = "https://api.poporyfamily.com"
 PORTAL_ORIGIN = "https://poporyfamily.com"
