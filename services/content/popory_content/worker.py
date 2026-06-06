@@ -12,6 +12,8 @@ from popory_content.log import append_log
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
 POLL_INTERVAL_SECONDS = 20
+# 서비스 JWT 수명. 60초는 시계 오차·느린 요청에 취약(일시 401 관측) → 여유 상향.
+TOKEN_TTL_SECONDS = 300
 
 
 def run_once(client) -> bool:
@@ -51,7 +53,10 @@ def _build_client() -> PortalClient:
         print("error: POPORY_PORTAL_API_BASE 미설정", file=sys.stderr)
         sys.exit(2)
     material = KeyMaterial.load(Path(key_file))
-    return PortalClient(base_url=base, token_provider=lambda: sign_for_portal(material, area=WORKER_AREA))
+    return PortalClient(
+        base_url=base,
+        token_provider=lambda: sign_for_portal(material, area=WORKER_AREA, ttl_seconds=TOKEN_TTL_SECONDS),
+    )
 
 
 def main() -> None:
