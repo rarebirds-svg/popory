@@ -45,6 +45,7 @@ export default async function ContentPage() {
         <div className="mt-3 flex items-baseline gap-3">
           <h1 className="font-serif text-3xl font-semibold tracking-tight text-popory-fg">내 컨텐츠</h1>
           <Link href="/content/styles" className="ml-auto text-sm text-popory-muted hover:text-popory-fg">스타일 프로필</Link>
+          <Link href="/content/youtube" className="text-sm text-popory-muted hover:text-popory-fg">YouTube</Link>
           <Link href="/content/new" className="text-sm font-medium text-popory-accent">+ 새 작업</Link>
         </div>
         <p className="mt-2 text-sm text-popory-muted">주제를 넣으면 리서치·검토를 거친 네이버 블로그 초안을 만듭니다.</p>
