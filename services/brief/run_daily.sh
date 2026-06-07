@@ -98,6 +98,8 @@ if [ ${GEN_OK_COUNT} -eq 0 ]; then
 fi
 
 # 4) standalone 카테고리 발송 (카테고리별 1통씩)
+# bash 3.2(macOS 기본)는 set -u + 빈 배열 "${arr[@]}" 확장 시 unbound variable로 죽으므로 개수 가드.
+if [ ${#STANDALONE_SLUGS[@]} -gt 0 ]; then
 for SLUG in "${STANDALONE_SLUGS[@]}"; do
   CAT_META=$("${VENV_PY}" -c "from popory_brief.categories import load_category
 c = load_category('${SLUG}')
@@ -138,6 +140,7 @@ print(c.sender())")
     fi
   done <<< "${EMAILS}"
 done
+fi
 
 # 5) bundled 카테고리 묶음 발송 (수신자별 1통)
 if [ ${#BUNDLED_SLUGS[@]} -gt 0 ]; then
