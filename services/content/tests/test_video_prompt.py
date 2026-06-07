@@ -3,13 +3,14 @@ from popory_content.video_prompt import build_video_system_prompt, build_video_u
 
 
 def test_system_prompt_has_contract():
-    sp = build_video_system_prompt([])
+    sp = build_video_system_prompt([], scene_count=12, image_style_kw="watercolor painting")
     assert "scenes_json" in sp
     assert "video_meta" in sp
     assert "narration" in sp
     assert "caption" in sp
     assert "image_prompt" in sp
-    assert "cinematic" in sp
+    assert "12" in sp
+    assert "watercolor" in sp
 
 
 def test_system_prompt_embeds_style():
