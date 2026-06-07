@@ -91,7 +91,7 @@ def run_upload_once(client) -> bool:
     job_id = data["job_id"]
     try:
         mp4 = client.get_bytes(f"/api/content/jobs/{job_id}/video")
-        video_id = upload(data["access_token"], mp4, data.get("title", "popory 영상"), data.get("description", ""), data.get("tags", []))
+        video_id = upload(data["access_token"], mp4, data.get("title", "popory 영상"), data.get("description", ""), data.get("tags", []), privacy=data.get("privacy", "public"))
         client.patch(f"/api/content/jobs/{job_id}/youtube-result", json={"status": "done", "video_id": video_id})
         append_log(LOGS_DIR, {"worker": "content", "status": "uploaded", "job": job_id, "video": video_id})
     except Exception as e:  # noqa: BLE001 — 업로드 실패는 result 에 기록하고 계속

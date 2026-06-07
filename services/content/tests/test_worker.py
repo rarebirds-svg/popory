@@ -112,7 +112,13 @@ def test_safe_image_returns_bytes():
 
 
 def test_run_upload_once_uploads_and_reports(monkeypatch):
-    monkeypatch.setattr(worker, "upload", lambda *a, **k: "vid_xyz")
+    captured_up = {}
+
+    def fake_upload(*a, **k):
+        captured_up["privacy"] = k.get("privacy")
+        return "vid_xyz"
+
+    monkeypatch.setattr(worker, "upload", fake_upload)
 
     class UpClient:
         def __init__(self):
@@ -120,7 +126,7 @@ def test_run_upload_once_uploads_and_reports(monkeypatch):
 
         def post(self, path, *, json=None):
             assert path == "/api/content/youtube/claim-upload"
-            return {"job_id": "yt1", "title": "t", "description": "", "tags": [], "access_token": "tok"}
+            return {"job_id": "yt1", "title": "t", "description": "", "tags": [], "access_token": "tok", "privacy": "public"}
 
         def get_bytes(self, path):
             return b"\x00mp4"
@@ -134,6 +140,7 @@ def test_run_upload_once_uploads_and_reports(monkeypatch):
     path, body = client.patched[0]
     assert path == "/api/content/jobs/yt1/youtube-result"
     assert body == {"status": "done", "video_id": "vid_xyz"}
+    assert captured_up["privacy"] == "public"
 
 
 def test_run_upload_once_no_job():
