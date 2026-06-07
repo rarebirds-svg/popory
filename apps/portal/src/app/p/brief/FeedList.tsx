@@ -29,6 +29,7 @@ const BADGE_COLOR: Record<string, { bg: string; text: string }> = {
   "legal-ai":     { bg: "bg-sky-100",    text: "text-sky-700" },
 };
 
+const SERVER_CAP = 100; // /api/published_items 서버사이드 limit 상한
 const PAGE_SIZE = 60;
 
 function slugFromArea(area: string) {
@@ -48,9 +49,12 @@ export function FeedList({ initialItems, activeCat, categoryNames }: FeedListPro
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [loading, setLoading] = useState(false);
   const [exhausted, setExhausted] = useState(initialItems.length < PAGE_SIZE);
+  const [error, setError] = useState(false);
 
   const loadMore = async () => {
     setLoading(true);
+    setError(false);
+    const prevCount = items.length;
     const nextLimit = limit + PAGE_SIZE;
     const area = activeCat ? `brief-${activeCat}` : "";
     const url = area
@@ -58,11 +62,16 @@ export function FeedList({ initialItems, activeCat, categoryNames }: FeedListPro
       : `${API_BASE}/api/published_items?limit=${nextLimit}`;
     try {
       const res = await fetch(url);
-      if (!res.ok) return;
+      if (!res.ok) { setError(true); return; }
       const { items: next } = (await res.json()) as { items: FeedItem[] };
       setItems(next);
       setLimit(nextLimit);
-      if (next.length < nextLimit) setExhausted(true);
+      // 서버 cap 이하로 응답이 왔거나 이전과 동일한 건수면 더 이상 데이터 없음
+      if (next.length === prevCount || next.length < Math.min(nextLimit, SERVER_CAP)) {
+        setExhausted(true);
+      }
+    } catch {
+      setError(true);
     } finally {
       setLoading(false);
     }
@@ -111,6 +120,11 @@ export function FeedList({ initialItems, activeCat, categoryNames }: FeedListPro
           );
         })}
       </ul>
+      {error && (
+        <p className="mt-2 text-center text-xs text-red-600">
+          불러오기 실패. 다시 시도해 주세요.
+        </p>
+      )}
       {!exhausted && (
         <div className="mt-6 flex justify-center pb-10">
           <button
