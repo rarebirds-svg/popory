@@ -17,6 +17,9 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
 
   const [topic, setTopic] = useState("");
   const [platform, setPlatform] = useState<"naver-blog" | "youtube">("naver-blog");
+  const [length, setLength] = useState<"3" | "5" | "7" | "10">("5");
+  const [voice, setVoice] = useState<"female-calm" | "female-bright" | "male">("female-calm");
+  const [imageStyle, setImageStyle] = useState<"photo" | "illust" | "watercolor" | "minimal">("photo");
   const [styleId, setStyleId] = useState("");
   const [sources, setSources] = useState<SourceInput[]>([]);
 
@@ -42,6 +45,7 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
         body: JSON.stringify({
           topic,
           platform,
+          options: platform === "youtube" ? { length, voice, image_style: imageStyle } : undefined,
           style_profile_id: styleId || undefined,
           sources: cleanSources.length ? cleanSources : undefined,
         }),
@@ -85,6 +89,37 @@ export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
           <option value="youtube">YouTube 영상 (슬라이드쇼)</option>
         </select>
       </label>
+
+      {platform === "youtube" && (
+        <div className="grid grid-cols-3 gap-3">
+          <label className="block">
+            <span className="block text-xs font-semibold text-popory-muted mb-1">길이</span>
+            <select value={length} onChange={(e) => setLength(e.target.value as typeof length)} className={INPUT}>
+              <option value="3">3분</option>
+              <option value="5">5분</option>
+              <option value="7">7분</option>
+              <option value="10">10분</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="block text-xs font-semibold text-popory-muted mb-1">목소리</span>
+            <select value={voice} onChange={(e) => setVoice(e.target.value as typeof voice)} className={INPUT}>
+              <option value="female-calm">여성·차분</option>
+              <option value="female-bright">여성·밝은</option>
+              <option value="male">남성</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="block text-xs font-semibold text-popory-muted mb-1">배경 스타일</span>
+            <select value={imageStyle} onChange={(e) => setImageStyle(e.target.value as typeof imageStyle)} className={INPUT}>
+              <option value="photo">실사</option>
+              <option value="illust">일러스트</option>
+              <option value="watercolor">수채화</option>
+              <option value="minimal">미니멀</option>
+            </select>
+          </label>
+        </div>
+      )}
 
       <label className="block">
         <span className="block text-xs font-semibold text-popory-muted mb-1">스타일 프로필 (선택)</span>
