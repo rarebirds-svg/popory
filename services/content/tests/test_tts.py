@@ -25,3 +25,12 @@ def test_synthesize_none_on_error(monkeypatch):
     monkeypatch.setenv("GOOGLE_TTS_API_KEY", "k")
     responses.add(responses.POST, tts.TTS_URL, json={"error": "x"}, status=500)
     assert tts.synthesize("안녕") is None
+
+
+@responses.activate
+def test_synthesize_uses_voice(monkeypatch):
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", "k")
+    responses.add(responses.POST, tts.TTS_URL, json={"audioContent": base64.b64encode(b"x").decode()}, status=200)
+    tts.synthesize("안녕", voice="ko-KR-Neural2-C")
+    body = responses.calls[0].request.body
+    assert "ko-KR-Neural2-C" in (body if isinstance(body, str) else body.decode())

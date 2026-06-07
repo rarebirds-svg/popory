@@ -6,10 +6,9 @@ import requests
 
 TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
 LANGUAGE = "ko-KR"
-VOICE_NAME = "ko-KR-Neural2-C"
 
 
-def synthesize(text: str) -> bytes | None:
+def synthesize(text: str, voice: str = "ko-KR-Neural2-A") -> bytes | None:
     key = os.environ.get("GOOGLE_TTS_API_KEY")
     if not key:
         return None
@@ -18,7 +17,7 @@ def synthesize(text: str) -> bytes | None:
             f"{TTS_URL}?key={key}",
             json={
                 "input": {"text": text},
-                "voice": {"languageCode": LANGUAGE, "name": VOICE_NAME},
+                "voice": {"languageCode": LANGUAGE, "name": voice},
                 "audioConfig": {"audioEncoding": "MP3"},
             },
             timeout=30,
