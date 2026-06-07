@@ -8,7 +8,7 @@ class UploadError(Exception):
     """업로드 실패."""
 
 
-def upload(access_token: str, mp4_bytes: bytes, title: str, description: str, tags: list[str]) -> str:
+def upload(access_token: str, mp4_bytes: bytes, title: str, description: str, tags: list[str], privacy: str = "private") -> str:
     init = requests.post(
         UPLOAD_URL,
         headers={
@@ -17,7 +17,7 @@ def upload(access_token: str, mp4_bytes: bytes, title: str, description: str, ta
             "X-Upload-Content-Type": "video/mp4",
             "X-Upload-Content-Length": str(len(mp4_bytes)),
         },
-        json={"snippet": {"title": title[:100], "description": description, "tags": tags}, "status": {"privacyStatus": "private"}},
+        json={"snippet": {"title": title[:100], "description": description, "tags": tags}, "status": {"privacyStatus": privacy}},
         timeout=60,
     )
     if init.status_code not in (200, 201):
