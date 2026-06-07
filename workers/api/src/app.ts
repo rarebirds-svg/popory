@@ -20,6 +20,8 @@ import { mountContentStyleProfiles } from "./routes/content_style_profiles";
 import { mountContentAiImage } from "./routes/content_ai_image";
 import { mountContentYoutube } from "./routes/content_youtube";
 import { mountContentYoutubeUpload } from "./routes/content_youtube_upload";
+import { mountContentMediaToken } from "./routes/content_media_token";
+import { mountContentInstagram } from "./routes/content_instagram";
 import { mountAreas } from "./routes/areas";
 import { mountAreasSubscribers } from "./routes/areas_subscribers";
 import type { ServiceVars } from "./middleware/service_auth";
@@ -44,6 +46,8 @@ export function createApp() {
   mountGo(app);
   mountPublished(app);
   mountContentTopics(app);
+  mountContentMediaToken(app);
+  mountContentInstagram(app);
   mountContentJobs(app);
   mountContentStyleProfiles(app);
   mountContentAiImage(app);

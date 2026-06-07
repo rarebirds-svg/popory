@@ -209,7 +209,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const body = (await c.req.json()) as { images: string[] };
     if (!Array.isArray(body.images) || body.images.length === 0) return c.text("images required", 400);
     for (let n = 0; n < body.images.length; n++) {
-      const bytes = Uint8Array.from(atob(body.images[n]), (ch) => ch.charCodeAt(0));
+      const bytes = Uint8Array.from(atob(body.images[n] ?? ""), (ch) => ch.charCodeAt(0));
       await c.env.R2.put(`content/carousel/${id}/${n}.jpg`, bytes, {
         httpMetadata: { contentType: "image/jpeg" },
       });
