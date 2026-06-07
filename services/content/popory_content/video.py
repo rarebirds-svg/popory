@@ -88,12 +88,21 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
     else:
         img = Image.new("RGB", (w, h), BG)
     d = ImageDraw.Draw(img)
-    title_font = ImageFont.truetype(FONT_PATH, 56)
-    sub_font = ImageFont.truetype(FONT_PATH, 64)
-    t = "\n".join(textwrap.wrap(title, width=22)) or " "
+    if portrait:
+        # 세로 화면: 폰트 축소 + 줄 너비 한국어 기준으로 제한
+        title_font = ImageFont.truetype(FONT_PATH, 48)
+        sub_font = ImageFont.truetype(FONT_PATH, 46)
+        title_wrap, sub_wrap = 16, 18
+        sub_y = h - 320  # Shorts UI 오버레이 영역 위
+    else:
+        title_font = ImageFont.truetype(FONT_PATH, 56)
+        sub_font = ImageFont.truetype(FONT_PATH, 64)
+        title_wrap, sub_wrap = 22, 30
+        sub_y = h - 240
+    t = "\n".join(textwrap.wrap(title, width=title_wrap)) or " "
     d.multiline_text((80, 70), t, font=title_font, fill=HEAD_COLOR, anchor="la", align="left", spacing=10)
-    s = "\n".join(textwrap.wrap(subtitle, width=30)) or " "
-    d.multiline_text((w / 2, h - 240), s, font=sub_font, fill=(255, 255, 255), anchor="ma", align="center", spacing=14)
+    s = "\n".join(textwrap.wrap(subtitle, width=sub_wrap)) or " "
+    d.multiline_text((w / 2, sub_y), s, font=sub_font, fill=(255, 255, 255), anchor="ma", align="center", spacing=14)
     img.save(out_png)
 
 
