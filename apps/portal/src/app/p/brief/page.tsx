@@ -9,9 +9,9 @@ export const runtime = "edge";
 
 const PAGE_SIZE = 60;
 
-const VALID_SLUGS = new Set([
-  "realestate", "anticorruption", "chaebol", "sanction", "antitrust", "legal-ai",
-]);
+const CATEGORY_ORDER = ["antitrust", "chaebol", "anticorruption", "sanction", "legal-ai", "realestate"];
+
+const VALID_SLUGS = new Set(CATEGORY_ORDER);
 
 async function fetchCategories(): Promise<CategoryMeta[]> {
   try {
@@ -54,6 +54,9 @@ export default async function BriefFeedPage({
   const categoryNames: Record<string, string> = Object.fromEntries(
     cats.map((c) => [c.slug, c.name]),
   );
+  const sortedCats = CATEGORY_ORDER
+    .map((slug) => cats.find((c) => c.slug === slug))
+    .filter((c): c is CategoryMeta => c !== undefined);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -65,7 +68,7 @@ export default async function BriefFeedPage({
         AI가 큐레이션한 일일 브리핑. 매일 09:00 KST 발행.
       </p>
       <div className="mt-6">
-        <FilterChips categories={cats} activeCat={activeCat} />
+        <FilterChips categories={sortedCats} activeCat={activeCat} />
         <FeedList key={activeCat} initialItems={items} activeCat={activeCat} categoryNames={categoryNames} />
       </div>
     </main>
