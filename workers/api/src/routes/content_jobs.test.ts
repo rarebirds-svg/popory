@@ -46,6 +46,17 @@ describe("POST /api/content/jobs", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  it("options 를 params_json 에 저장", async () => {
+    const ck = await userCookie();
+    const res = await SELF.fetch("https://example.com/api/content/jobs", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platform: "youtube", options: { length: "10", voice: "male", image_style: "watercolor" } }),
+    });
+    const { id } = await res.json<{ id: string }>();
+    const row = await env.DB.prepare("SELECT params_json FROM content_jobs WHERE id=?").bind(id).first<{ params_json: string }>();
+    expect(JSON.parse(row!.params_json)).toEqual({ length: "10", voice: "male", image_style: "watercolor" });
+  });
 });
 
 describe("GET /api/content/jobs", () => {

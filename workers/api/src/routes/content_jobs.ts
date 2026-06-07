@@ -33,10 +33,11 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     }
     const id = ulid();
     const now = Math.floor(Date.now() / 1000);
+    const paramsJson = parsed.data.options ? JSON.stringify(parsed.data.options) : null;
     await c.env.DB.prepare(
       `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, ?)`,
-    ).bind(id, u.sub, parsed.data.topic, parsed.data.platform, parsed.data.style_profile_id ?? null, now, now).run();
+       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+    ).bind(id, u.sub, parsed.data.topic, parsed.data.platform, parsed.data.style_profile_id ?? null, paramsJson, now, now).run();
     for (const s of parsed.data.sources ?? []) {
       await c.env.DB.prepare(
         `INSERT INTO content_sources (id, job_id, kind, url, title, note, added_by, created_at)
