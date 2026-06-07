@@ -54,18 +54,41 @@ if [ -z "${CATEGORIES}" ]; then
 fi
 log "\"categories_count=$(echo "${CATEGORIES}" | grep -c .)\""
 
-# 3) 카테고리별 generate + publish
+# 3) 카테고리별 generate — 병렬 실행 (총 시간 ≒ 최장 카테고리 1개 분량)
 declare -a STANDALONE_SLUGS=()
 declare -a BUNDLED_SLUGS=()
 GEN_FAIL_SLUGS=""
 GEN_OK_COUNT=0
 
+# 3-a) 모든 카테고리를 백그라운드로 동시 실행. 결과는 slug별 tmp 파일에 저장.
 while IFS=' ' read -r SLUG MODE; do
   [ -z "${SLUG}" ] && continue
-  GEN_OUT=$("${VENV_PY}" "${BRIEF_DIR}/generate_brief.py" --category "${SLUG}" 2>&1)
-  GEN_EXIT=$?
-  echo "${GEN_OUT}" >> "${LOG_FILE}"
-  if [ ${GEN_EXIT} -ne 0 ]; then
+  (
+    OUT=$("${VENV_PY}" "${BRIEF_DIR}/generate_brief.py" --category "${SLUG}" 2>&1)
+    EXIT=$?
+    printf '%s\n' "${OUT}" > "/tmp/brief_stdout_${SLUG}.tmp"
+    echo "${EXIT}"          > "/tmp/brief_exit_${SLUG}.tmp"
+  ) &
+done <<< "${CATEGORIES}"
+
+log "\"generate parallel started\""
+wait  # 모든 백그라운드 generate 완료 대기
+log "\"generate all done\""
+
+# 3-b) 결과 수집 + publish (publish는 순차 실행)
+while IFS=' ' read -r SLUG MODE; do
+  [ -z "${SLUG}" ] && continue
+  EXIT_FILE="/tmp/brief_exit_${SLUG}.tmp"
+  OUT_FILE="/tmp/brief_stdout_${SLUG}.tmp"
+
+  # 각 카테고리 stdout·stderr 를 메인 로그에 합산
+  [ -f "${OUT_FILE}" ] && cat "${OUT_FILE}" >> "${LOG_FILE}"
+
+  GEN_EXIT=1
+  [ -f "${EXIT_FILE}" ] && GEN_EXIT=$(cat "${EXIT_FILE}")
+  rm -f "${EXIT_FILE}" "${OUT_FILE}"
+
+  if [ "${GEN_EXIT}" -ne 0 ]; then
     log "\"generate fail category=${SLUG} exit=${GEN_EXIT}\""
     GEN_FAIL_SLUGS="${GEN_FAIL_SLUGS}${SLUG},"
     continue
