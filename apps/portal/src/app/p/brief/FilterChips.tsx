@@ -17,7 +17,7 @@ export function FilterChips({ categories, activeCat }: FilterChipsProps) {
   const router = useRouter();
 
   const handleClick = (slug: string) => {
-    router.push(slug === "" ? "/p/brief" : `/p/brief?cat=${slug}`);
+    router.push(slug === "" ? "/p/brief" : `/p/brief?cat=${encodeURIComponent(slug)}`);
   };
 
   const base = "rounded-full px-3 py-1.5 text-xs font-medium transition cursor-pointer";
@@ -27,11 +27,11 @@ export function FilterChips({ categories, activeCat }: FilterChipsProps) {
   return (
     <div className="sticky top-0 z-10 border-b border-popory-border bg-popory-bg py-3">
       <div className="flex flex-wrap gap-2">
-        <button onClick={() => handleClick("")} className={activeCat === "" ? active : inactive}>
+        <button onClick={() => handleClick("")} className={activeCat === "" ? active : inactive} aria-pressed={activeCat === ""}>
           전체
         </button>
         {categories.map((c) => (
-          <button key={c.slug} onClick={() => handleClick(c.slug)} className={c.slug === activeCat ? active : inactive}>
+          <button key={c.slug} onClick={() => handleClick(c.slug)} className={c.slug === activeCat ? active : inactive} aria-pressed={c.slug === activeCat}>
             {c.name}
           </button>
         ))}
