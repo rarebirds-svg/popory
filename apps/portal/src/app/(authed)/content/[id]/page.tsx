@@ -7,6 +7,7 @@ import { API_BASE } from "@/lib/env";
 import { DraftEditor } from "./DraftEditor";
 import { AutoRefresh } from "./AutoRefresh";
 import { RetryButton } from "./RetryButton";
+import { YoutubeUpload } from "./YoutubeUpload";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -20,6 +21,9 @@ interface JobDetail {
   meta_json: string | null;
   error: string | null;
   created_at: number;
+  youtube_status: string | null;
+  youtube_video_id: string | null;
+  youtube_error: string | null;
   sources: Array<{ id: string; kind: string; url: string | null; title: string | null; note: string | null }>;
 }
 
@@ -36,6 +40,12 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
   let meta: Record<string, unknown> | null = null;
   if (job.meta_json) {
     try { meta = JSON.parse(job.meta_json) as Record<string, unknown>; } catch { meta = null; }
+  }
+
+  let ytConnected = false;
+  if (job.platform === "youtube") {
+    const cs = await fetch(`${API_BASE}/api/content/youtube/status`, { headers: { cookie }, cache: "no-store" });
+    if (cs.ok) ytConnected = ((await cs.json()) as { connected: boolean }).connected;
   }
 
   return (
@@ -73,6 +83,8 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
               <summary className="cursor-pointer text-xs text-popory-accent">대본 보기</summary>
               <pre className="mt-2 whitespace-pre-wrap rounded-md border border-popory-border bg-popory-card p-3 text-xs text-popory-fg">{job.draft}</pre>
             </details>
+            <YoutubeUpload jobId={job.id} connected={ytConnected} status={job.youtube_status} videoId={job.youtube_video_id} error={job.youtube_error} />
+            {(job.youtube_status === "requested" || job.youtube_status === "uploading") && <AutoRefresh since={job.created_at} />}
           </div>
         )}
 
