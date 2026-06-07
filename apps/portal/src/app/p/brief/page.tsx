@@ -9,7 +9,7 @@ export const runtime = "edge";
 
 const PAGE_SIZE = 60;
 
-const CATEGORY_ORDER = ["antitrust", "chaebol", "anticorruption", "sanction", "legal-ai", "realestate"];
+const CATEGORY_ORDER = ["antitrust", "chaebol", "anticorruption", "sanction", "legal-ai", "realestate", "naver"];
 
 const VALID_SLUGS = new Set(CATEGORY_ORDER);
 
