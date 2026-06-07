@@ -31,7 +31,11 @@ export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: AppVars & ServiceVars }>();
   app.use(sessionMiddleware);
   app.use("/api/*", cors({
-    origin: (origin, c) => (origin === c.env.PORTAL_ORIGIN ? origin : ""),
+    origin: (origin, c) => {
+      const allowed = c.env.PORTAL_ORIGIN;
+      const www = allowed.replace("://", "://www.");
+      return (origin === allowed || origin === www) ? origin : "";
+    },
     credentials: true,
   }));
   app.get("/health", (c) => c.text("ok"));
