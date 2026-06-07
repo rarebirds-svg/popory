@@ -22,6 +22,7 @@ import { mountContentYoutube } from "./routes/content_youtube";
 import { mountContentYoutubeUpload } from "./routes/content_youtube_upload";
 import { mountContentMediaToken } from "./routes/content_media_token";
 import { mountContentInstagram } from "./routes/content_instagram";
+import { mountContentInstagramUpload } from "./routes/content_instagram_upload";
 import { mountAreas } from "./routes/areas";
 import { mountAreasSubscribers } from "./routes/areas_subscribers";
 import type { ServiceVars } from "./middleware/service_auth";
@@ -48,6 +49,7 @@ export function createApp() {
   mountContentTopics(app);
   mountContentMediaToken(app);
   mountContentInstagram(app);
+  mountContentInstagramUpload(app);
   mountContentJobs(app);
   mountContentStyleProfiles(app);
   mountContentAiImage(app);
