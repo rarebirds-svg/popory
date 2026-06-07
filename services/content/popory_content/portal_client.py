@@ -63,6 +63,17 @@ class PortalClient:
             raise PortalError(f"ai-image {resp.status_code}: {resp.text[:200]}", exit_code=4)
         return resp.content
 
+    def get_bytes(self, path: str) -> bytes:
+        url = f"{self.base_url}{path}"
+        headers = {"Authorization": f"Bearer {self.token_provider()}"}
+        try:
+            resp = requests.get(url, headers=headers, timeout=120)
+        except requests.RequestException as e:
+            raise PortalError(f"network: {e}", exit_code=5) from e
+        if resp.status_code >= 400:
+            raise PortalError(f"video get {resp.status_code}", exit_code=4)
+        return resp.content
+
     def _call(self, method: str, path: str, *, body: Any) -> Any:
         url = f"{self.base_url}{path}"
         attempts = 2  # 원호출 + 5xx 재시도 1회

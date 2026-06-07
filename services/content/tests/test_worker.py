@@ -109,3 +109,36 @@ def test_safe_image_returns_bytes():
         def post_for_bytes(self, path, *, json):
             return b"\x89PNG"
     assert worker._safe_image(C(), "prompt") == b"\x89PNG"
+
+
+def test_run_upload_once_uploads_and_reports(monkeypatch):
+    monkeypatch.setattr(worker, "upload", lambda *a, **k: "vid_xyz")
+
+    class UpClient:
+        def __init__(self):
+            self.patched = []
+
+        def post(self, path, *, json=None):
+            assert path == "/api/content/youtube/claim-upload"
+            return {"job_id": "yt1", "title": "t", "description": "", "tags": [], "access_token": "tok"}
+
+        def get_bytes(self, path):
+            return b"\x00mp4"
+
+        def patch(self, path, *, json):
+            self.patched.append((path, json))
+            return {"ok": True}
+
+    client = UpClient()
+    assert worker.run_upload_once(client) is True
+    path, body = client.patched[0]
+    assert path == "/api/content/jobs/yt1/youtube-result"
+    assert body == {"status": "done", "video_id": "vid_xyz"}
+
+
+def test_run_upload_once_no_job():
+    class C:
+        def post(self, path, *, json=None):
+            return {}
+
+    assert worker.run_upload_once(C()) is False

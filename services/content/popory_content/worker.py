@@ -6,6 +6,7 @@ from pathlib import Path
 
 from popory_content.generate import generate, GenerateError
 from popory_content.video import make_video, VideoError
+from popory_content.youtube_upload import upload
 from popory_content.options import parse_options, SCENE_COUNT, VOICE, STYLE
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
@@ -82,12 +83,34 @@ def _build_client() -> PortalClient:
     )
 
 
+def run_upload_once(client) -> bool:
+    """업로드 요청 1건 처리. 처리했으면 True."""
+    data = client.post("/api/content/youtube/claim-upload", json=None)
+    if not data:
+        return False
+    job_id = data["job_id"]
+    try:
+        mp4 = client.get_bytes(f"/api/content/jobs/{job_id}/video")
+        video_id = upload(data["access_token"], mp4, data.get("title", "popory 영상"), data.get("description", ""), data.get("tags", []))
+        client.patch(f"/api/content/jobs/{job_id}/youtube-result", json={"status": "done", "video_id": video_id})
+        append_log(LOGS_DIR, {"worker": "content", "status": "uploaded", "job": job_id, "video": video_id})
+    except Exception as e:  # noqa: BLE001 — 업로드 실패는 result 에 기록하고 계속
+        try:
+            client.patch(f"/api/content/jobs/{job_id}/youtube-result", json={"status": "failed", "error": str(e)[:500]})
+        except Exception:  # noqa: BLE001
+            pass
+        append_log(LOGS_DIR, {"worker": "content", "status": "upload_failed", "job": job_id, "error": str(e)[:300]})
+    return True
+
+
 def main() -> None:
     client = _build_client()
     append_log(LOGS_DIR, {"worker": "content", "status": "start"})
     while True:
         try:
             processed = run_once(client)
+            if not processed:
+                processed = run_upload_once(client)
         except PortalError as e:
             append_log(LOGS_DIR, {"worker": "content", "status": "portal_error", "error": str(e)[:300]})
             processed = False
