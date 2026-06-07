@@ -20,7 +20,9 @@ export function mountContentYoutubeUpload(app: Hono<{ Bindings: Env; Variables: 
     if (!conn) return c.text("youtube not connected", 409);
     const vid = await c.env.R2.head(`content/video/${id}.mp4`);
     if (!vid) return c.text("no video", 409);
-    await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='requested', youtube_error=NULL WHERE id=?").bind(id).run();
+    const body = (await c.req.json().catch(() => ({}))) as { privacy?: string };
+    const privacy = ["public", "unlisted", "private"].includes(body.privacy ?? "") ? body.privacy! : "public";
+    await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='requested', youtube_error=NULL, youtube_privacy=? WHERE id=?").bind(privacy, id).run();
     return c.json({ ok: true });
   });
 
@@ -31,7 +33,7 @@ export function mountContentYoutubeUpload(app: Hono<{ Bindings: Env; Variables: 
     if (!cand) return c.body(null, 204);
     const claim = await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='uploading' WHERE id=? AND youtube_status='requested'").bind(cand.id).run();
     if (!claim.meta.changes) return c.body(null, 204);
-    const job = await c.env.DB.prepare("SELECT id, owner_sub, meta_json FROM content_jobs WHERE id=?").bind(cand.id).first<{ id: string; owner_sub: string; meta_json: string | null }>();
+    const job = await c.env.DB.prepare("SELECT id, owner_sub, meta_json, youtube_privacy FROM content_jobs WHERE id=?").bind(cand.id).first<{ id: string; owner_sub: string; meta_json: string | null; youtube_privacy: string | null }>();
     const conn = await c.env.DB.prepare("SELECT refresh_token FROM youtube_connections WHERE sub=?").bind(job!.owner_sub).first<{ refresh_token: string }>();
     if (!conn) {
       await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='failed', youtube_error='연결 없음' WHERE id=?").bind(cand.id).run();
@@ -51,7 +53,7 @@ export function mountContentYoutubeUpload(app: Hono<{ Bindings: Env; Variables: 
       return c.body(null, 204);
     }
     const meta = job!.meta_json ? (JSON.parse(job!.meta_json) as { title?: string; description?: string; tags?: string[] }) : {};
-    return c.json({ job_id: job!.id, title: meta.title ?? "popory 영상", description: meta.description ?? "", tags: meta.tags ?? [], access_token: accessToken });
+    return c.json({ job_id: job!.id, title: meta.title ?? "popory 영상", description: meta.description ?? "", tags: meta.tags ?? [], access_token: accessToken, privacy: job!.youtube_privacy ?? "public" });
   });
 
   app.patch("/api/content/jobs/:id/youtube-result", requireService, async (c) => {

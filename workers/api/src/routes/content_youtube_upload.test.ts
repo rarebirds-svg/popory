@@ -50,6 +50,22 @@ describe("POST /youtube-upload", () => {
     const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/youtube-upload`, { method: "POST", headers: { cookie: ck } });
     expect(res.status).toBe(409);
   });
+  it("privacy 를 저장(지정값)", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO youtube_connections (sub, refresh_token, connected_at) VALUES ('u1','enc',1)").run();
+    const id = await makeYoutubeJob();
+    await SELF.fetch(`https://example.com/api/content/jobs/${id}/youtube-upload`, { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ privacy: "unlisted" }) });
+    const row = await env.DB.prepare("SELECT youtube_privacy FROM content_jobs WHERE id=?").bind(id).first<{ youtube_privacy: string }>();
+    expect(row?.youtube_privacy).toBe("unlisted");
+  });
+  it("privacy 누락이면 public", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO youtube_connections (sub, refresh_token, connected_at) VALUES ('u1','enc',1)").run();
+    const id = await makeYoutubeJob();
+    await SELF.fetch(`https://example.com/api/content/jobs/${id}/youtube-upload`, { method: "POST", headers: { cookie: ck } });
+    const row = await env.DB.prepare("SELECT youtube_privacy FROM content_jobs WHERE id=?").bind(id).first<{ youtube_privacy: string }>();
+    expect(row?.youtube_privacy).toBe("public");
+  });
 });
 
 describe("claim-upload / result 인증", () => {
