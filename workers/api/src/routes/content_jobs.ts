@@ -4,6 +4,8 @@ import type { Env } from "../types";
 import { ContentJobCreateSchema, ContentJobEditSchema, ContentJobResultSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
 import { requireService, type ServiceVars } from "../middleware/service_auth";
+import { verifyAreaToken } from "@popory/auth";
+import { loadJwks } from "../db/signing_keys";
 
 function ulid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -161,11 +163,25 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
   });
 
   app.get("/api/content/jobs/:id/video", async (c) => {
-    const unauth = requireAuth(c); if (unauth) return unauth;
-    const u = c.get("user")!;
     const id = c.req.param("id");
-    const row = await c.env.DB.prepare("SELECT id, owner_sub FROM content_jobs WHERE id=?").bind(id).first<{ id: string; owner_sub: string }>();
-    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    const u = c.get("user");
+    let allowed = false;
+    if (u) {
+      const row = await c.env.DB.prepare("SELECT owner_sub FROM content_jobs WHERE id=?").bind(id).first<{ owner_sub: string }>();
+      allowed = !!row && row.owner_sub === u.sub;
+    } else {
+      const m = /^Bearer (.+)$/.exec(c.req.header("authorization") ?? "");
+      if (m) {
+        try {
+          const jwks = await loadJwks(c.env.DB);
+          const claims = await verifyAreaToken({ token: m[1]!, jwks, expectedAudience: "popory-portal" });
+          allowed = claims.area === WORKER_AREA;
+        } catch {
+          allowed = false;
+        }
+      }
+    }
+    if (!allowed) return c.text("not found", 404);
     const obj = await c.env.R2.get(`content/video/${id}.mp4`);
     if (!obj) return c.text("not found", 404);
     return new Response(obj.body, { headers: { "content-type": "video/mp4" } });

@@ -262,6 +262,17 @@ describe("video PUT/GET", () => {
     const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/video`, { headers: { cookie: b } });
     expect(res.status).toBe(404);
   });
+
+  it("서비스 JWT(content-worker)로 GET video 허용", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t", platform: "youtube" }) });
+    const { id } = await create.json<{ id: string }>();
+    const token = await workerToken();
+    await SELF.fetch(`https://example.com/api/content/jobs/${id}/video`, { method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "video/mp4" }, body: new Uint8Array([7, 8, 9]) });
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/video`, { headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([7, 8, 9]));
+  });
 });
 
 describe("POST /api/content/jobs — style_profile_id 소유권", () => {
