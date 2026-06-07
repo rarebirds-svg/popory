@@ -5,9 +5,10 @@ import time
 from pathlib import Path
 
 from popory_content.generate import generate, GenerateError
+from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
 from popory_content.video import make_video, VideoError
 from popory_content.youtube_upload import upload
-from popory_content.options import parse_options, SCENE_COUNT, VOICE, STYLE
+from popory_content.options import parse_options, parse_shorts_options, SCENE_COUNT, SHORT_SCENE_COUNT, VOICE, STYLE
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log
@@ -38,6 +39,21 @@ def run_once(client) -> bool:
                 scene_count=SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
+            )
+            client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
+            script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
+            _report(client, job_id, {"status": "review", "draft": script, "meta": meta}, "review")
+        elif platform == "shorts":
+            opts = parse_shorts_options(job.get("params_json"))
+            mp4, scenes, meta = make_video(
+                topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
+                image_fetcher=lambda p: _safe_image(client, p),
+                scene_count=SHORT_SCENE_COUNT[opts["length"]],
+                image_style_kw=STYLE[opts["image_style"]],
+                voice=VOICE[opts["voice"]],
+                portrait=True,
+                system_prompt_builder=build_shorts_system_prompt,
+                user_msg_builder=build_shorts_user_message,
             )
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)

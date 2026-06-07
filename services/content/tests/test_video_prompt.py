@@ -22,3 +22,19 @@ def test_user_message_has_topic():
     um = build_video_user_message("사피엔스 요약", [])
     assert "사피엔스 요약" in um
     assert "scenes_json" in um
+
+
+from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
+
+
+def test_build_shorts_system_prompt_includes_shorts_rules():
+    sp = build_shorts_system_prompt([], scene_count=5, image_style_kw="photorealistic")
+    assert "쇼츠" in sp or "Shorts" in sp
+    assert "5" in sp
+    assert "세로형" in sp or "60초" in sp
+
+
+def test_build_shorts_user_message_includes_topic():
+    msg = build_shorts_user_message("전세사기 예방", [])
+    assert "전세사기 예방" in msg
+    assert "scenes_json" in msg

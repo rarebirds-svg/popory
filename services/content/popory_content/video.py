@@ -33,9 +33,12 @@ class VideoError(Exception):
 
 def generate_scenes(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
                     job_id: str = "adhoc", scene_count: int = 8,
-                    image_style_kw: str = "photorealistic, cinematic") -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    sp = build_video_system_prompt(style_samples, scene_count=scene_count, image_style_kw=image_style_kw)
-    um = build_video_user_message(topic, sources)
+                    image_style_kw: str = "photorealistic, cinematic",
+                    system_prompt_builder=None, user_msg_builder=None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    sp_builder = system_prompt_builder or build_video_system_prompt
+    um_builder = user_msg_builder or build_video_user_message
+    sp = sp_builder(style_samples, scene_count=scene_count, image_style_kw=image_style_kw)
+    um = um_builder(topic, sources)
     return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_video, job_id=job_id)
 
 
@@ -148,8 +151,10 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
                job_id: str = "adhoc", image_fetcher: Any = None, scene_count: int = 8,
                image_style_kw: str = "photorealistic, cinematic",
                voice: str = "ko-KR-Neural2-A",
-               portrait: bool = False) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+               portrait: bool = False,
+               system_prompt_builder=None, user_msg_builder=None) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
     scenes, meta = generate_scenes(topic=topic, sources=sources, style_samples=style_samples,
-                                   job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw)
+                                   job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw,
+                                   system_prompt_builder=system_prompt_builder, user_msg_builder=user_msg_builder)
     mp4 = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice, portrait=portrait)
     return mp4, scenes, meta
