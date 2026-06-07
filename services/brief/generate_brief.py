@@ -18,6 +18,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from popory_brief.categories import load_category
@@ -72,24 +73,44 @@ def main() -> None:
         "--output-format", "text",
     ]
 
+    # Claude Max 사용량 한도(5시간 윈도우)는 stdout에 메시지를 남기고 exit 1로 끝난다.
+    # 일시적 throttle는 백오프 재시도로 흡수하고, 그 외 에러는 즉시 실패한다.
+    LIMIT_MARKERS = ("usage limit", "rate limit", "limit reached", "resets at", "too many requests")
+    BACKOFF_SECONDS = [60, 180]  # 1차 실패 후 대기 초. 길이 = 추가 재시도 횟수
+
+    attempt = 0
     try:
-        result = subprocess.run(
-            cmd,
-            input=user_msg,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
-        sys.exit(5)
+        while True:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    input=user_msg,
+                    capture_output=True,
+                    text=True,
+                    timeout=TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
+                sys.exit(5)
+
+            if result.returncode == 0:
+                break
+
+            combined = (result.stdout + result.stderr).lower()
+            is_limit = any(m in combined for m in LIMIT_MARKERS)
+            print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit})", file=sys.stderr)
+            print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
+            print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
+
+            if is_limit and attempt < len(BACKOFF_SECONDS):
+                wait = BACKOFF_SECONDS[attempt]
+                print(f"--- usage limit 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
+                time.sleep(wait)
+                attempt += 1
+                continue
+            sys.exit(5)
     finally:
         sys_prompt_path.unlink(missing_ok=True)
-
-    if result.returncode != 0:
-        print(f"error: claude CLI exit {result.returncode}", file=sys.stderr)
-        print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
-        sys.exit(5)
 
     final_text = result.stdout
 
