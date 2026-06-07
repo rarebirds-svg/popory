@@ -95,22 +95,22 @@ export function FeedList({ initialItems, activeCat, categoryNames }: FeedListPro
                 className="flex gap-4 border-b border-popory-border py-4 transition hover:bg-popory-accent-soft/40"
               >
                 <div className="w-10 shrink-0 text-center">
-                  <div className="font-serif text-xl font-semibold leading-none text-popory-fg">
+                  <div className="font-serif text-[22px] font-semibold leading-none text-popory-fg">
                     {dayOf(it.published_at)}
                   </div>
-                  <div className="mt-0.5 text-[9px] uppercase tracking-widest text-popory-muted">
+                  <div className="mt-0.5 text-[10px] uppercase tracking-widest text-popory-muted">
                     {monthOf(it.published_at)}
                   </div>
                 </div>
                 <div className="flex-1">
-                  <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.bg} ${badge.text}`}>
+                  <span className={`inline-block rounded px-1.5 py-0.5 text-[11px] font-bold ${badge.bg} ${badge.text}`}>
                     {name}
                   </span>
-                  <h2 className="mt-1.5 text-[15px] font-bold leading-snug text-popory-fg">
+                  <h2 className="mt-1.5 text-[17px] font-bold leading-snug text-popory-fg">
                     {it.title}
                   </h2>
                   {it.summary && (
-                    <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-popory-muted">
+                    <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-popory-muted">
                       {it.summary}
                     </p>
                   )}
