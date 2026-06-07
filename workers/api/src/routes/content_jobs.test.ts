@@ -298,3 +298,65 @@ describe("POST /api/content/jobs — style_profile_id 소유권", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("PUT /api/content/jobs/:id/carousel (service)", () => {
+  it("base64 이미지 배열을 R2에 저장하고 GET으로 확인", async () => {
+    const ck = await userCookie();
+    const svcToken = await workerToken();
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id,owner_sub,topic,platform,status,created_at,updated_at) VALUES (?,?,'t','instagram-image','running',?,?)"
+    ).bind("jig1", "u1", now, now).run();
+    const images = [btoa("fake-jpeg-1"), btoa("fake-jpeg-2")];
+    const put = await SELF.fetch("https://example.com/api/content/jobs/jig1/carousel", {
+      method: "PUT",
+      headers: { authorization: `Bearer ${svcToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ images }),
+    });
+    expect(put.status).toBe(200);
+    const { count } = await put.json<{ ok: boolean; count: number }>();
+    expect(count).toBe(2);
+    // GET 엔드포인트로 저장 확인
+    const get0 = await SELF.fetch("https://example.com/api/content/jobs/jig1/carousel/0", {
+      headers: { cookie: ck },
+    });
+    expect(get0.status).toBe(200);
+    await get0.arrayBuffer();
+    const get1 = await SELF.fetch("https://example.com/api/content/jobs/jig1/carousel/1", {
+      headers: { cookie: ck },
+    });
+    expect(get1.status).toBe(200);
+    await get1.arrayBuffer();
+  });
+});
+
+describe("GET /api/content/jobs/:id/carousel/:n (user)", () => {
+  it("슬라이드 이미지를 스트리밍한다", async () => {
+    const ck = await userCookie();
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id,owner_sub,topic,platform,status,created_at,updated_at) VALUES (?,?,'t','instagram-image','review',?,?)"
+    ).bind("jig2", "u1", now, now).run();
+    await env.R2.put("content/carousel/jig2/0.jpg", new Uint8Array([0xff, 0xd8, 0x01]), {
+      httpMetadata: { contentType: "image/jpeg" },
+    });
+    const res = await SELF.fetch("https://example.com/api/content/jobs/jig2/carousel/0", {
+      headers: { cookie: ck },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
+    await res.arrayBuffer(); // body 스트림 소비
+  });
+
+  it("존재하지 않는 슬라이드는 404", async () => {
+    const ck = await userCookie();
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id,owner_sub,topic,platform,status,created_at,updated_at) VALUES (?,?,'t','instagram-image','review',?,?)"
+    ).bind("jig3", "u1", now, now).run();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/jig3/carousel/0", {
+      headers: { cookie: ck },
+    });
+    expect(res.status).toBe(404);
+  });
+});

@@ -12,9 +12,20 @@ from popory_content.options import parse_options, parse_shorts_options, SCENE_CO
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log
+from popory_content.instagram_image_prompt import build_carousel_system_prompt, build_carousel_user_message
+from popory_content.instagram_image_contract import parse_carousel
+from popory_content.instagram_image_render import render_carousel
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
+
+
+def _generate_carousel(*, topic: str, sources: list, style_samples: list, job_id: str, slide_count: int):
+    """Claude CLI로 캐러셀 슬라이드 배열 생성."""
+    from popory_content.generate import run_claude_cli
+    sp = build_carousel_system_prompt(style_samples, slide_count=slide_count)
+    um = build_carousel_user_message(topic, sources)
+    return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_carousel, job_id=job_id)
 POLL_INTERVAL_SECONDS = 20
 # 서비스 JWT 수명. 60초는 시계 오차·느린 요청에 취약(일시 401 관측) → 여유 상향.
 TOKEN_TTL_SECONDS = 300
@@ -58,6 +69,26 @@ def run_once(client) -> bool:
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
             _report(client, job_id, {"status": "review", "draft": script, "meta": meta}, "review")
+        elif platform == "instagram-image":
+            import json as _json
+            params: dict = {}
+            if job.get("params_json"):
+                try:
+                    params = _json.loads(job["params_json"])
+                except Exception:
+                    params = {}
+            slide_count = int(params.get("slide_count", 7))
+            slide_count = max(3, min(10, slide_count))
+            slides, meta = _generate_carousel(
+                topic=job["topic"], sources=sources, style_samples=samples,
+                job_id=job_id, slide_count=slide_count,
+            )
+            images = render_carousel(
+                slides, image_fetcher=lambda p: _safe_image(client, p)
+            )
+            client.put_carousel(job_id, images)
+            caption = meta.get("caption", "")
+            _report(client, job_id, {"status": "review", "draft": caption, "meta": meta}, "review")
         else:
             draft, meta = generate(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
             _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")

@@ -63,6 +63,12 @@ class PortalClient:
             raise PortalError(f"ai-image {resp.status_code}: {resp.text[:200]}", exit_code=4)
         return resp.content
 
+    def put_carousel(self, job_id: str, images: list[bytes]) -> Any:
+        """JPEG bytes 리스트를 base64 인코딩해 carousel API에 업로드."""
+        import base64
+        b64_images = [base64.b64encode(img).decode() for img in images]
+        return self._call("PUT", f"/api/content/jobs/{job_id}/carousel", body={"images": b64_images})
+
     def get_bytes(self, path: str) -> bytes:
         url = f"{self.base_url}{path}"
         headers = {"Authorization": f"Bearer {self.token_provider()}"}

@@ -199,4 +199,34 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     if (!obj) return c.text("not found", 404);
     return new Response(obj.body, { headers: { "content-type": "video/mp4" } });
   });
+
+  app.put("/api/content/jobs/:id/carousel", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const id = c.req.param("id");
+    const row = await c.env.DB.prepare("SELECT id FROM content_jobs WHERE id=?").bind(id).first<{ id: string }>();
+    if (!row) return c.text("not found", 404);
+    const body = (await c.req.json()) as { images: string[] };
+    if (!Array.isArray(body.images) || body.images.length === 0) return c.text("images required", 400);
+    for (let n = 0; n < body.images.length; n++) {
+      const bytes = Uint8Array.from(atob(body.images[n]), (ch) => ch.charCodeAt(0));
+      await c.env.R2.put(`content/carousel/${id}/${n}.jpg`, bytes, {
+        httpMetadata: { contentType: "image/jpeg" },
+      });
+    }
+    return c.json({ ok: true, count: body.images.length });
+  });
+
+  app.get("/api/content/jobs/:id/carousel/:n", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const id = c.req.param("id");
+    const n = c.req.param("n");
+    const row = await c.env.DB.prepare("SELECT owner_sub FROM content_jobs WHERE id=?")
+      .bind(id).first<{ owner_sub: string }>();
+    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    const obj = await c.env.R2.get(`content/carousel/${id}/${n}.jpg`);
+    if (!obj) return c.text("not found", 404);
+    return new Response(obj.body, { headers: { "content-type": "image/jpeg" } });
+  });
 }
