@@ -66,7 +66,7 @@ export default async function BriefFeedPage({
       </p>
       <div className="mt-6">
         <FilterChips categories={cats} activeCat={activeCat} />
-        <FeedList initialItems={items} activeCat={activeCat} categoryNames={categoryNames} />
+        <FeedList key={activeCat} initialItems={items} activeCat={activeCat} categoryNames={categoryNames} />
       </div>
     </main>
   );
