@@ -8,6 +8,7 @@ import { DraftEditor } from "./DraftEditor";
 import { AutoRefresh } from "./AutoRefresh";
 import { RetryButton } from "./RetryButton";
 import { YoutubeUpload } from "./YoutubeUpload";
+import { CarouselPreview } from "./CarouselPreview";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -99,7 +100,20 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
           </div>
         )}
 
-        {(job.status === "review" || job.status === "done") && job.platform !== "youtube" && job.platform !== "shorts" && (
+        {(job.status === "review" || job.status === "done") && job.platform === "instagram-image" && (() => {
+          let slideCount = 7;
+          try {
+            const p = JSON.parse(job.params_json ?? "{}") as { slide_count?: number };
+            if (p.slide_count) slideCount = p.slide_count;
+          } catch { /* 기본값 사용 */ }
+          return (
+            <div className="mt-8">
+              <CarouselPreview jobId={job.id} slideCount={slideCount} caption={job.draft ?? ""} />
+            </div>
+          );
+        })()}
+
+        {(job.status === "review" || job.status === "done") && job.platform !== "youtube" && job.platform !== "shorts" && job.platform !== "instagram-image" && (
           <DraftEditor
             jobId={job.id}
             initialDraft={job.draft ?? ""}
