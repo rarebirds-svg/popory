@@ -1,5 +1,5 @@
 #!/bin/bash
-# 매일 KST 09:00 launchd가 호출하는 entry script. 활성 카테고리 전부 generate·publish·발송.
+# 매일 KST 08:00 launchd가 호출하는 entry script. 활성 카테고리 전부 generate·publish·발송.
 
 set -u  # 미정의 변수 사용 시 즉시 실패. set -e는 안 씀 — 각 단계 결과를 개별 분기.
 
@@ -18,6 +18,14 @@ mkdir -p "${BRIEF_DIR}/logs"
 log() {
   echo "{\"ts\":\"$(TZ=Asia/Seoul date +%Y-%m-%dT%H:%M:%S+09:00)\",\"cli\":\"run_daily\",\"msg\":$1}" >> "${LOG_FILE}"
 }
+
+# 08:00 기동 후 0~120분 랜덤 대기 → 실제 generate 시작이 08:00~10:00 사이에 분산됨
+# dry-run 시에는 대기 없이 즉시 실행
+if [ ${DRY_RUN} -eq 0 ]; then
+  JITTER=$((RANDOM % 7201))
+  log "\"jitter_sleep=${JITTER}s\""
+  sleep ${JITTER}
+fi
 
 log "\"start dry_run=${DRY_RUN}\""
 
