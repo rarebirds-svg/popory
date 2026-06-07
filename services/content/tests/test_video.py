@@ -17,10 +17,16 @@ def test_render_card_with_and_without_bg(tmp_path):
     bg = buf.getvalue()
     p1 = tmp_path / "with_bg.png"
     p2 = tmp_path / "no_bg.png"
-    _render_card("짧은 캡션", p1, bg_image_bytes=bg)
-    _render_card("짧은 캡션", p2, bg_image_bytes=None)
+    _render_card("챕터 제목", "지금 읽는 문장입니다.", p1, bg_image_bytes=bg)
+    _render_card("챕터 제목", "지금 읽는 문장입니다.", p2, bg_image_bytes=None)
     assert p1.exists() and p1.stat().st_size > 1000
     assert p2.exists() and p2.stat().st_size > 1000
+
+
+def test_split_sentences():
+    from popory_content.video import _split_sentences
+    out = _split_sentences("첫째 문장입니다. 둘째 문장이에요! 셋째는요?")
+    assert out == ["첫째 문장입니다.", "둘째 문장이에요!", "셋째는요?"]
 
 
 @pytest.mark.skipif(not _HAS_TOOLS, reason="ffmpeg/say/폰트 없음 (CI 등)")
