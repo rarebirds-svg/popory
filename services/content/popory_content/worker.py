@@ -15,6 +15,7 @@ from popory_content.log import append_log
 from popory_content.instagram_image_prompt import build_carousel_system_prompt, build_carousel_user_message
 from popory_content.instagram_image_contract import parse_carousel
 from popory_content.instagram_image_render import render_carousel
+from popory_content.instagram_upload import upload_reels, upload_carousel, InstagramUploadError
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
@@ -114,6 +115,12 @@ def _safe_image(client, prompt: str):
         return None
 
 
+def _issue_media_token(client, r2_key: str) -> str:
+    """R2 키에 대한 임시 공개 URL 발급."""
+    data = client.post("/api/content/media-token", json={"r2_key": r2_key})
+    return data["url"]
+
+
 def _build_client() -> PortalClient:
     key_file = os.environ.get("POPORY_CONTENT_KEY_FILE")
     base = os.environ.get("POPORY_PORTAL_API_BASE")
@@ -150,6 +157,40 @@ def run_upload_once(client) -> bool:
     return True
 
 
+def run_instagram_upload_once(client) -> bool:
+    """Instagram 업로드 요청 1건 처리. 처리했으면 True."""
+    data = client.post("/api/content/instagram/claim-upload", json=None)
+    if not data:
+        return False
+    job_id = data["job_id"]
+    platform = data["platform"]
+    ig_user_id = data["ig_user_id"]
+    access_token = data["access_token"]
+    caption = data.get("caption", "")
+    try:
+        if platform == "shorts":
+            video_url = _issue_media_token(client, f"content/video/{job_id}.mp4")
+            media_id = upload_reels(ig_user_id, access_token, video_url, caption)
+        elif platform == "instagram-image":
+            slide_count = int(data.get("slide_count", 7))
+            image_urls = [
+                _issue_media_token(client, f"content/carousel/{job_id}/{n}.jpg")
+                for n in range(slide_count)
+            ]
+            media_id = upload_carousel(ig_user_id, access_token, image_urls, caption)
+        else:
+            raise InstagramUploadError(f"지원하지 않는 플랫폼: {platform}")
+        client.patch(f"/api/content/jobs/{job_id}/instagram-result", json={"status": "done", "media_id": media_id})
+        append_log(LOGS_DIR, {"worker": "content", "status": "ig_uploaded", "job": job_id, "media": media_id})
+    except Exception as e:  # noqa: BLE001
+        try:
+            client.patch(f"/api/content/jobs/{job_id}/instagram-result", json={"status": "failed", "error": str(e)[:500]})
+        except Exception:  # noqa: BLE001
+            pass
+        append_log(LOGS_DIR, {"worker": "content", "status": "ig_upload_failed", "job": job_id, "error": str(e)[:300]})
+    return True
+
+
 def main() -> None:
     client = _build_client()
     append_log(LOGS_DIR, {"worker": "content", "status": "start"})
@@ -158,6 +199,8 @@ def main() -> None:
             processed = run_once(client)
             if not processed:
                 processed = run_upload_once(client)
+            if not processed:
+                processed = run_instagram_upload_once(client)
         except PortalError as e:
             append_log(LOGS_DIR, {"worker": "content", "status": "portal_error", "error": str(e)[:300]})
             processed = False
