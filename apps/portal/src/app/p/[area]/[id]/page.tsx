@@ -17,17 +17,15 @@ export default async function ItemPage({ params }: { params: Promise<{ area: str
       <div className="mt-4">
         <Kicker>{categoryLabel}</Kicker>
       </div>
-      <h1 className="mt-3 font-serif text-[22px] font-semibold leading-tight tracking-tight text-popory-fg">
+      <h1 className="mt-3 font-serif text-[24px] font-semibold leading-tight tracking-tight text-popory-fg">
         {item.title}
       </h1>
-      {item.summary && <p className="mt-3 text-[13px] leading-relaxed text-popory-fg2">{item.summary}</p>}
-      <div className="mt-3 flex items-center gap-2 border-b border-popory-border pb-5 text-[11px] text-popory-muted">
+      {item.summary && <p className="mt-3 text-[14px] leading-relaxed text-popory-fg2">{item.summary}</p>}
+      <div className="mt-3 flex items-center gap-2 border-b border-popory-border pb-5 text-[12px] text-popory-muted">
         <span>popory 브리핑</span>
       </div>
-      <article className="prose prose-sm prose-popory mt-6 max-w-none [&]:text-[0.79rem]">
-        <div style={{ fontSize: '0.9em' }}>
-          <MarkdownBody>{item.body}</MarkdownBody>
-        </div>
+      <article className="prose prose-sm prose-popory mt-6 max-w-none">
+        <MarkdownBody>{item.body}</MarkdownBody>
       </article>
     </main>
   );
