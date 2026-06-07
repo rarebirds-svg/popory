@@ -54,7 +54,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const u = c.get("user")!;
     const { results } = await c.env.DB.prepare(
       `SELECT id, topic, platform, status, created_at, updated_at FROM content_jobs
-       WHERE owner_sub=? ORDER BY created_at DESC LIMIT 100`,
+       WHERE owner_sub=? AND topic_id IS NULL ORDER BY created_at DESC LIMIT 100`,
     ).bind(u.sub).all();
     return c.json({ jobs: results });
   });
@@ -102,6 +102,19 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     if (row.status !== "failed") return c.text("not retryable", 409);
     const now = Math.floor(Date.now() / 1000);
     await c.env.DB.prepare("UPDATE content_jobs SET status='queued', error=NULL, updated_at=? WHERE id=?")
+      .bind(now, row.id).run();
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/content/jobs/:id/start", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const row = await c.env.DB.prepare("SELECT id, owner_sub, status FROM content_jobs WHERE id=?")
+      .bind(c.req.param("id")).first<{ id: string; owner_sub: string; status: string }>();
+    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    if (row.status !== "idle") return c.text("not idle", 409);
+    const now = Math.floor(Date.now() / 1000);
+    await c.env.DB.prepare("UPDATE content_jobs SET status='queued', updated_at=? WHERE id=?")
       .bind(now, row.id).run();
     return c.json({ ok: true });
   });

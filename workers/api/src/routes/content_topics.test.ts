@@ -1,0 +1,140 @@
+// 주제 그룹 생성·조회·작업 시작(start) API 테스트.
+import { env, SELF } from "cloudflare:test";
+import { describe, it, expect, beforeEach } from "vitest";
+import { ensureActiveKey } from "../db/signing_keys";
+import { signSession } from "@popory/auth";
+
+declare module "cloudflare:test" {
+  interface ProvidedEnv extends Env {}
+}
+import type { Env } from "../types";
+
+async function userCookie(sub = "u1", email = "u1@e.com") {
+  await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES (?,?,'member',1)").bind(sub, email).run();
+  const k = await ensureActiveKey(env.DB);
+  const t = await signSession({ privateJwk: k.privateJwk, kid: k.kid, claims: { sub, email, role: "member" } });
+  return `popory_session=${t}`;
+}
+
+beforeEach(async () => {
+  await env.DB.exec("DELETE FROM content_sources");
+  await env.DB.exec("DELETE FROM content_jobs");
+  await env.DB.exec("DELETE FROM content_topics");
+});
+
+describe("POST /api/content/topics", () => {
+  it("주제와 플랫폼별 idle 작업을 생성한다", async () => {
+    const ck = await userCookie();
+    const res = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST",
+      headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({
+        topic: "전세사기 예방",
+        platforms: [
+          { platform: "naver-blog" },
+          { platform: "youtube", options: { length: "5", voice: "female-calm", image_style: "photo" } },
+        ],
+      }),
+    });
+    expect(res.status).toBe(201);
+    const { topic_id, job_ids } = await res.json<{ topic_id: string; job_ids: string[] }>();
+    expect(job_ids).toHaveLength(2);
+    const topic = await env.DB.prepare("SELECT topic FROM content_topics WHERE id=?").bind(topic_id).first<{ topic: string }>();
+    expect(topic?.topic).toBe("전세사기 예방");
+    const jobs = await env.DB.prepare("SELECT platform, status FROM content_jobs WHERE topic_id=? ORDER BY created_at").bind(topic_id).all<{ platform: string; status: string }>();
+    expect(jobs.results.map((j) => j.platform)).toEqual(["naver-blog", "youtube"]);
+    expect(jobs.results.every((j) => j.status === "idle")).toBe(true);
+  });
+
+  it("미인증 요청 401", async () => {
+    const res = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platforms: [{ platform: "naver-blog" }] }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("platforms 빈 배열은 400", async () => {
+    const ck = await userCookie();
+    const res = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platforms: [] }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/content/topics", () => {
+  it("내 주제 목록을 작업 상태와 함께 반환한다", async () => {
+    const ck = await userCookie();
+    await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t1", platforms: [{ platform: "naver-blog" }] }),
+    });
+    const res = await SELF.fetch("https://example.com/api/content/topics", { headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const { topics } = await res.json<{ topics: unknown[] }>();
+    expect(topics).toHaveLength(1);
+  });
+});
+
+describe("GET /api/content/topics/:id", () => {
+  it("주제와 하위 작업 전체를 반환한다", async () => {
+    const ck = await userCookie();
+    const cr = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t1", platforms: [{ platform: "naver-blog" }, { platform: "youtube" }] }),
+    });
+    const { topic_id } = await cr.json<{ topic_id: string; job_ids: string[] }>();
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topic_id}`, { headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const body = await res.json<{ id: string; topic: string; jobs: unknown[] }>();
+    expect(body.topic).toBe("t1");
+    expect(body.jobs).toHaveLength(2);
+  });
+
+  it("타인 주제는 404", async () => {
+    const ck1 = await userCookie("u1", "u1@e.com");
+    const cr = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck1, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t1", platforms: [{ platform: "naver-blog" }] }),
+    });
+    const { topic_id } = await cr.json<{ topic_id: string; job_ids: string[] }>();
+    const ck2 = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topic_id}`, { headers: { cookie: ck2 } });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/content/jobs/:id/start", () => {
+  it("idle 작업을 queued로 전환한다", async () => {
+    const ck = await userCookie();
+    const cr = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platforms: [{ platform: "naver-blog" }] }),
+    });
+    const { job_ids } = await cr.json<{ topic_id: string; job_ids: string[] }>();
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${job_ids[0]}/start`, {
+      method: "POST", headers: { cookie: ck },
+    });
+    expect(res.status).toBe(200);
+    const job = await env.DB.prepare("SELECT status FROM content_jobs WHERE id=?").bind(job_ids[0]).first<{ status: string }>();
+    expect(job?.status).toBe("queued");
+  });
+
+  it("이미 queued 이상이면 409", async () => {
+    const ck = await userCookie();
+    const cr = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platforms: [{ platform: "naver-blog" }] }),
+    });
+    const { job_ids } = await cr.json<{ topic_id: string; job_ids: string[] }>();
+    await SELF.fetch(`https://example.com/api/content/jobs/${job_ids[0]}/start`, {
+      method: "POST", headers: { cookie: ck },
+    });
+    const res2 = await SELF.fetch(`https://example.com/api/content/jobs/${job_ids[0]}/start`, {
+      method: "POST", headers: { cookie: ck },
+    });
+    expect(res2.status).toBe(409);
+  });
+});

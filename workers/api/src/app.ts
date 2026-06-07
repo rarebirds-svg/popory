@@ -14,6 +14,7 @@ import { mountAdminBriefCategories } from "./routes/admin_brief_categories";
 import { mountJwks } from "./routes/jwks";
 import { mountGo } from "./routes/go";
 import { mountPublished } from "./routes/published";
+import { mountContentTopics } from "./routes/content_topics";
 import { mountContentJobs } from "./routes/content_jobs";
 import { mountContentStyleProfiles } from "./routes/content_style_profiles";
 import { mountContentAiImage } from "./routes/content_ai_image";
@@ -42,6 +43,7 @@ export function createApp() {
   mountJwks(app);
   mountGo(app);
   mountPublished(app);
+  mountContentTopics(app);
   mountContentJobs(app);
   mountContentStyleProfiles(app);
   mountContentAiImage(app);
