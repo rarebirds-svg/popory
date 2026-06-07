@@ -83,8 +83,7 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
               <summary className="cursor-pointer text-xs text-popory-accent">대본 보기</summary>
               <pre className="mt-2 whitespace-pre-wrap rounded-md border border-popory-border bg-popory-card p-3 text-xs text-popory-fg">{job.draft}</pre>
             </details>
-            <YoutubeUpload jobId={job.id} connected={ytConnected} status={job.youtube_status} videoId={job.youtube_video_id} error={job.youtube_error} />
-            {(job.youtube_status === "requested" || job.youtube_status === "uploading") && <AutoRefresh since={job.created_at} />}
+            <YoutubeUpload jobId={job.id} connected={ytConnected} initialStatus={job.youtube_status} initialVideoId={job.youtube_video_id} initialError={job.youtube_error} />
           </div>
         )}
 
