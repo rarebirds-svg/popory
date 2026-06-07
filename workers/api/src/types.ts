@@ -12,4 +12,7 @@ export interface Env {
   BRIEF_CATEGORIES_GITHUB_TOKEN: string;
   AI: { run(model: string, inputs: { prompt: string }): Promise<{ image?: string }> };
   YOUTUBE_TOKEN_KEY: string;
+  INSTAGRAM_CLIENT_ID: string;
+  INSTAGRAM_CLIENT_SECRET: string;
+  INSTAGRAM_TOKEN_KEY: string;
 }
