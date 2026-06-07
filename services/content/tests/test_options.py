@@ -25,3 +25,29 @@ def test_maps_cover_keys():
     assert set(SCENE_COUNT) == {"3", "5", "7", "10"}
     assert VOICE["male"].startswith("ko-KR")
     assert "watercolor" in STYLE["watercolor"]
+
+
+from popory_content.options import parse_shorts_options, SHORT_SCENE_COUNT
+
+
+def test_parse_shorts_options_defaults():
+    opts = parse_shorts_options(None)
+    assert opts["length"] == "30"
+    assert opts["voice"] == "female-calm"
+    assert opts["image_style"] == "photo"
+    assert opts["upload_targets"] == []
+
+
+def test_parse_shorts_options_all_fields():
+    import json
+    params = json.dumps({"length": "60", "voice": "male", "image_style": "illust", "upload_targets": ["youtube", "instagram"]})
+    opts = parse_shorts_options(params)
+    assert opts["length"] == "60"
+    assert opts["upload_targets"] == ["youtube", "instagram"]
+
+
+def test_short_scene_count_keys():
+    assert set(SHORT_SCENE_COUNT.keys()) == {"15", "30", "60"}
+    assert SHORT_SCENE_COUNT["15"] == 3
+    assert SHORT_SCENE_COUNT["30"] == 5
+    assert SHORT_SCENE_COUNT["60"] == 8

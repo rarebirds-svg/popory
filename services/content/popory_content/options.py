@@ -2,6 +2,7 @@
 import json
 
 SCENE_COUNT = {"3": 5, "5": 8, "7": 12, "10": 16}
+SHORT_SCENE_COUNT = {"15": 3, "30": 5, "60": 8}
 VOICE = {"female-calm": "ko-KR-Neural2-A", "female-bright": "ko-KR-Neural2-B", "male": "ko-KR-Neural2-C"}
 STYLE = {
     "photo": "photorealistic, cinematic",
@@ -10,6 +11,7 @@ STYLE = {
     "minimal": "minimalist flat design",
 }
 DEFAULTS = {"length": "5", "voice": "female-calm", "image_style": "photo"}
+SHORTS_DEFAULTS = {"length": "30", "voice": "female-calm", "image_style": "photo", "upload_targets": []}
 
 
 def parse_options(params_json: str | None) -> dict:
@@ -27,4 +29,26 @@ def parse_options(params_json: str | None) -> dict:
             opts["voice"] = data["voice"]
         if data.get("image_style") in STYLE:
             opts["image_style"] = data["image_style"]
+    return opts
+
+
+def parse_shorts_options(params_json: str | None) -> dict:
+    opts = dict(SHORTS_DEFAULTS)
+    opts["upload_targets"] = []
+    if not params_json:
+        return opts
+    try:
+        data = json.loads(params_json)
+    except (json.JSONDecodeError, TypeError):
+        return opts
+    if isinstance(data, dict):
+        if data.get("length") in SHORT_SCENE_COUNT:
+            opts["length"] = data["length"]
+        if data.get("voice") in VOICE:
+            opts["voice"] = data["voice"]
+        if data.get("image_style") in STYLE:
+            opts["image_style"] = data["image_style"]
+        targets = data.get("upload_targets", [])
+        if isinstance(targets, list):
+            opts["upload_targets"] = [t for t in targets if t in ("youtube", "instagram")]
     return opts

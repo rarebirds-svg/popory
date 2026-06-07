@@ -29,6 +29,26 @@ def test_split_sentences():
     assert out == ["첫째 문장입니다.", "둘째 문장이에요!", "셋째는요?"]
 
 
+def test_render_card_portrait_creates_correct_size(tmp_path):
+    """portrait=True 시 1080×1920 PNG가 생성된다."""
+    from popory_content.video import _render_card
+    from PIL import Image
+    out = tmp_path / "card.png"
+    _render_card("제목", "자막 테스트 문장입니다.", out, portrait=True)
+    img = Image.open(out)
+    assert img.size == (1080, 1920)
+
+
+def test_render_card_landscape_creates_correct_size(tmp_path):
+    """기본(portrait=False)은 1920×1080을 유지한다."""
+    from popory_content.video import _render_card
+    from PIL import Image
+    out = tmp_path / "card.png"
+    _render_card("제목", "자막", out)
+    img = Image.open(out)
+    assert img.size == (1920, 1080)
+
+
 @pytest.mark.skipif(not _HAS_TOOLS, reason="ffmpeg/say/폰트 없음 (CI 등)")
 def test_render_two_scenes_makes_mp4():
     scenes = [

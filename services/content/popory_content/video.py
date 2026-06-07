@@ -19,7 +19,8 @@ FFMPEG_BIN = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 FFPROBE_BIN = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
 SAY_VOICE = "Yuna"
 FONT_PATH = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
-WIDTH, HEIGHT = 1920, 1080
+LANDSCAPE_W, LANDSCAPE_H = 1920, 1080
+PORTRAIT_W, PORTRAIT_H = 1080, 1920
 BG = (11, 31, 58)
 HEAD_COLOR = (255, 255, 255)
 BODY_COLOR = (223, 231, 245)
@@ -63,31 +64,33 @@ def _cover(im: Image.Image, w: int, h: int) -> Image.Image:
     return im.crop((left, top, left + w, top + h))
 
 
-def _scrim_bottom(img: Image.Image) -> None:
+def _scrim_bottom(img: Image.Image, w: int = LANDSCAPE_W, h: int = LANDSCAPE_H) -> None:
     """하단 그라데이션 스크림(아래로 갈수록 어두움)으로 캡션 가독성 확보."""
-    grad_h = int(HEIGHT * 0.4)
+    grad_h = int(h * 0.4)
     grad = Image.new("L", (1, grad_h))
     for y in range(grad_h):
         grad.putpixel((0, y), int(190 * y / grad_h))
-    grad = grad.resize((WIDTH, grad_h))
-    black = Image.new("RGB", (WIDTH, grad_h), (0, 0, 0))
-    img.paste(black, (0, HEIGHT - grad_h), grad)
+    grad = grad.resize((w, grad_h))
+    black = Image.new("RGB", (w, grad_h), (0, 0, 0))
+    img.paste(black, (0, h - grad_h), grad)
 
 
-def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes | None = None) -> None:
+def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes | None = None, portrait: bool = False) -> None:
+    w = PORTRAIT_W if portrait else LANDSCAPE_W
+    h = PORTRAIT_H if portrait else LANDSCAPE_H
     if bg_image_bytes:
         bg = Image.open(BytesIO(bg_image_bytes)).convert("RGB")
-        img = _cover(bg, WIDTH, HEIGHT)
-        _scrim_bottom(img)
+        img = _cover(bg, w, h)
+        _scrim_bottom(img, w, h)
     else:
-        img = Image.new("RGB", (WIDTH, HEIGHT), BG)
+        img = Image.new("RGB", (w, h), BG)
     d = ImageDraw.Draw(img)
     title_font = ImageFont.truetype(FONT_PATH, 56)
     sub_font = ImageFont.truetype(FONT_PATH, 64)
     t = "\n".join(textwrap.wrap(title, width=22)) or " "
     d.multiline_text((80, 70), t, font=title_font, fill=HEAD_COLOR, anchor="la", align="left", spacing=10)
     s = "\n".join(textwrap.wrap(subtitle, width=30)) or " "
-    d.multiline_text((WIDTH / 2, HEIGHT - 240), s, font=sub_font, fill=(255, 255, 255), anchor="ma", align="center", spacing=14)
+    d.multiline_text((w / 2, h - 240), s, font=sub_font, fill=(255, 255, 255), anchor="ma", align="center", spacing=14)
     img.save(out_png)
 
 
@@ -97,7 +100,8 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
-                 image_fetcher: Any = None, voice: str = "ko-KR-Neural2-A") -> Path:
+                 image_fetcher: Any = None, voice: str = "ko-KR-Neural2-A",
+                 portrait: bool = False) -> Path:
     """장면→문장별 클립(같은 배경·제목, 하단 자막 교체)→concat MP4."""
     if not Path(FONT_PATH).exists():
         raise VideoError(f"한국어 폰트 없음: {FONT_PATH}")
@@ -124,7 +128,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                 _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), sent])
             dur = _duration(audio)
             png = work / f"{i}_{j}.png"
-            _render_card(caption, sent, png, bg_image_bytes=bg_bytes)
+            _render_card(caption, sent, png, bg_image_bytes=bg_bytes, portrait=portrait)
             clip = work / f"{i}_{j}.mp4"
             _run([
                 FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(audio),
@@ -143,8 +147,9 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
 def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
                job_id: str = "adhoc", image_fetcher: Any = None, scene_count: int = 8,
                image_style_kw: str = "photorealistic, cinematic",
-               voice: str = "ko-KR-Neural2-A") -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+               voice: str = "ko-KR-Neural2-A",
+               portrait: bool = False) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
     scenes, meta = generate_scenes(topic=topic, sources=sources, style_samples=style_samples,
                                    job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw)
-    mp4 = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice)
+    mp4 = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice, portrait=portrait)
     return mp4, scenes, meta
