@@ -84,7 +84,7 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
             self.put_bin.append((path, len(data), content_type))
             return {"ok": True}
 
-    client = VidClient({"job": {"id": "yt1", "topic": "t", "platform": "youtube"}, "sources": [], "style_samples": []})
+    client = VidClient({"job": {"id": "yt1", "topic": "t", "platform": "youtube", "params_json": '{"length":"7","voice":"male","image_style":"illust"}'}, "sources": [], "style_samples": []})
     assert worker.run_once(client) is True
     assert client.put_bin[0][0] == "/api/content/jobs/yt1/video"
     assert client.put_bin[0][2] == "video/mp4"
@@ -92,6 +92,9 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
     assert path == "/api/content/jobs/yt1/result"
     assert body["status"] == "review"
     assert callable(captured.get("image_fetcher"))
+    assert captured.get("scene_count") == 12
+    assert captured.get("voice") == "ko-KR-Neural2-C"
+    assert "illustration" in captured.get("image_style_kw")
 
 
 def test_safe_image_returns_none_on_error():
