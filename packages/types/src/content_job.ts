@@ -12,6 +12,11 @@ export const ContentJobCreateSchema = z.object({
   platform: z.enum(["naver-blog", "youtube"]).default("naver-blog"),
   style_profile_id: z.string().max(64).optional(),
   sources: z.array(ContentSourceInputSchema).max(20).optional(),
+  options: z.object({
+    length: z.enum(["3", "5", "7", "10"]).optional(),
+    voice: z.enum(["female-calm", "female-bright", "male"]).optional(),
+    image_style: z.enum(["photo", "illust", "watercolor", "minimal"]).optional(),
+  }).optional(),
 });
 export type ContentJobCreate = z.infer<typeof ContentJobCreateSchema>;
 

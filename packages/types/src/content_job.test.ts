@@ -20,6 +20,13 @@ describe("ContentJobCreateSchema", () => {
   it("알 수 없는 platform 거부", () => {
     expect(ContentJobCreateSchema.safeParse({ topic: "t", platform: "tiktok" }).success).toBe(false);
   });
+  it("options(길이·목소리·스타일) 허용", () => {
+    const v = ContentJobCreateSchema.parse({ topic: "t", platform: "youtube", options: { length: "7", voice: "male", image_style: "illust" } });
+    expect(v.options?.length).toBe("7");
+  });
+  it("잘못된 length 거부", () => {
+    expect(ContentJobCreateSchema.safeParse({ topic: "t", options: { length: "99" } }).success).toBe(false);
+  });
 });
 
 describe("ContentJobResultSchema", () => {
