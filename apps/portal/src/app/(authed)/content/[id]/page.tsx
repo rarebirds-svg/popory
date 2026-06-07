@@ -9,6 +9,7 @@ import { AutoRefresh } from "./AutoRefresh";
 import { RetryButton } from "./RetryButton";
 import { YoutubeUpload } from "./YoutubeUpload";
 import { CarouselPreview } from "./CarouselPreview";
+import { InstagramUpload } from "./InstagramUpload";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -26,6 +27,9 @@ interface JobDetail {
   youtube_status: string | null;
   youtube_video_id: string | null;
   youtube_error: string | null;
+  instagram_status: string | null;
+  instagram_media_id: string | null;
+  instagram_error: string | null;
   sources: Array<{ id: string; kind: string; url: string | null; title: string | null; note: string | null }>;
 }
 
@@ -48,6 +52,15 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
   if (job.platform === "youtube" || job.platform === "shorts") {
     const cs = await fetch(`${API_BASE}/api/content/youtube/status`, { headers: { cookie }, cache: "no-store" });
     if (cs.ok) ytConnected = ((await cs.json()) as { connected: boolean }).connected;
+  }
+
+  let igConnected = false;
+  if (job.platform === "shorts" || job.platform === "instagram-image") {
+    const cs = await fetch(`${API_BASE}/api/content/instagram/status`, {
+      headers: { cookie },
+      cache: "no-store",
+    });
+    if (cs.ok) igConnected = ((await cs.json()) as { connected: boolean }).connected;
   }
 
   let uploadTargets: string[] = [];
@@ -97,6 +110,16 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
             {showYtUpload && (
               <YoutubeUpload jobId={job.id} connected={ytConnected} initialStatus={job.youtube_status} initialVideoId={job.youtube_video_id} initialError={job.youtube_error} />
             )}
+            {job.platform === "shorts" && (uploadTargets.includes("instagram") || uploadTargets.length === 0) && (
+              <InstagramUpload
+                jobId={job.id}
+                platform={job.platform}
+                connected={igConnected}
+                initialStatus={job.instagram_status}
+                initialMediaId={job.instagram_media_id}
+                initialError={job.instagram_error}
+              />
+            )}
           </div>
         )}
 
@@ -107,8 +130,16 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
             if (p.slide_count) slideCount = p.slide_count;
           } catch { /* 기본값 사용 */ }
           return (
-            <div className="mt-8">
+            <div className="mt-8 space-y-4">
               <CarouselPreview jobId={job.id} slideCount={slideCount} caption={job.draft ?? ""} />
+              <InstagramUpload
+                jobId={job.id}
+                platform={job.platform}
+                connected={igConnected}
+                initialStatus={job.instagram_status}
+                initialMediaId={job.instagram_media_id}
+                initialError={job.instagram_error}
+              />
             </div>
           );
         })()}
