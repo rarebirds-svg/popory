@@ -18,6 +18,7 @@ import { mountContentJobs } from "./routes/content_jobs";
 import { mountContentStyleProfiles } from "./routes/content_style_profiles";
 import { mountContentAiImage } from "./routes/content_ai_image";
 import { mountContentYoutube } from "./routes/content_youtube";
+import { mountContentYoutubeUpload } from "./routes/content_youtube_upload";
 import { mountAreas } from "./routes/areas";
 import { mountAreasSubscribers } from "./routes/areas_subscribers";
 import type { ServiceVars } from "./middleware/service_auth";
@@ -45,6 +46,7 @@ export function createApp() {
   mountContentStyleProfiles(app);
   mountContentAiImage(app);
   mountContentYoutube(app);
+  mountContentYoutubeUpload(app);
   mountAreas(app);
   mountAreasSubscribers(app);
   return app;
