@@ -68,6 +68,24 @@ describe("POST /youtube-upload", () => {
   });
 });
 
+describe("shorts 플랫폼 youtube-upload", () => {
+  it("shorts 플랫폼도 youtube-upload 허용", async () => {
+    const ck = await userCookie("u_shorts", "u_shorts@e.com");
+    await env.DB.prepare("INSERT INTO youtube_connections (sub, channel_id, channel_title, refresh_token, connected_at) VALUES (?,?,?,?,?)")
+      .bind("u_shorts", "ch1", "채널", "enc_token", 1).run();
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id, owner_sub, topic, platform, status, created_at, updated_at) VALUES (?,?,?,'shorts','review',?,?)"
+    ).bind("j_shorts1", "u_shorts", "t", now, now).run();
+    await env.R2.put("content/video/j_shorts1.mp4", new Uint8Array([1, 2, 3]));
+    const res = await SELF.fetch("https://example.com/api/content/jobs/j_shorts1/youtube-upload", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ privacy: "private" }),
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("claim-upload / result 인증", () => {
   it("claim-upload 미서비스 401", async () => {
     const res = await SELF.fetch("https://example.com/api/content/youtube/claim-upload", { method: "POST" });

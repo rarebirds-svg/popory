@@ -15,7 +15,7 @@ export function mountContentYoutubeUpload(app: Hono<{ Bindings: Env; Variables: 
     const id = c.req.param("id");
     const job = await c.env.DB.prepare("SELECT id, owner_sub, platform FROM content_jobs WHERE id=?").bind(id).first<{ id: string; owner_sub: string; platform: string }>();
     if (!job || job.owner_sub !== u.sub) return c.text("not found", 404);
-    if (job.platform !== "youtube") return c.text("not a video", 400);
+    if (job.platform !== "youtube" && job.platform !== "shorts") return c.text("not a video", 400);
     const conn = await c.env.DB.prepare("SELECT sub FROM youtube_connections WHERE sub=?").bind(u.sub).first();
     if (!conn) return c.text("youtube not connected", 409);
     const vid = await c.env.R2.head(`content/video/${id}.mp4`);
