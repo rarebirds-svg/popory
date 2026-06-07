@@ -21,6 +21,7 @@ export function YoutubeUpload({ jobId, connected, initialStatus, initialVideoId,
   const [error, setError] = useState(initialError);
   const [elapsed, setElapsed] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [privacy, setPrivacy] = useState<"public" | "unlisted" | "private">("public");
 
   useEffect(() => {
     if (!inProgress(status)) return;
@@ -43,7 +44,7 @@ export function YoutubeUpload({ jobId, connected, initialStatus, initialVideoId,
   async function request() {
     setBusy(true);
     try {
-      const res = await fetch(`${API_BASE}/api/content/jobs/${jobId}/youtube-upload`, { method: "POST", credentials: "include" });
+      const res = await fetch(`${API_BASE}/api/content/jobs/${jobId}/youtube-upload`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ privacy }) });
       if (!res.ok) { alert(`업로드 요청 실패 ${res.status}`); return; }
       setError(null);
       setElapsed(0);
@@ -62,10 +63,15 @@ export function YoutubeUpload({ jobId, connected, initialStatus, initialVideoId,
   }
   if (status === "done" && videoId) {
     return (
-      <p className="text-sm text-popory-fg">
-        ✓ 업로드 완료(비공개) —{" "}
-        <a href={`https://youtu.be/${videoId}`} target="_blank" rel="noopener noreferrer" className="text-popory-accent">YouTube에서 보기</a>
-      </p>
+      <div className="space-y-1 text-sm text-popory-fg">
+        <p>
+          ✓ 업로드 완료 —{" "}
+          <a href={`https://youtu.be/${videoId}`} target="_blank" rel="noopener noreferrer" className="text-popory-accent">YouTube에서 보기</a>
+          {" · "}
+          <a href={`https://studio.youtube.com/video/${videoId}/edit`} target="_blank" rel="noopener noreferrer" className="text-popory-accent">공개로 전환</a>
+        </p>
+        <p className="text-xs text-popory-muted">앱 감사 전이라 현재 비공개입니다. "공개로 전환"에서 YouTube 공개로 바꿀 수 있습니다.</p>
+      </div>
     );
   }
   if (inProgress(status)) {
@@ -80,9 +86,17 @@ export function YoutubeUpload({ jobId, connected, initialStatus, initialVideoId,
   return (
     <div className="space-y-2">
       {status === "failed" && <p className="text-xs text-red-600">업로드 실패{error ? ` — ${error}` : ""}</p>}
-      <button onClick={request} disabled={busy} className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-        {busy ? "요청 중…" : "YouTube에 업로드(비공개)"}
-      </button>
+      <div className="flex items-center gap-2">
+        <select value={privacy} onChange={(e) => setPrivacy(e.target.value as typeof privacy)} className="rounded-md border border-popory-border bg-popory-card px-2 py-2 text-sm text-popory-fg">
+          <option value="public">공개</option>
+          <option value="unlisted">일부공개</option>
+          <option value="private">비공개</option>
+        </select>
+        <button onClick={request} disabled={busy} className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+          {busy ? "요청 중…" : "YouTube에 업로드"}
+        </button>
+      </div>
+      <p className="text-xs text-popory-muted">앱 감사 전이라 업로드 후엔 비공개로 올라갑니다. 공개는 완료 후 "공개로 전환"에서.</p>
     </div>
   );
 }
