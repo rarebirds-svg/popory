@@ -9,13 +9,15 @@ export const ContentSourceInputSchema = z.object({
 
 export const ContentJobCreateSchema = z.object({
   topic: z.string().min(1).max(200),
-  platform: z.enum(["naver-blog", "youtube"]).default("naver-blog"),
+  platform: z.enum(["naver-blog", "youtube", "shorts", "instagram-image"]).default("naver-blog"),
   style_profile_id: z.string().max(64).optional(),
   sources: z.array(ContentSourceInputSchema).max(20).optional(),
   options: z.object({
-    length: z.enum(["3", "5", "7", "10"]).optional(),
+    length: z.enum(["3", "5", "7", "10", "15", "30", "60"]).optional(),
     voice: z.enum(["female-calm", "female-bright", "male"]).optional(),
     image_style: z.enum(["photo", "illust", "watercolor", "minimal"]).optional(),
+    upload_targets: z.array(z.enum(["youtube", "instagram"])).max(2).optional(),
+    slide_count: z.number().int().min(3).max(10).optional(),
   }).optional(),
 });
 export type ContentJobCreate = z.infer<typeof ContentJobCreateSchema>;
@@ -40,3 +42,23 @@ export const StyleProfileCreateSchema = z.object({
   samples: z.array(z.string().min(1).max(20000)).min(1).max(10),
 });
 export type StyleProfileCreate = z.infer<typeof StyleProfileCreateSchema>;
+
+export const TopicPlatformSchema = z.object({
+  platform: z.enum(["naver-blog", "youtube", "shorts", "instagram-image"]),
+  options: z.object({
+    length: z.enum(["3", "5", "7", "10", "15", "30", "60"]).optional(),
+    voice: z.enum(["female-calm", "female-bright", "male"]).optional(),
+    image_style: z.enum(["photo", "illust", "watercolor", "minimal"]).optional(),
+    upload_targets: z.array(z.enum(["youtube", "instagram"])).max(2).optional(),
+    slide_count: z.number().int().min(3).max(10).optional(),
+  }).optional(),
+});
+
+export const TopicCreateSchema = z.object({
+  topic: z.string().min(1).max(200),
+  style_profile_id: z.string().max(64).optional(),
+  sources: z.array(ContentSourceInputSchema).max(20).optional(),
+  platforms: z.array(TopicPlatformSchema).min(1).max(5),
+});
+export type TopicCreate = z.infer<typeof TopicCreateSchema>;
+export type TopicPlatform = z.infer<typeof TopicPlatformSchema>;
