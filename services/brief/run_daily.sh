@@ -62,25 +62,42 @@ if [ -z "${CATEGORIES}" ]; then
 fi
 log "\"categories_count=$(echo "${CATEGORIES}" | grep -c .)\""
 
-# 3) 카테고리별 generate — 병렬 실행 (총 시간 ≒ 최장 카테고리 1개 분량)
+# 3) 카테고리별 generate — MAX_CONCURRENT씩 묶어 병렬 실행
+MAX_CONCURRENT=3
 declare -a STANDALONE_SLUGS=()
 declare -a BUNDLED_SLUGS=()
+declare -a ALL_SLUGS=()
 GEN_FAIL_SLUGS=""
 GEN_OK_COUNT=0
 
-# 3-a) 모든 카테고리를 백그라운드로 동시 실행. 결과는 slug별 tmp 파일에 저장.
+# 카테고리 목록을 배열로 적재
 while IFS=' ' read -r SLUG MODE; do
   [ -z "${SLUG}" ] && continue
-  (
-    OUT=$("${VENV_PY}" "${BRIEF_DIR}/generate_brief.py" --category "${SLUG}" 2>&1)
-    EXIT=$?
-    printf '%s\n' "${OUT}" > "/tmp/brief_stdout_${SLUG}.tmp"
-    echo "${EXIT}"          > "/tmp/brief_exit_${SLUG}.tmp"
-  ) &
+  ALL_SLUGS+=("${SLUG}")
 done <<< "${CATEGORIES}"
 
-log "\"generate parallel started\""
-wait  # 모든 백그라운드 generate 완료 대기
+# MAX_CONCURRENT씩 묶어 실행 → wait → 다음 묶음. 결과는 slug별 tmp 파일에 저장.
+i=0
+CAT_TOTAL=${#ALL_SLUGS[@]}
+while [ $i -lt $CAT_TOTAL ]; do
+  CHUNK_END=$((i + MAX_CONCURRENT))
+  [ $CHUNK_END -gt $CAT_TOTAL ] && CHUNK_END=$CAT_TOTAL
+  j=$i
+  while [ $j -lt $CHUNK_END ]; do
+    SLUG=${ALL_SLUGS[$j]}
+    (
+      OUT=$("${VENV_PY}" "${BRIEF_DIR}/generate_brief.py" --category "${SLUG}" 2>&1)
+      EXIT=$?
+      printf '%s\n' "${OUT}" > "/tmp/brief_stdout_${SLUG}.tmp"
+      echo "${EXIT}"          > "/tmp/brief_exit_${SLUG}.tmp"
+    ) &
+    j=$((j + 1))
+  done
+  log "\"generate chunk $((i / MAX_CONCURRENT + 1)) started slugs=$((CHUNK_END - i))\""
+  wait
+  i=$CHUNK_END
+done
+
 log "\"generate all done\""
 
 # 3-b) 결과 수집 + publish (publish는 순차 실행)
