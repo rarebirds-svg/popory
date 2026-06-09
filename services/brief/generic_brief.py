@@ -1,0 +1,168 @@
+# 커스텀 주제명을 입력받아 claude CLI로 범용 브리핑을 생성하고 포털에 publish
+"""
+사용법.
+    python generic_brief.py --topic-id {id} --name {주제명} [--date YYYY-MM-DD]
+
+성공 시 stdout JSON 한 줄.
+    {"status":"ok","topic_id":"...","date":"...","area":"custom-{id}","published_id":"..."}
+
+실패 시 비제로 exit code.
+"""
+import argparse
+import datetime
+import json
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+BRIEF_DIR = Path(__file__).resolve().parent
+VENV_PY = BRIEF_DIR / ".venv" / "bin" / "python"
+CLAUDE_BIN = "/opt/homebrew/bin/claude"
+DEFAULT_MODEL = "claude-sonnet-4-6"
+TIMEOUT_SECONDS = 1800
+LIMIT_MARKERS = ("usage limit", "rate limit", "limit reached", "resets at", "too many requests")
+BACKOFF_SECONDS = [60, 180]
+
+KST = datetime.timezone(datetime.timedelta(hours=9))
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--topic-id", required=True)
+    p.add_argument("--name", required=True)
+    p.add_argument("--date", default=None)
+    p.add_argument("--model", default=DEFAULT_MODEL)
+    args = p.parse_args()
+
+    if not Path(CLAUDE_BIN).exists():
+        print(f"error: claude CLI not found at {CLAUDE_BIN}", file=sys.stderr)
+        sys.exit(2)
+
+    if args.date:
+        date_obj = datetime.datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=KST)
+    else:
+        date_obj = datetime.datetime.now(KST)
+    date_str = date_obj.strftime("%Y-%m-%d")
+    published_at = int(date_obj.timestamp())
+
+    system_prompt = f"""당신은 '{args.name}' 전문 브리핑 작성자입니다.
+오늘은 {date_str} (KST)이며, 최근 3일([D-2, D]) 이내 발행된 신뢰할 수 있는 기사·보도자료만 사용하세요.
+WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브리핑을 작성하세요.
+
+작성 형식.
+- 헤딩은 ## 이하만 사용 (H1 없음)
+- 불릿은 - 사용
+- 각 항목 말미에 출처 라인 포함: [매체 — 제목 (YYYY.M.D)](URL)
+- 이모지, § 문자 금지
+- 빈 내용이면 "최근 3일 이내 관련 이슈 없음" 한 줄로 마무리
+
+응답 마지막에 아래 두 태그를 정확히 포함하세요.
+<body_markdown>
+...브리핑 본문...
+</body_markdown>
+<meta_json>
+{{"title": "[{args.name} 브리핑] {date_str}", "summary": "한두 줄 요약", "tags": ["{args.name}"], "published_at": {published_at}}}
+</meta_json>"""
+
+    user_msg = (
+        f"오늘은 {date_str} (KST)입니다. "
+        f"'{args.name}' 관련 최근 3일간 주요 이슈를 조사하여 브리핑을 작성하세요. "
+        f"WebSearch 도구로 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
+        f"마지막 응답에 <body_markdown>...</body_markdown> 과 <meta_json>...</meta_json> 두 태그를 정확히 포함하세요. "
+        f"meta_json의 published_at은 {published_at}을 그대로 사용하세요."
+    )
+
+    sys_prompt_path = Path(f"/tmp/brief_system_custom_{args.topic_id}_{date_str}.txt")
+    sys_prompt_path.write_text(system_prompt, encoding="utf-8")
+
+    cmd = [
+        CLAUDE_BIN,
+        "--print",
+        "--model", args.model,
+        "--allowed-tools", "WebSearch", "WebFetch",
+        "--system-prompt-file", str(sys_prompt_path),
+        "--output-format", "text",
+    ]
+
+    attempt = 0
+    try:
+        while True:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    input=user_msg,
+                    capture_output=True,
+                    text=True,
+                    timeout=TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
+                sys.exit(5)
+
+            if result.returncode == 0:
+                break
+
+            combined = (result.stdout + result.stderr).lower()
+            is_limit = any(m in combined for m in LIMIT_MARKERS)
+            print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit})", file=sys.stderr)
+            print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
+            print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
+
+            if is_limit and attempt < len(BACKOFF_SECONDS):
+                wait = BACKOFF_SECONDS[attempt]
+                print(f"--- usage limit 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
+                time.sleep(wait)
+                attempt += 1
+                continue
+            sys.exit(5)
+    finally:
+        sys_prompt_path.unlink(missing_ok=True)
+
+    final_text = result.stdout
+
+    body_m = re.search(r"<body_markdown>(.*?)</body_markdown>", final_text, re.DOTALL)
+    meta_m = re.search(r"<meta_json>\s*(\{.*?\})\s*</meta_json>", final_text, re.DOTALL)
+    if not body_m or not meta_m:
+        print("error: claude 응답에서 body_markdown/meta_json 태그를 찾지 못함", file=sys.stderr)
+        print("--- response last 1000 chars ---\n" + final_text[-1000:], file=sys.stderr)
+        sys.exit(4)
+
+    body = body_m.group(1).strip()
+    try:
+        meta = json.loads(meta_m.group(1).strip())
+    except json.JSONDecodeError as e:
+        print(f"error: meta_json 파싱 실패: {e}", file=sys.stderr)
+        print(meta_m.group(1), file=sys.stderr)
+        sys.exit(4)
+
+    body_file = Path(f"/tmp/brief_custom_{args.topic_id}_{date_str}.md")
+    meta_file = Path(f"/tmp/brief_custom_{args.topic_id}_{date_str}.meta.json")
+    body_file.write_text(body, encoding="utf-8")
+    meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    pub_result = subprocess.run(
+        [str(VENV_PY), str(BRIEF_DIR / "publish_to_portal.py"),
+         "--area", f"custom-{args.topic_id}",
+         "--meta-file", str(meta_file),
+         "--body-file", str(body_file)],
+        capture_output=True, text=True,
+    )
+    if pub_result.returncode != 0:
+        print(f"error: publish 실패 exit={pub_result.returncode}", file=sys.stderr)
+        print(pub_result.stderr[-500:], file=sys.stderr)
+        sys.exit(3)
+
+    pub_out = json.loads(pub_result.stdout.strip().splitlines()[-1])
+    print(json.dumps({
+        "status": "ok",
+        "topic_id": args.topic_id,
+        "date": date_str,
+        "area": f"custom-{args.topic_id}",
+        "published_id": pub_out.get("id"),
+    }, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
