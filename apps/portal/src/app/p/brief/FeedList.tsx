@@ -16,6 +16,7 @@ export interface FeedItem {
 interface FeedListProps {
   initialItems: FeedItem[];
   activeCat: string; // "" = 전체, "realestate" 등 slug
+  subscribedAreas: string[]; // 구독 중인 area 목록. 비어 있으면 비개인화
   categoryNames: Record<string, string>; // slug → 한국어 이름
 }
 
@@ -45,7 +46,7 @@ function monthOf(ts: number) {
   return `${new Date(ts * 1000).getMonth() + 1}월`;
 }
 
-export function FeedList({ initialItems, activeCat, categoryNames }: FeedListProps) {
+export function FeedList({ initialItems, activeCat, subscribedAreas, categoryNames }: FeedListProps) {
   const [items, setItems] = useState<FeedItem[]>(initialItems);
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [loading, setLoading] = useState(false);
@@ -56,19 +57,38 @@ export function FeedList({ initialItems, activeCat, categoryNames }: FeedListPro
     setLoading(true);
     setError(false);
     const prevCount = items.length;
-    const nextLimit = limit + PAGE_SIZE;
-    const area = activeCat ? `brief-${activeCat}` : "";
-    const url = area
-      ? `${API_BASE}/api/published_items?area=${area}&limit=${nextLimit}`
-      : `${API_BASE}/api/published_items?limit=${nextLimit}`;
+    const newLimit = limit + PAGE_SIZE;
     try {
-      const res = await fetch(url);
-      if (!res.ok) { setError(true); return; }
-      const { items: next } = (await res.json()) as { items: FeedItem[] };
-      setItems(next);
-      setLimit(nextLimit);
+      let newItems: FeedItem[];
+      if (subscribedAreas.length > 0 && !activeCat) {
+        const all = await Promise.all(
+          subscribedAreas.map((area) =>
+            fetch(`${API_BASE}/api/published_items?area=${area}&limit=${newLimit}`, { cache: "no-store" })
+              .then((r) => r.json())
+              .then((d: { items: FeedItem[] }) => d.items)
+              .catch(() => [] as FeedItem[])
+          )
+        );
+        newItems = all
+          .flat()
+          .sort((a, b) => b.published_at - a.published_at)
+          .slice(0, newLimit);
+      } else {
+        const area = activeCat
+          ? `brief-${activeCat}`
+          : subscribedAreas.length === 1 ? subscribedAreas[0]! : "";
+        const url = area
+          ? `${API_BASE}/api/published_items?area=${area}&limit=${newLimit}`
+          : `${API_BASE}/api/published_items?limit=${newLimit}`;
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) { setError(true); return; }
+        const data = (await res.json()) as { items: FeedItem[] };
+        newItems = data.items;
+      }
+      setItems(newItems);
+      setLimit(newLimit);
       // 서버 cap 이하로 응답이 왔거나 이전과 동일한 건수면 더 이상 데이터 없음
-      if (next.length === prevCount || next.length < Math.min(nextLimit, SERVER_CAP)) {
+      if (newItems.length === prevCount || newItems.length < Math.min(newLimit, SERVER_CAP)) {
         setExhausted(true);
       }
     } catch {
