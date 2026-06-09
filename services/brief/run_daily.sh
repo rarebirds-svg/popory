@@ -104,6 +104,82 @@ done
 
 log "\"generate all done\""
 
+# 4) 커스텀 주제 — 활성 목록 조회 후 MAX_CONCURRENT씩 청크 생성
+SERVICE_JWT_PY="
+import os, sys
+from pathlib import Path
+from popory_brief.jwt_signer import KeyMaterial, sign_for_portal
+key_file = os.environ.get('POPORY_BRIEF_KEY_FILE', '')
+if not key_file or not Path(key_file).exists():
+    sys.exit(1)
+m = KeyMaterial.load(Path(key_file))
+print(sign_for_portal(m, area='custom-service'), end='')
+"
+
+CUSTOM_TOPICS_JSON=$(curl -sf \
+  -H "Authorization: Bearer $(${VENV_PY} -c "${SERVICE_JWT_PY}" 2>/dev/null)" \
+  "${POPORY_PORTAL_API_BASE}/api/brief/custom-topics/active" 2>/dev/null || echo '{"topics":[]}')
+
+CUSTOM_SLUGS=$( echo "${CUSTOM_TOPICS_JSON}" | /usr/bin/python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for t in data.get('topics', []):
+    print(t['id'], t['name'].replace(' ', '_'))
+" 2>/dev/null || true)
+
+if [ -n "${CUSTOM_SLUGS}" ]; then
+  declare -a CUSTOM_IDS=()
+  declare -a CUSTOM_NAMES=()
+  while IFS=' ' read -r TID TNAME; do
+    [ -z "${TID}" ] && continue
+    CUSTOM_IDS+=("${TID}")
+    CUSTOM_NAMES+=("${TNAME//_/ }")
+  done <<< "${CUSTOM_SLUGS}"
+
+  CTOTAL=${#CUSTOM_IDS[@]}
+  log "\"custom_topics_count=${CTOTAL}\""
+
+  ci=0
+  while [ $ci -lt $CTOTAL ]; do
+    CEND=$((ci + MAX_CONCURRENT))
+    [ $CEND -gt $CTOTAL ] && CEND=$CTOTAL
+    cj=$ci
+    while [ $cj -lt $CEND ]; do
+      TID=${CUSTOM_IDS[$cj]}
+      TNAME=${CUSTOM_NAMES[$cj]}
+      (
+        OUT=$("${VENV_PY}" "${BRIEF_DIR}/generic_brief.py" \
+          --topic-id "${TID}" --name "${TNAME}" 2>&1)
+        EXIT=$?
+        printf '%s\n' "${OUT}" > "/tmp/brief_custom_stdout_${TID}.tmp"
+        echo "${EXIT}"          > "/tmp/brief_custom_exit_${TID}.tmp"
+      ) &
+      cj=$((cj + 1))
+    done
+    log "\"custom chunk $((ci / MAX_CONCURRENT + 1)) started slugs=$((CEND - ci))\""
+    wait
+    ci=$CEND
+  done
+
+  # 결과 수집 + pending_at 초기화
+  SERVICE_JWT=$(${VENV_PY} -c "${SERVICE_JWT_PY}" 2>/dev/null || true)
+  for TID in "${CUSTOM_IDS[@]}"; do
+    EXIT_FILE="/tmp/brief_custom_exit_${TID}.tmp"
+    OUT_FILE="/tmp/brief_custom_stdout_${TID}.tmp"
+    [ -f "${OUT_FILE}" ] && cat "${OUT_FILE}" >> "${LOG_FILE}"
+    CEXIT=1; [ -f "${EXIT_FILE}" ] && CEXIT=$(cat "${EXIT_FILE}")
+    rm -f "${EXIT_FILE}" "${OUT_FILE}"
+    if [ "${CEXIT}" -eq 0 ]; then
+      log "\"custom ok topic=${TID}\""
+      curl -sf -X POST \
+        -H "Authorization: Bearer ${SERVICE_JWT}" \
+        "${POPORY_PORTAL_API_BASE}/api/brief/custom-topics/${TID}/result" > /dev/null 2>&1 || true
+    else
+      log "\"custom fail topic=${TID} exit=${CEXIT}\""
+    fi
+  done
+fi
+
 # 3-b) 결과 수집 + publish (publish는 순차 실행)
 while IFS=' ' read -r SLUG MODE; do
   [ -z "${SLUG}" ] && continue
