@@ -1,6 +1,7 @@
 "use client";
 // 브리핑 커스텀 주제 목록 + 추가 폼 클라이언트 컴포넌트
 import { useState, useTransition } from "react";
+import { API_BASE } from "@/lib/env";
 
 interface Topic {
   id: string;
@@ -30,7 +31,7 @@ export function CustomTopics({ initialTopics }: Props) {
     const name = input.trim();
     if (!name) return;
     setInput("");
-    const res = await fetch("/api/me/brief/topics", {
+    const res = await fetch(`${API_BASE}/api/me/brief/topics`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name }),
@@ -43,14 +44,14 @@ export function CustomTopics({ initialTopics }: Props) {
 
   const remove = (id: string) => {
     startTransition(async () => {
-      await fetch(`/api/me/brief/topics/${id}`, { method: "DELETE" });
+      await fetch(`${API_BASE}/api/me/brief/topics/${id}`, { method: "DELETE" });
       setTopics((prev) => prev.filter((t) => t.id !== id));
     });
   };
 
   const generate = async (id: string) => {
     setGenerating((prev) => new Set(prev).add(id));
-    await fetch(`/api/me/brief/topics/${id}/generate`, { method: "POST" });
+    await fetch(`${API_BASE}/api/me/brief/topics/${id}/generate`, { method: "POST" });
     setTimeout(() => {
       setGenerating((prev) => { const next = new Set(prev); next.delete(id); return next; });
     }, 3000);

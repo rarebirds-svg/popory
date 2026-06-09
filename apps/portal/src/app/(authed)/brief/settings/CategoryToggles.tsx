@@ -1,6 +1,7 @@
 "use client";
 // 브리핑 카테고리 구독 ON/OFF 토글 클라이언트 컴포넌트
 import { useState, useTransition } from "react";
+import { API_BASE } from "@/lib/env";
 
 export interface CategoryMeta {
   slug: string;
@@ -28,7 +29,7 @@ export function CategoryToggles({ categories, subscribedSlugs }: Props) {
 
     startTransition(async () => {
       const method = isOn ? "DELETE" : "POST";
-      await fetch(`/api/me/areas/brief-${slug}`, { method });
+      await fetch(`${API_BASE}/api/me/areas/brief-${slug}`, { method });
     });
   };
 
