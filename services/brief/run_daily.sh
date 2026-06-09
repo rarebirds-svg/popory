@@ -9,9 +9,13 @@ DATE=$(TZ=Asia/Seoul date +%Y-%m-%d)
 LOG_FILE=${BRIEF_DIR}/logs/${DATE}.log
 
 DRY_RUN=0
-if [ "${1:-}" = "--dry-run" ]; then
-  DRY_RUN=1
-fi
+NOW=0
+for ARG in "${@}"; do
+  case "${ARG}" in
+    --dry-run) DRY_RUN=1 ;;
+    --now)     NOW=1 ;;
+  esac
+done
 
 mkdir -p "${BRIEF_DIR}/logs"
 
@@ -20,8 +24,8 @@ log() {
 }
 
 # 08:00 기동 후 0~120분 랜덤 대기 → 실제 generate 시작이 08:00~10:00 사이에 분산됨
-# dry-run 시에는 대기 없이 즉시 실행
-if [ ${DRY_RUN} -eq 0 ]; then
+# dry-run 또는 --now 시에는 대기 없이 즉시 실행
+if [ ${DRY_RUN} -eq 0 ] && [ ${NOW} -eq 0 ]; then
   JITTER=$((RANDOM % 7201))
   log "\"jitter_sleep=${JITTER}s\""
   sleep ${JITTER}
