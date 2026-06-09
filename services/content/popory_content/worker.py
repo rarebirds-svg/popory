@@ -191,6 +191,39 @@ def run_instagram_upload_once(client) -> bool:
     return True
 
 
+def run_custom_brief_once(client) -> bool:
+    """온디맨드 커스텀 주제 브리핑 생성. 대기 항목 없으면 False 반환."""
+    import subprocess
+
+    data = client.get("/api/brief/custom-topics/pending")
+    topics = data.get("topics", []) if data else []
+    if not topics:
+        return False
+
+    topic = topics[0]
+    topic_id = topic["id"]
+    name = topic["name"]
+    append_log(LOGS_DIR, {"worker": "brief", "status": "start", "topic_id": topic_id, "name": name})
+
+    brief_dir = Path(__file__).resolve().parent.parent.parent / "brief"
+    generic_script = brief_dir / "generic_brief.py"
+    venv_py = brief_dir / ".venv" / "bin" / "python"
+
+    result = subprocess.run(
+        [str(venv_py), str(generic_script), "--topic-id", topic_id, "--name", name],
+        capture_output=True, text=True,
+    )
+
+    if result.returncode == 0:
+        append_log(LOGS_DIR, {"worker": "brief", "status": "done", "topic_id": topic_id})
+        client.post(f"/api/brief/custom-topics/{topic_id}/result", json={})
+    else:
+        append_log(LOGS_DIR, {"worker": "brief", "status": "error", "topic_id": topic_id,
+                               "stderr": result.stderr[-500:]})
+
+    return True
+
+
 def main() -> None:
     client = _build_client()
     append_log(LOGS_DIR, {"worker": "content", "status": "start"})
@@ -201,6 +234,8 @@ def main() -> None:
                 processed = run_upload_once(client)
             if not processed:
                 processed = run_instagram_upload_once(client)
+            if not processed:
+                processed = run_custom_brief_once(client)
         except PortalError as e:
             append_log(LOGS_DIR, {"worker": "content", "status": "portal_error", "error": str(e)[:300]})
             processed = False
