@@ -11,6 +11,7 @@
 import argparse
 import datetime
 import json
+import os
 import re
 import subprocess
 import sys
@@ -142,12 +143,21 @@ WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브�
     body_file.write_text(body, encoding="utf-8")
     meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # content-worker가 호출할 때는 POPORY_BRIEF_KEY_FILE이 환경에 없으므로
+    # brief 서비스 표준 키 경로를 기본값으로 주입한다 (run_daily.sh 설정은 존중).
+    pub_env = {**os.environ}
+    pub_env.setdefault(
+        "POPORY_BRIEF_KEY_FILE",
+        str(BRIEF_DIR / "secrets" / "brief_signing_key.json"),
+    )
+
     pub_result = subprocess.run(
         [str(VENV_PY), str(BRIEF_DIR / "publish_to_portal.py"),
          "--area", f"custom-{args.topic_id}",
          "--meta-file", str(meta_file),
          "--body-file", str(body_file)],
         capture_output=True, text=True,
+        env=pub_env,
     )
     if pub_result.returncode != 0:
         print(f"error: publish 실패 exit={pub_result.returncode}", file=sys.stderr)
