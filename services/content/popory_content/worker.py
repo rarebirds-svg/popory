@@ -193,6 +193,7 @@ def run_instagram_upload_once(client) -> bool:
 
 def run_custom_brief_once(client) -> bool:
     """온디맨드 커스텀 주제 브리핑 생성. 대기 항목 없으면 False 반환."""
+    import datetime
     import subprocess
 
     data = client.get("/api/brief/custom-topics/pending")
@@ -203,6 +204,19 @@ def run_custom_brief_once(client) -> bool:
     topic = topics[0]
     topic_id = topic["id"]
     name = topic["name"]
+
+    # 멱등성 가드: 오늘치가 이미 발행돼 있으면 재생성하지 않고 pending 만 해제한다.
+    # /result 호출이 일시 실패해 pending_at 이 안 풀린 채 재폴링돼도 중복 발행을 막는다.
+    kst = datetime.timezone(datetime.timedelta(hours=9))
+    existing = client.get(f"/api/published_items?area=custom-{topic_id}&limit=1")
+    items = existing.get("items", []) if existing else []
+    if items:
+        last_day = datetime.datetime.fromtimestamp(items[0]["published_at"], kst).date()
+        if last_day == datetime.datetime.now(kst).date():
+            client.post(f"/api/brief/custom-topics/{topic_id}/result", json={})
+            append_log(LOGS_DIR, {"worker": "brief", "status": "skip_already_published", "topic_id": topic_id})
+            return True
+
     append_log(LOGS_DIR, {"worker": "brief", "status": "start", "topic_id": topic_id, "name": name})
 
     brief_dir = Path(__file__).resolve().parent.parent.parent / "brief"
