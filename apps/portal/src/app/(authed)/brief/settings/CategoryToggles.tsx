@@ -29,7 +29,7 @@ export function CategoryToggles({ categories, subscribedSlugs }: Props) {
 
     startTransition(async () => {
       const method = isOn ? "DELETE" : "POST";
-      await fetch(`${API_BASE}/api/me/areas/brief-${slug}`, { method });
+      await fetch(`${API_BASE}/api/me/areas/brief-${slug}`, { method, credentials: "include" });
     });
   };
 

@@ -34,6 +34,7 @@ export function CustomTopics({ initialTopics }: Props) {
     const res = await fetch(`${API_BASE}/api/me/brief/topics`, {
       method: "POST",
       headers: { "content-type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({ name }),
     });
     if (res.ok) {
@@ -44,14 +45,14 @@ export function CustomTopics({ initialTopics }: Props) {
 
   const remove = (id: string) => {
     startTransition(async () => {
-      await fetch(`${API_BASE}/api/me/brief/topics/${id}`, { method: "DELETE" });
+      await fetch(`${API_BASE}/api/me/brief/topics/${id}`, { method: "DELETE", credentials: "include" });
       setTopics((prev) => prev.filter((t) => t.id !== id));
     });
   };
 
   const generate = async (id: string) => {
     setGenerating((prev) => new Set(prev).add(id));
-    await fetch(`${API_BASE}/api/me/brief/topics/${id}/generate`, { method: "POST" });
+    await fetch(`${API_BASE}/api/me/brief/topics/${id}/generate`, { method: "POST", credentials: "include" });
     setTimeout(() => {
       setGenerating((prev) => { const next = new Set(prev); next.delete(id); return next; });
     }, 3000);
