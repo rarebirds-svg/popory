@@ -102,8 +102,17 @@ export default async function BriefFeedPage({
         .filter((c): c is CategoryMeta => c !== undefined);
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
-      <Kicker>Daily Briefings</Kicker>
+    <>
+      <header className="border-b border-popory-border bg-popory-card">
+        <div className="mx-auto flex max-w-3xl items-center px-4 py-3.5">
+          <a href="/" className="flex items-center gap-2 text-lg font-bold tracking-tight text-popory-accent">
+            <span className="h-2.5 w-2.5 rounded-full bg-popory-accent" aria-hidden />
+            popory
+          </a>
+        </div>
+      </header>
+      <main className="mx-auto max-w-3xl px-4 py-10">
+        <Kicker>Daily Briefings</Kicker>
       <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">
         매일 아침, 여러 갈래의 세상
       </h1>
@@ -125,6 +134,7 @@ export default async function BriefFeedPage({
           categoryNames={categoryNames}
         />
       </div>
-    </main>
+      </main>
+    </>
   );
 }
