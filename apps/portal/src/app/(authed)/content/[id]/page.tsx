@@ -151,6 +151,7 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
             done={job.status === "done"}
             seo={meta?.seo ?? null}
             copyright={meta?.copyright ?? null}
+            tags={Array.isArray(meta?.tags) ? (meta.tags as string[]) : []}
             sources={job.sources}
           />
         )}

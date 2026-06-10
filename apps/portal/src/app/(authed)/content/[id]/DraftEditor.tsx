@@ -10,10 +10,11 @@ interface Props {
   done: boolean;
   seo: unknown;
   copyright: unknown;
+  tags: string[];
   sources: Array<{ id: string; url: string | null; title: string | null; note: string | null }>;
 }
 
-export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources }: Props) {
+export function DraftEditor({ jobId, initialDraft, done, seo, copyright, tags, sources }: Props) {
   const router = useRouter();
   const [draft, setDraft] = useState(initialDraft);
   const [showSource, setShowSource] = useState(false);
@@ -49,6 +50,36 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources
     }
   }
 
+  async function copyBody() {
+    if (!navigator.clipboard) { setMsg("복사 미지원 환경"); return; }
+    const plainText = new DOMParser().parseFromString(draft, "text/html").body.innerText;
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([draft], { type: "text/html" }),
+          "text/plain": new Blob([plainText], { type: "text/plain" }),
+        }),
+      ]);
+      setMsg("본문 복사됨");
+    } catch {
+      navigator.clipboard.writeText(plainText)
+        .then(() => setMsg("본문 복사됨"))
+        .catch(() => setMsg("복사 실패"));
+    }
+  }
+
+  function copyTag(tag: string) {
+    navigator.clipboard?.writeText(`#${tag}`)
+      .then(() => setMsg(`#${tag} 복사됨`))
+      .catch(() => setMsg("복사 실패"));
+  }
+
+  function copyAllTags() {
+    navigator.clipboard?.writeText(tags.map((t) => `#${t}`).join(" "))
+      .then(() => setMsg("태그 전체 복사됨"))
+      .catch(() => setMsg("복사 실패"));
+  }
+
   return (
     <div className="mt-8 space-y-6">
       {(seo != null || copyright != null) && (
@@ -67,6 +98,31 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources
           className="h-[70vh] w-full rounded-md border border-popory-border bg-white"
         />
       </div>
+
+      {tags.length > 0 && (
+        <div>
+          <span className="mb-2 block text-xs font-semibold text-popory-muted">추천 태그</span>
+          <div className="flex flex-wrap gap-1.5">
+            {tags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => copyTag(tag)}
+                className="rounded-full border border-popory-border px-2.5 py-0.5 text-xs text-popory-muted hover:border-popory-accent hover:text-popory-accent transition-colors"
+              >
+                #{tag}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={copyAllTags}
+              className="rounded-full border border-popory-border px-2.5 py-0.5 text-xs text-popory-muted hover:border-popory-accent hover:text-popory-accent transition-colors"
+            >
+              전체 복사
+            </button>
+          </div>
+        </div>
+      )}
 
       <div>
         <button type="button" onClick={() => setShowSource((s) => !s)} className="text-xs text-popory-accent">
@@ -99,6 +155,7 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, sources
 
       <div className="flex items-center gap-3">
         <button onClick={() => patch({ draft })} disabled={busy} className="rounded-md border border-popory-border px-4 py-2 text-sm disabled:opacity-50">초안 저장</button>
+        <button onClick={copyBody} type="button" className="rounded-md border border-popory-border px-4 py-2 text-sm">미리보기 본문복사</button>
         <button onClick={copy} type="button" className="rounded-md border border-popory-border px-4 py-2 text-sm">HTML 복사</button>
         {!done && (
           <button onClick={() => patch({ draft, status: "done" })} disabled={busy} className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">완료 표시</button>
