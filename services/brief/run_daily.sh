@@ -10,7 +10,7 @@ LOG_FILE=${BRIEF_DIR}/logs/${DATE}.log
 
 DRY_RUN=0
 NOW=0
-for ARG in "${@}"; do
+for ARG in ${@+"$@"}; do
   case "${ARG}" in
     --dry-run) DRY_RUN=1 ;;
     --now)     NOW=1 ;;
