@@ -52,13 +52,14 @@ def main() -> None:
     else:
         date_obj = datetime.datetime.now(KST)
     date_str = date_obj.strftime("%Y-%m-%d")
+    now_str = date_obj.strftime("%Y-%m-%d %H:%M")
     published_at = int(date_obj.timestamp())
 
     sys_prompt_path = Path(f"/tmp/brief_system_{category.slug}_{date_str}.txt")
     sys_prompt_path.write_text(category.system_prompt, encoding="utf-8")
 
     user_msg = (
-        f"오늘은 {date_str} (KST)입니다. 시스템 매뉴얼의 절차를 따라 오늘의 {category.name} 이슈 브리핑을 작성하세요. "
+        f"지금은 {now_str} (KST)입니다. 시스템 매뉴얼의 절차를 따라 오늘({date_str})의 {category.name} 이슈 브리핑을 작성하세요. "
         f"WebSearch 도구로 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
         f"마지막 응답에 <body_markdown>...</body_markdown> 과 <meta_json>...</meta_json> 두 태그를 정확히 포함하세요. "
         f"meta_json의 published_at은 {published_at}을 그대로 사용하세요."
