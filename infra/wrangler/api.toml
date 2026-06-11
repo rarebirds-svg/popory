@@ -29,6 +29,9 @@ COOKIE_DOMAIN = "localhost"
 [env.prod]
 workers_dev = false
 
+[env.prod.observability]
+enabled = true
+
 [[env.prod.d1_databases]]
 binding = "DB"
 database_name = "popory-portal"

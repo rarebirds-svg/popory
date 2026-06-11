@@ -30,6 +30,10 @@ import type { ServiceVars } from "./middleware/service_auth";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: AppVars & ServiceVars }>();
+  app.onError((err, c) => {
+    console.error(`unhandled error ${c.req.method} ${c.req.path}:`, err instanceof Error ? err.stack ?? err.message : String(err));
+    return c.text(`internal error: ${err instanceof Error ? err.message : String(err)}`, 500);
+  });
   app.use(sessionMiddleware);
   app.use("/api/*", cors({
     origin: (origin, c) => {
