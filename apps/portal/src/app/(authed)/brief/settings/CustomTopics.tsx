@@ -164,7 +164,7 @@ export function CustomTopics({ initialTopics }: Props) {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add()}
           placeholder="주제 입력 (예: 환율, K-방산, 헬스케어)"
-          className="flex-1 rounded-xl border border-popory-border px-4 py-2.5 text-sm bg-popory-surface text-popory-fg placeholder:text-popory-muted focus:outline-none focus:ring-1 focus:ring-popory-fg"
+          className="flex-1 rounded-xl border border-popory-border px-4 py-2.5 text-sm bg-white text-black placeholder:text-popory-muted focus:outline-none focus:ring-1 focus:ring-popory-fg"
         />
         <button
           onClick={add}
