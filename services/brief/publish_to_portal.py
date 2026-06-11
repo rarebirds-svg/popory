@@ -42,7 +42,7 @@ def _portal_base() -> str:
     return v
 
 
-def publish(*, area: str, meta_file: Path, body_file: Path) -> dict:
+def publish(*, area: str, meta_file: Path, body_file: Path, replace_same_day: bool = False) -> dict:
     meta = json.loads(Path(meta_file).read_text(encoding="utf-8"))
     body = Path(body_file).read_text(encoding="utf-8")
     payload = {
@@ -55,6 +55,8 @@ def publish(*, area: str, meta_file: Path, body_file: Path) -> dict:
         payload["summary"] = meta["summary"]
     if meta.get("tags"):
         payload["tags"] = list(meta["tags"])
+    if replace_same_day:
+        payload["replace_same_day"] = True
 
     material = KeyMaterial.load(_key_path())
     client = PortalClient(
@@ -69,11 +71,14 @@ def main() -> None:
     p.add_argument("--area", default="brief")
     p.add_argument("--meta-file", required=True)
     p.add_argument("--body-file", required=True)
+    p.add_argument("--replace-same-day", action="store_true",
+                   help="같은 area·같은 KST 날짜의 기존 발행물을 지우고 새로 넣는다")
     args = p.parse_args()
     try:
         body = publish(area=args.area,
                        meta_file=Path(args.meta_file),
-                       body_file=Path(args.body_file))
+                       body_file=Path(args.body_file),
+                       replace_same_day=args.replace_same_day)
     except PortalError as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(e.exit_code)

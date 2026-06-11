@@ -59,6 +59,8 @@ def main() -> None:
     p.add_argument("--name", required=True)
     p.add_argument("--date", default=None)
     p.add_argument("--model", default=DEFAULT_MODEL)
+    p.add_argument("--force", action="store_true",
+                   help="온디맨드 강제 재생성. 멱등성 가드를 건너뛰고 오늘치를 교체 발행한다")
     args = p.parse_args()
 
     if not Path(CLAUDE_BIN).exists():
@@ -73,7 +75,8 @@ def main() -> None:
     published_at = int(date_obj.timestamp())
 
     # 멱등성 가드. 오늘치가 이미 발행돼 있으면 재생성하지 않고 종료한다.
-    if already_published_today(os.environ.get("POPORY_PORTAL_API_BASE"), args.topic_id, date_obj.date()):
+    # --force(온디맨드 강제 재생성)면 가드를 건너뛰고 아래 교체 발행으로 진행한다.
+    if not args.force and already_published_today(os.environ.get("POPORY_PORTAL_API_BASE"), args.topic_id, date_obj.date()):
         print(json.dumps({
             "status": "skipped",
             "reason": "already_published_today",
@@ -186,11 +189,16 @@ WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브�
         str(BRIEF_DIR / "secrets" / "brief_signing_key.json"),
     )
 
+    pub_cmd = [str(VENV_PY), str(BRIEF_DIR / "publish_to_portal.py"),
+               "--area", f"custom-{args.topic_id}",
+               "--meta-file", str(meta_file),
+               "--body-file", str(body_file)]
+    if args.force:
+        # 강제 재생성은 오늘치 기존 발행물을 교체한다(중복 방지).
+        pub_cmd.append("--replace-same-day")
+
     pub_result = subprocess.run(
-        [str(VENV_PY), str(BRIEF_DIR / "publish_to_portal.py"),
-         "--area", f"custom-{args.topic_id}",
-         "--meta-file", str(meta_file),
-         "--body-file", str(body_file)],
+        pub_cmd,
         capture_output=True, text=True,
         env=pub_env,
     )
