@@ -8,10 +8,12 @@ export const PublishedItemCreateSchema = z.object({
   body: z.string().min(1),
   tags: z.array(z.string().max(40)).max(20).optional(),
   published_at: z.number().int().nonnegative(),
+  // true면 같은 area·같은 KST 날짜의 기존 발행물을 지우고 새로 넣는다(강제 재생성 교체).
+  replace_same_day: z.boolean().optional(),
 });
 export type PublishedItemCreate = z.infer<typeof PublishedItemCreateSchema>;
 
-export const PublishedItemSchema = PublishedItemCreateSchema.omit({ body: true }).extend({
+export const PublishedItemSchema = PublishedItemCreateSchema.omit({ body: true, replace_same_day: true }).extend({
   id: z.string(),
   author_sub: z.string().nullable(),
   body_r2_key: z.string(),

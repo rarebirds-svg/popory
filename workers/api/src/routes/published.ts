@@ -17,6 +17,25 @@ export function mountPublished(app: Hono<{ Bindings: Env; Variables: Vars }>) {
     if (!parsed.success) return c.text("bad request", 400);
     const svc = c.get("service")!;
     if (svc.area !== parsed.data.area) return c.text("area mismatch", 403);
+
+    // replace_same_day: 같은 area·같은 KST 날짜의 기존 발행물을 R2·D1에서 지운 뒤 새로 넣는다.
+    if (parsed.data.replace_same_day) {
+      const KST = 9 * 3600;
+      const dayStart = Math.floor((parsed.data.published_at + KST) / 86400) * 86400 - KST;
+      const dayEnd = dayStart + 86400;
+      const { results } = await c.env.DB.prepare(
+        "SELECT body_r2_key FROM published_items WHERE area=? AND published_at>=? AND published_at<?",
+      ).bind(parsed.data.area, dayStart, dayEnd).all<{ body_r2_key: string }>();
+      for (const row of results) {
+        await c.env.R2.delete(row.body_r2_key);
+      }
+      if (results.length > 0) {
+        await c.env.DB.prepare(
+          "DELETE FROM published_items WHERE area=? AND published_at>=? AND published_at<?",
+        ).bind(parsed.data.area, dayStart, dayEnd).run();
+      }
+    }
+
     const id = ulid();
     const r2Key = `published/${parsed.data.area}/${id}`;
     await c.env.R2.put(r2Key, parsed.data.body, {
