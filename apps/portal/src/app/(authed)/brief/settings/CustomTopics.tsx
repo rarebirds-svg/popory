@@ -6,6 +6,8 @@ import { API_BASE } from "@/lib/env";
 interface Topic {
   id: string;
   name: string;
+  // 주기 생성 on/off. D1이 0/1(number)로 줄 수 있어 사용 시 Boolean()으로 강제.
+  enabled: boolean;
   pending_at: number | null;
   created_at: number;
 }
@@ -109,19 +111,41 @@ export function CustomTopics({ initialTopics }: Props) {
     }
   };
 
+  // 주기 생성 on/off 토글. enabled=1 인 주제만 매일 배치가 생성한다.
+  const toggleEnabled = (id: string, next: boolean) => {
+    setTopics((prev) => prev.map((t) => (t.id === id ? { ...t, enabled: next } : t)));
+    startTransition(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/me/brief/topics/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ enabled: next }),
+        });
+        if (!res.ok) throw new Error("patch failed");
+      } catch {
+        // 실패 시 이전 상태로 롤백.
+        setTopics((prev) => prev.map((t) => (t.id === id ? { ...t, enabled: !next } : t)));
+      }
+    });
+  };
+
   return (
     <div className="flex flex-col gap-2">
       {topics.map((t) => {
         const isGenerating = t.pending_at != null;
         const done = justDone.has(t.id);
+        const on = Boolean(t.enabled);
         return (
           <div
             key={t.id}
             className="flex items-center justify-between px-4 py-3 rounded-xl border border-popory-border bg-popory-surface"
           >
             <div>
-              <p className="text-sm font-semibold text-popory-fg">{t.name}</p>
-              {isGenerating ? (
+              <p className={`text-sm font-semibold ${on ? "text-popory-fg" : "text-popory-muted"}`}>{t.name}</p>
+              {!on ? (
+                <p className="text-xs text-popory-muted mt-0.5">주기 생성 꺼짐 — 켜면 매일 자동 생성</p>
+              ) : isGenerating ? (
                 <p className="text-xs text-indigo-500 mt-0.5">생성 중… 보통 2~5분 걸립니다.</p>
               ) : done ? (
                 <p className="text-xs text-emerald-600 mt-0.5">✓ 생성 완료 — 피드에서 확인하세요.</p>
@@ -131,8 +155,24 @@ export function CustomTopics({ initialTopics }: Props) {
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => generate(t.id)}
+                onClick={() => toggleEnabled(t.id, !on)}
+                role="switch"
+                aria-checked={on}
+                aria-label={on ? "주기 생성 끄기" : "주기 생성 켜기"}
                 disabled={isGenerating}
+                className="shrink-0 disabled:opacity-40"
+              >
+                <div
+                  className={`relative w-10 h-[22px] rounded-full transition-colors ${on ? "bg-popory-fg" : "bg-popory-border"}`}
+                >
+                  <div
+                    className={`absolute top-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition-transform ${on ? "translate-x-[20px]" : "translate-x-[2px]"}`}
+                  />
+                </div>
+              </button>
+              <button
+                onClick={() => generate(t.id)}
+                disabled={isGenerating || !on}
                 className="text-xs text-indigo-500 border border-indigo-200 rounded-md px-3 py-1 hover:bg-indigo-50 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isGenerating ? (

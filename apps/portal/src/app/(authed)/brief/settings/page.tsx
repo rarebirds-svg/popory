@@ -27,7 +27,7 @@ async function fetchPreferences(cookie: string) {
   if (!res.ok) return { subscribed_areas: [], custom_topics: [] };
   return res.json() as Promise<{
     subscribed_areas: string[];
-    custom_topics: { id: string; name: string; pending_at: number | null; created_at: number }[];
+    custom_topics: { id: string; name: string; enabled: boolean; pending_at: number | null; created_at: number }[];
   }>;
 }
 
