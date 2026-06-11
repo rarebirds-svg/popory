@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- popory 네이버 주식 브리핑 저녁 실행. 평일 18:00 KST에 run_daily.sh를 naver-stock 단일·포털 발행으로 호출. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.popory.brief-naver-stock-pm</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/daegong/projects/popory/services/brief/run_daily.sh</string>
+        <string>--only=naver-stock</string>
+        <string>--now</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/daegong/projects/popory/services/brief</string>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/daegong/projects/popory/services/brief/logs/launchd-naver-stock-pm.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/daegong/projects/popory/services/brief/logs/launchd-naver-stock-pm.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>LANG</key>
+        <string>ko_KR.UTF-8</string>
+        <key>LC_ALL</key>
+        <string>ko_KR.UTF-8</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
