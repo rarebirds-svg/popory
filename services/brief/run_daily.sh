@@ -10,10 +10,12 @@ LOG_FILE=${BRIEF_DIR}/logs/${DATE}.log
 
 DRY_RUN=0
 NOW=0
+ONLY_SLUG=""
 for ARG in ${@+"$@"}; do
   case "${ARG}" in
-    --dry-run) DRY_RUN=1 ;;
-    --now)     NOW=1 ;;
+    --dry-run)  DRY_RUN=1 ;;
+    --now)      NOW=1 ;;
+    --only=*)   ONLY_SLUG="${ARG#*=}" ;;
   esac
 done
 
@@ -59,6 +61,11 @@ if [ ${SCAN_EXIT} -ne 0 ]; then
   log "\"abort: categories scan failed exit=${SCAN_EXIT}\""
   echo "${CATEGORIES}" >> "${LOG_FILE}"
   exit ${SCAN_EXIT}
+fi
+# --only 지정 시 해당 카테고리 한 줄로 필터
+if [ -n "${ONLY_SLUG}" ]; then
+  CATEGORIES=$(echo "${CATEGORIES}" | grep -E "^${ONLY_SLUG} " || true)
+  log "\"only_slug=${ONLY_SLUG}\""
 fi
 if [ -z "${CATEGORIES}" ]; then
   log "\"no enabled categories\""
@@ -116,9 +123,14 @@ m = KeyMaterial.load(Path(key_file))
 print(sign_for_portal(m, area='custom-service'), end='')
 "
 
-CUSTOM_TOPICS_JSON=$(curl -sf \
-  -H "Authorization: Bearer $(${VENV_PY} -c "${SERVICE_JWT_PY}" 2>/dev/null)" \
-  "${POPORY_PORTAL_API_BASE}/api/brief/custom-topics/active" 2>/dev/null || echo '{"topics":[]}')
+if [ -n "${ONLY_SLUG}" ]; then
+  # --only 모드에서는 커스텀 주제 생성 skip
+  CUSTOM_TOPICS_JSON='{"topics":[]}'
+else
+  CUSTOM_TOPICS_JSON=$(curl -sf \
+    -H "Authorization: Bearer $(${VENV_PY} -c "${SERVICE_JWT_PY}" 2>/dev/null)" \
+    "${POPORY_PORTAL_API_BASE}/api/brief/custom-topics/active" 2>/dev/null || echo '{"topics":[]}')
+fi
 
 CUSTOM_SLUGS=$( echo "${CUSTOM_TOPICS_JSON}" | /usr/bin/python3 -c "
 import sys, json
