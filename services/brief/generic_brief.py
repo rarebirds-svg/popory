@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 BRIEF_DIR = Path(__file__).resolve().parent
@@ -27,6 +28,29 @@ LIMIT_MARKERS = ("usage limit", "rate limit", "limit reached", "resets at", "too
 BACKOFF_SECONDS = [60, 180]
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
+
+
+def already_published_today(portal_base, topic_id, target_date, *, opener=urllib.request.urlopen) -> bool:
+    """custom-{topic_id} area에 target_date(KST) 발행물이 이미 있으면 True.
+
+    일일 배치(run_daily.sh)와 온디맨드 워커가 같은 날 같은 주제를 각각 생성해
+    중복 발행되던 문제를 막는 멱등성 가드. 체크 불가(베이스 URL 없음·네트워크 오류)
+    시엔 False를 반환해 생성을 진행한다(fail-open — 일시 오류로 브리핑이 아예
+    안 나오는 것보다 중복 위험을 감수하는 편이 낫다).
+    """
+    base = (portal_base or "").rstrip("/")
+    if not base:
+        return False
+    try:
+        url = f"{base}/api/published_items?area=custom-{topic_id}&limit=1"
+        with opener(url, timeout=15) as resp:
+            items = json.loads(resp.read()).get("items", [])
+    except Exception:
+        return False
+    if not items:
+        return False
+    last_day = datetime.datetime.fromtimestamp(items[0]["published_at"], KST).date()
+    return last_day == target_date
 
 
 def main() -> None:
@@ -47,6 +71,17 @@ def main() -> None:
         date_obj = datetime.datetime.now(KST)
     date_str = date_obj.strftime("%Y-%m-%d")
     published_at = int(date_obj.timestamp())
+
+    # 멱등성 가드. 오늘치가 이미 발행돼 있으면 재생성하지 않고 종료한다.
+    if already_published_today(os.environ.get("POPORY_PORTAL_API_BASE"), args.topic_id, date_obj.date()):
+        print(json.dumps({
+            "status": "skipped",
+            "reason": "already_published_today",
+            "topic_id": args.topic_id,
+            "date": date_str,
+            "area": f"custom-{args.topic_id}",
+        }, ensure_ascii=False))
+        return
 
     system_prompt = f"""당신은 '{args.name}' 전문 브리핑 작성자입니다.
 오늘은 {date_str} (KST)이며, 최근 3일([D-2, D]) 이내 발행된 신뢰할 수 있는 기사·보도자료만 사용하세요.
