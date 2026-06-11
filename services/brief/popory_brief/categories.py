@@ -17,7 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent / "categories"
 SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
-VALID_MODES = {"standalone", "bundled"}
+VALID_MODES = {"standalone", "bundled", "portal_only"}
 REQUIRED = ("slug", "name", "delivery_mode", "subject_template", "sender_name", "enabled")
 
 

@@ -83,6 +83,20 @@ def test_invalid_delivery_mode_raises(tmp_path):
         categories._scan(tmp_path)
 
 
+def test_portal_only_mode_accepted(tmp_path):
+    fm = textwrap.dedent("""\
+        slug: foo
+        name: Foo
+        delivery_mode: portal_only
+        subject_template: "[{name}] {date}"
+        sender_name: "{name} bot"
+        enabled: true
+        """)
+    _write_skill(tmp_path, "foo", frontmatter_yaml=fm)
+    c = categories._scan(tmp_path)[0]
+    assert c.delivery_mode == "portal_only"
+
+
 def test_duplicate_slug_raises(tmp_path):
     _write_skill(tmp_path, "dir1", frontmatter_yaml=textwrap.dedent("""\
         slug: same
