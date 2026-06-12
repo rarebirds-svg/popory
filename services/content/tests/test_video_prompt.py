@@ -46,3 +46,11 @@ def test_system_prompt_demands_consistent_style_suffix():
     # 모든 장면이 같은 톤이 되도록 '일관된'/'동일' 류 지시가 image_prompt 규칙에 있어야 한다
     assert "일관" in sp
     assert "watercolor painting" in sp
+
+
+def test_video_and_shorts_prompts_forbid_people_in_images():
+    """잘린·기형 인체 방지 — image_prompt에 사람 금지·사물 위주 지시가 있어야 한다."""
+    from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
+    for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
+        assert "사람" in sp and "절대 넣지 않습니다" in sp
+        assert "정물" in sp  # 사물·풍경·정물 위주 대안 제시
