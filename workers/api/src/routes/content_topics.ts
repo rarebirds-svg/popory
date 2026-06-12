@@ -53,6 +53,10 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
       }
     }
     await c.env.DB.batch(stmts);
+    // 같은 제목의 pending 추천이 있으면 registered로 동기화(부가 — 실패 무시).
+    await c.env.DB.prepare(
+      "UPDATE content_recommendations SET status='registered', updated_at=? WHERE owner_sub=? AND title=? AND status='pending'",
+    ).bind(now, u.sub, topic).run().catch(() => {});
     return c.json({ topic_id: topicId, job_ids: jobIds }, 201);
   });
 
