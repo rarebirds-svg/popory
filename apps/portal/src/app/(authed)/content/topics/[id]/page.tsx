@@ -7,6 +7,7 @@ import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
 import { StartJobButton } from "./StartJobButton";
 import { TopicAutoRefresh } from "./TopicAutoRefresh";
+import { AddPlatformForm } from "./AddPlatformForm";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -59,6 +60,12 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+async function fetchProfiles(cookie: string): Promise<{ id: string; name: string }[]> {
+  const res = await fetch(`${API_BASE}/api/content/style-profiles`, { headers: { cookie }, cache: "no-store" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { profiles: { id: string; name: string }[] }).profiles;
+}
+
 export default async function TopicDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) redirect("/");
@@ -68,6 +75,7 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ id
   if (res.status === 404) notFound();
   if (!res.ok) throw new Error(`topic ${res.status}`);
   const topic = (await res.json()) as TopicDetail;
+  const profiles = await fetchProfiles(cookie);
 
   const hasActive = topic.jobs.some((j) => j.status === "queued" || j.status === "running");
 
@@ -117,6 +125,12 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ id
             </div>
           ))}
         </div>
+
+        <AddPlatformForm
+          topicId={topic.id}
+          existingPlatforms={topic.jobs.map((j) => j.platform)}
+          profiles={profiles}
+        />
       </main>
     </div>
   );
