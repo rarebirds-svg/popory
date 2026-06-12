@@ -176,11 +176,11 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         ])
         clips.append(clip)
 
-    durations = [_duration(c) for c in clips]
     out = work / "out.mp4"
     if len(clips) == 1:
         shutil.copy(clips[0], out)
         return out
+    durations = [_duration(c) for c in clips]
     graph, vlabel, alabel = _xfade_graph(durations)
     cmd = [FFMPEG_BIN, "-y"]
     for c in clips:
