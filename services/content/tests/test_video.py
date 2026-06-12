@@ -67,6 +67,20 @@ def test_xfade_graph_single_clip_is_empty():
     assert graph == "" and vlabel == "0:v" and alabel == "0:a"
 
 
+def test_pick_bgm_none_when_empty(tmp_path):
+    from popory_content.video import _pick_bgm
+    assert _pick_bgm(tmp_path, "job1") is None
+
+
+def test_pick_bgm_deterministic(tmp_path):
+    from popory_content.video import _pick_bgm
+    (tmp_path / "a.mp3").write_bytes(b"x")
+    (tmp_path / "b.mp3").write_bytes(b"y")
+    first = _pick_bgm(tmp_path, "job1")
+    assert first is not None
+    assert first == _pick_bgm(tmp_path, "job1")  # 같은 job_id → 같은 선택
+
+
 @pytest.mark.skipif(not _HAS_TOOLS, reason="ffmpeg/say/폰트 없음 (CI 등)")
 def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
     import popory_content.video as v

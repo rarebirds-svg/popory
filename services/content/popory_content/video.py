@@ -2,6 +2,7 @@
 import shutil
 import subprocess
 import textwrap
+import zlib
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ BG = (11, 31, 58)
 HEAD_COLOR = (255, 255, 255)
 BODY_COLOR = (223, 231, 245)
 TMP = Path("/tmp")
+BGM_DIR = Path(__file__).resolve().parent.parent / "assets" / "bgm"
 
 
 class VideoError(Exception):
@@ -137,6 +139,35 @@ def _xfade_graph(durations: list[float], td: float = 0.4) -> tuple[str, str, str
     return ";".join(parts), v_prev, a_prev
 
 
+def _pick_bgm(bgm_dir: Path, job_id: str) -> Path | None:
+    """assets/bgm/*.mp3 중 job_id로 결정적 선택. 없으면 None(BGM 생략)."""
+    if not bgm_dir.is_dir():
+        return None
+    files = sorted(bgm_dir.glob("*.mp3"))
+    if not files:
+        return None
+    return files[zlib.crc32(job_id.encode()) % len(files)]
+
+
+def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
+    """loudnorm(-14 LUFS) + (BGM 있으면) amix. 비디오는 copy."""
+    if bgm:
+        cmd = [
+            FFMPEG_BIN, "-y", "-i", str(src), "-stream_loop", "-1", "-i", str(bgm),
+            "-filter_complex",
+            "[1:a]volume=0.15[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0[mix];"
+            "[mix]loudnorm=I=-14:TP=-1.5:LRA=11[a]",
+            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", str(out),
+        ]
+    else:
+        cmd = [
+            FFMPEG_BIN, "-y", "-i", str(src),
+            "-filter_complex", "[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[a]",
+            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", str(out),
+        ]
+    _run(cmd)
+
+
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False) -> Path:
@@ -176,21 +207,23 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         ])
         clips.append(clip)
 
-    out = work / "out.mp4"
+    joined = work / "joined.mp4"
     if len(clips) == 1:
-        shutil.copy(clips[0], out)
-        return out
-    durations = [_duration(c) for c in clips]
-    graph, vlabel, alabel = _xfade_graph(durations)
-    cmd = [FFMPEG_BIN, "-y"]
-    for c in clips:
-        cmd += ["-i", str(c)]
-    cmd += [
-        "-filter_complex", graph,
-        "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", str(out),
-    ]
-    _run(cmd)
+        shutil.copy(clips[0], joined)
+    else:
+        durations = [_duration(c) for c in clips]
+        graph, vlabel, alabel = _xfade_graph(durations)
+        cmd = [FFMPEG_BIN, "-y"]
+        for c in clips:
+            cmd += ["-i", str(c)]
+        cmd += [
+            "-filter_complex", graph,
+            "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", str(joined),
+        ]
+        _run(cmd)
+    out = work / "out.mp4"
+    _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id))
     return out
 
 
