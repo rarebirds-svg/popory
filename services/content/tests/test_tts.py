@@ -36,6 +36,15 @@ def test_synthesize_uses_voice(monkeypatch):
     assert "ko-KR-Neural2-C" in (body if isinstance(body, str) else body.decode())
 
 
+def test_split_for_pauses_strips_literal_brackets():
+    from popory_content.tts import _split_for_pauses
+    out = _split_for_pauses("[단독] 첫 문장입니다. 둘째 문장이에요.")
+    # 내레이션의 리터럴 대괄호는 제거되고, 문장 사이 pause 마크업만 남는다
+    assert "[단독]" not in out
+    assert "단독 첫 문장입니다." in out
+    assert "[pause short]" in out  # 문장 구분 pause는 유지
+
+
 def test_split_for_pauses_inserts_pause_markup():
     from popory_content.tts import _split_for_pauses
     out = _split_for_pauses("첫째 문장입니다. 둘째 문장이에요!")

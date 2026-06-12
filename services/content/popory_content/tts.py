@@ -12,7 +12,9 @@ _SENT = re.compile(r"(?<=[.?!])\s+")
 
 
 def _split_for_pauses(text: str) -> str:
-    """문장 사이에 Chirp3-HD 네이티브 [pause short] 마크업을 끼워 호흡을 만든다."""
+    """문장 사이에 Chirp3-HD 네이티브 [pause short] 마크업을 끼워 호흡을 만든다.
+    리터럴 대괄호는 마크업 오인을 막기 위해 제거한다."""
+    text = text.replace("[", "").replace("]", "")
     parts = [p.strip() for p in _SENT.split(text.strip()) if p.strip()]
     return " [pause short] ".join(parts) if parts else text.strip()
 
