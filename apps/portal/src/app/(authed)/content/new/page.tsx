@@ -18,11 +18,12 @@ async function fetchProfiles(cookie: string): Promise<StyleProfile[]> {
   return profiles;
 }
 
-export default async function NewJobPage() {
+export default async function NewJobPage({ searchParams }: { searchParams: Promise<{ topic?: string }> }) {
   const user = await getCurrentUser();
   if (!user) redirect("/");
   const cookie = (await headers()).get("cookie") ?? "";
   const profiles = await fetchProfiles(cookie);
+  const { topic } = await searchParams;
 
   return (
     <div>
@@ -30,7 +31,7 @@ export default async function NewJobPage() {
       <main className="mx-auto max-w-2xl px-4 py-10">
         <Kicker>새 작업</Kicker>
         <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">컨텐츠 만들기</h1>
-        <NewJobForm profiles={profiles} />
+        <NewJobForm profiles={profiles} initialTopic={topic ?? ""} />
       </main>
     </div>
   );

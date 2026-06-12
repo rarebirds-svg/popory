@@ -10,13 +10,13 @@ const CHECK_LABEL = "flex items-center gap-2 cursor-pointer text-sm text-popory-
 interface StyleProfile { id: string; name: string; }
 interface SourceInput { id: string; url: string; note: string; }
 
-export function NewJobForm({ profiles }: { profiles: StyleProfile[] }) {
+export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StyleProfile[]; initialTopic?: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [topic, setTopic] = useState("");
+  const [topic, setTopic] = useState(initialTopic);
   const [styleId, setStyleId] = useState("");
   const [sources, setSources] = useState<SourceInput[]>([]);
 
