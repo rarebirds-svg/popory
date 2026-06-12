@@ -3,7 +3,7 @@ import json
 
 SCENE_COUNT = {"3": 5, "5": 8, "7": 12, "10": 16}
 SHORT_SCENE_COUNT = {"15": 3, "30": 5, "60": 8}
-VOICE = {"female-calm": "ko-KR-Neural2-A", "female-bright": "ko-KR-Neural2-B", "male": "ko-KR-Neural2-C"}
+VOICE = {"female-calm": "ko-KR-Chirp3-HD-Aoede", "female-bright": "ko-KR-Chirp3-HD-Leda", "male": "ko-KR-Chirp3-HD-Charon"}
 STYLE = {
     "photo": "photorealistic, cinematic",
     "illust": "digital illustration, clean",

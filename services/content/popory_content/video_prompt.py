@@ -14,6 +14,7 @@ def _rules(scene_count: int, image_style_kw: str) -> str:
 - 영상은 장면(scene) 약 {scene_count}개로 구성합니다.
 - 각 장면은 caption(화면에 크게 띄울 짧은 헤드라인, 16자 이내 핵심 단어 위주)과 narration(그 장면에서 읽어줄 내레이션, 2~4문장)으로 이뤄집니다.
 - 각 장면에 image_prompt(그 장면을 묘사하는 영어 이미지 생성 프롬프트, 한 문장. {image_style_kw} 스타일이며 이미지 안에 글자/텍스트는 넣지 않습니다)도 포함합니다.
+- 모든 장면의 image_prompt는 색감·조명·분위기를 일관되게 유지해 한 영상처럼 보이게 합니다(같은 {image_style_kw} 톤 유지).
 - 도입(후킹) → 본문 → 마무리(구독 유도) 흐름.
 - 자연스러운 한국어 구어체. 문장은 마침표로 끝냅니다.
 
@@ -68,6 +69,7 @@ def _shorts_rules(scene_count: int, image_style_kw: str) -> str:
 - 세로형(9:16) 화면에 최적화합니다.
 - 각 장면: caption(화면 헤드라인, 10자 이내), narration(1~2문장, 짧고 강렬하게).
 - 각 장면에 image_prompt(영어, {image_style_kw} 스타일, 글자 없음)도 포함합니다.
+- 모든 장면의 image_prompt는 색감·조명·분위기를 일관되게 유지합니다(같은 {image_style_kw} 톤).
 - 첫 장면에서 강렬하게 후킹. 마지막 장면에서 팔로우 유도.
 - 자연스러운 한국어 구어체.
 

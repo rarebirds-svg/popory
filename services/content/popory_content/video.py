@@ -1,8 +1,8 @@
 # 영상 생성 — claude 대본(generate_scenes) + macOS say + Pillow 텍스트카드 + ffmpeg 슬라이드쇼(render_video).
-import re
 import shutil
 import subprocess
 import textwrap
+import zlib
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ BG = (11, 31, 58)
 HEAD_COLOR = (255, 255, 255)
 BODY_COLOR = (223, 231, 245)
 TMP = Path("/tmp")
+BGM_DIR = Path(__file__).resolve().parent.parent / "assets" / "bgm"
 
 
 class VideoError(Exception):
@@ -106,15 +107,71 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
     img.save(out_png)
 
 
-def _split_sentences(text: str) -> list[str]:
-    parts = re.split(r"(?<=[.?!])\s*", text.strip())
-    return [p.strip() for p in parts if p.strip()]
+def _zoompan_filter(dur: float, portrait: bool = False) -> str:
+    """정지 이미지에 느린 줌인(켄번스). 입력을 1.2배로 키워 떨림을 줄인다."""
+    w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
+    frames = max(1, round(dur * 30))
+    up_w, up_h = int(w * 1.2), int(h * 1.2)
+    return (
+        f"scale={up_w}:{up_h},"
+        f"zoompan=z='min(zoom+0.0006,1.12)':d={frames}"
+        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,format=yuv420p"
+    )
+
+
+def _xfade_graph(durations: list[float], td: float = 0.4) -> tuple[str, str, str]:
+    """클립 길이 배열로 xfade/acrossfade filter_complex 그래프를 만든다.
+    반환: (filter_complex 문자열, 최종 비디오 라벨, 최종 오디오 라벨)."""
+    if len(durations) <= 1:
+        return "", "0:v", "0:a"
+    parts: list[str] = []
+    v_prev, a_prev = "0:v", "0:a"
+    total = durations[0]
+    for i in range(1, len(durations)):
+        off = total - td
+        v_out, a_out = f"v{i}", f"a{i}"
+        parts.append(
+            f"[{v_prev}][{i}:v]xfade=transition=fade:duration={td}:offset={off:.3f}[{v_out}]"
+        )
+        parts.append(f"[{a_prev}][{i}:a]acrossfade=d={td}[{a_out}]")
+        v_prev, a_prev = v_out, a_out
+        total += durations[i] - td
+    return ";".join(parts), v_prev, a_prev
+
+
+def _pick_bgm(bgm_dir: Path, job_id: str) -> Path | None:
+    """assets/bgm/*.mp3 중 job_id로 결정적 선택. 없으면 None(BGM 생략)."""
+    if not bgm_dir.is_dir():
+        return None
+    files = sorted(bgm_dir.glob("*.mp3"))
+    if not files:
+        return None
+    return files[zlib.crc32(job_id.encode()) % len(files)]
+
+
+def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
+    """loudnorm(-14 LUFS) + (BGM 있으면) amix. 비디오는 copy."""
+    if bgm:
+        cmd = [
+            FFMPEG_BIN, "-y", "-i", str(src), "-stream_loop", "-1", "-i", str(bgm),
+            "-filter_complex",
+            "[1:a]volume=0.15[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0[mix];"
+            "[mix]loudnorm=I=-14:TP=-1.5:LRA=11[a]",
+            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", str(out),
+        ]
+    else:
+        cmd = [
+            FFMPEG_BIN, "-y", "-i", str(src),
+            "-filter_complex", "[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[a]",
+            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", str(out),
+        ]
+    _run(cmd)
 
 
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
-                 image_fetcher: Any = None, voice: str = "ko-KR-Neural2-A",
+                 image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False) -> Path:
-    """장면→문장별 클립(같은 배경·제목, 하단 자막 교체)→concat MP4."""
+    """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → xfade 합산 후 loudnorm 마스터 MP4."""
     if not Path(FONT_PATH).exists():
         raise VideoError(f"한국어 폰트 없음: {FONT_PATH}")
     work = TMP / f"video_{job_id}"
@@ -122,6 +179,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     clips: list[Path] = []
     for i, scene in enumerate(scenes):
         caption = str(scene["caption"]).strip()
+        narration = str(scene["narration"]).strip() or " "
         bg_bytes = None
         prompt = scene.get("image_prompt")
         if image_fetcher and prompt:
@@ -129,37 +187,50 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                 bg_bytes = image_fetcher(prompt)
             except Exception:  # noqa: BLE001 — 이미지 실패는 단색 폴백
                 bg_bytes = None
-        sentences = _split_sentences(str(scene["narration"])) or [str(scene["narration"]).strip() or " "]
-        for j, sent in enumerate(sentences):
-            audio_bytes = synthesize(sent, voice=voice)
-            if audio_bytes:
-                audio = work / f"{i}_{j}.mp3"
-                audio.write_bytes(audio_bytes)
-            else:
-                audio = work / f"{i}_{j}.aiff"
-                _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), sent])
-            dur = _duration(audio)
-            png = work / f"{i}_{j}.png"
-            _render_card(caption, sent, png, bg_image_bytes=bg_bytes, portrait=portrait)
-            clip = work / f"{i}_{j}.mp4"
-            _run([
-                FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(audio),
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{dur:.3f}",
-                "-c:a", "aac", "-shortest", str(clip),
-            ])
-            clips.append(clip)
+        audio_bytes = synthesize(narration, voice=voice)
+        if audio_bytes:
+            audio = work / f"{i}.mp3"
+            audio.write_bytes(audio_bytes)
+        else:
+            audio = work / f"{i}.aiff"
+            _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), narration])
+        dur = _duration(audio)
+        png = work / f"{i}.png"
+        _render_card(caption, "", png, bg_image_bytes=bg_bytes, portrait=portrait)
+        clip = work / f"scene_{i}.mp4"
+        _run([
+            FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(audio),
+            "-filter_complex", f"[0:v]{_zoompan_filter(dur, portrait)}[v]",
+            "-map", "[v]", "-map", "1:a",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{dur:.3f}",
+            "-c:a", "aac", "-shortest", str(clip),
+        ])
+        clips.append(clip)
 
-    concat = work / "concat.txt"
-    concat.write_text("".join(f"file '{p}'\n" for p in clips), encoding="utf-8")
+    joined = work / "joined.mp4"
+    if len(clips) == 1:
+        shutil.copy(clips[0], joined)
+    else:
+        durations = [_duration(c) for c in clips]
+        graph, vlabel, alabel = _xfade_graph(durations)
+        cmd = [FFMPEG_BIN, "-y"]
+        for c in clips:
+            cmd += ["-i", str(c)]
+        cmd += [
+            "-filter_complex", graph,
+            "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", str(joined),
+        ]
+        _run(cmd)
     out = work / "out.mp4"
-    _run([FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c", "copy", str(out)])
+    _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id))
     return out
 
 
 def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
                job_id: str = "adhoc", image_fetcher: Any = None, scene_count: int = 8,
                image_style_kw: str = "photorealistic, cinematic",
-               voice: str = "ko-KR-Neural2-A",
+               voice: str = "ko-KR-Chirp3-HD-Aoede",
                portrait: bool = False,
                system_prompt_builder=None, user_msg_builder=None) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
     scenes, meta = generate_scenes(topic=topic, sources=sources, style_samples=style_samples,

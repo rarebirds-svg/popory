@@ -51,3 +51,10 @@ def test_short_scene_count_keys():
     assert SHORT_SCENE_COUNT["15"] == 3
     assert SHORT_SCENE_COUNT["30"] == 5
     assert SHORT_SCENE_COUNT["60"] == 8
+
+
+def test_voice_map_uses_chirp3hd():
+    from popory_content.options import VOICE
+    assert VOICE["female-calm"] == "ko-KR-Chirp3-HD-Aoede"
+    assert VOICE["female-bright"] == "ko-KR-Chirp3-HD-Leda"
+    assert VOICE["male"] == "ko-KR-Chirp3-HD-Charon"
