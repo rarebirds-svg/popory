@@ -46,9 +46,21 @@ def test_render_card_landscape_creates_correct_size(tmp_path):
 def test_zoompan_filter_landscape_and_portrait():
     from popory_content.video import _zoompan_filter
     fl = _zoompan_filter(3.0, portrait=False)
-    assert "zoompan" in fl and "s=1920x1080" in fl and "fps=30" in fl
+    # 2배 수퍼샘플 캔버스에서 zoompan 후 최종 1920x1080으로 다운스케일
+    assert "zoompan" in fl and "fps=30" in fl
+    assert "s=3840x2160" in fl and "scale=1920:1080" in fl
     fp = _zoompan_filter(3.0, portrait=True)
-    assert "s=1080x1920" in fp
+    assert "s=2160x3840" in fp and "scale=1080:1920" in fp
+
+
+def test_zoompan_zoom_spans_whole_scene():
+    from popory_content.video import _zoompan_filter
+    # 줌 증분 = (1.12-1.0)/frames. 3초=90프레임 → step≈0.001333
+    f = _zoompan_filter(3.0)
+    assert "zoom+0.001333" in f
+    # 24초=720프레임 → 훨씬 작은 증분(장면 내내 천천히)
+    f_long = _zoompan_filter(24.0)
+    assert "zoom+0.000167" in f_long
 
 
 def test_xfade_graph_offsets_and_labels():

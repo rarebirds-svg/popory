@@ -108,14 +108,19 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
 
 
 def _zoompan_filter(dur: float, portrait: bool = False) -> str:
-    """정지 이미지에 느린 줌인(켄번스). 입력을 1.2배로 키워 떨림을 줄인다."""
+    """정지 이미지에 장면 전체에 걸친 느린 줌인(켄번스).
+    zoompan을 2배 해상도(수퍼샘플)로 돌린 뒤 다운스케일해 정수 pan 떨림을 서브픽셀로 묻는다.
+    줌 증분을 장면 길이에 맞춰 끝에서 max에 닿게 해, 긴 장면에서 중간에 줌이 멈추지 않게 한다."""
     w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
     frames = max(1, round(dur * 30))
-    up_w, up_h = int(w * 1.2), int(h * 1.2)
+    bw, bh = w * 2, h * 2  # 수퍼샘플 캔버스(떨림 제거의 핵심)
+    zmax = 1.12
+    step = (zmax - 1.0) / frames  # 장면 전체에 걸쳐 균일하게 줌
     return (
-        f"scale={up_w}:{up_h},"
-        f"zoompan=z='min(zoom+0.0006,1.12)':d={frames}"
-        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,format=yuv420p"
+        f"scale={bw}:{bh},"
+        f"zoompan=z='min(zoom+{step:.6f},{zmax})':d={frames}"
+        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={bw}x{bh}:fps=30,"
+        f"scale={w}:{h}:flags=bicubic,format=yuv420p"
     )
 
 
