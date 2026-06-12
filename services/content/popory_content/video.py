@@ -171,7 +171,7 @@ def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False) -> Path:
-    """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → concat MP4."""
+    """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → xfade 합산 후 loudnorm 마스터 MP4."""
     if not Path(FONT_PATH).exists():
         raise VideoError(f"한국어 폰트 없음: {FONT_PATH}")
     work = TMP / f"video_{job_id}"
