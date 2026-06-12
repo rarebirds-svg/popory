@@ -23,12 +23,6 @@ def test_render_card_with_and_without_bg(tmp_path):
     assert p2.exists() and p2.stat().st_size > 1000
 
 
-def test_split_sentences():
-    from popory_content.video import _split_sentences
-    out = _split_sentences("첫째 문장입니다. 둘째 문장이에요! 셋째는요?")
-    assert out == ["첫째 문장입니다.", "둘째 문장이에요!", "셋째는요?"]
-
-
 def test_render_card_portrait_creates_correct_size(tmp_path):
     """portrait=True 시 1080×1920 PNG가 생성된다."""
     from popory_content.video import _render_card
@@ -50,11 +44,16 @@ def test_render_card_landscape_creates_correct_size(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_TOOLS, reason="ffmpeg/say/폰트 없음 (CI 등)")
-def test_render_two_scenes_makes_mp4():
+def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
+    import popory_content.video as v
+    monkeypatch.setattr(v, "TMP", tmp_path)
     scenes = [
-        {"caption": "테스트 장면 하나", "narration": "이것은 첫 번째 장면입니다."},
-        {"caption": "테스트 장면 둘", "narration": "이것은 두 번째 장면입니다."},
+        {"caption": "테스트 장면 하나", "narration": "이것은 첫 문장입니다. 두 번째 문장이에요."},
+        {"caption": "테스트 장면 둘", "narration": "이것은 다른 장면입니다. 마지막 문장입니다."},
     ]
     out = render_video(scenes, job_id="smoketest")
-    assert out.exists()
-    assert out.stat().st_size > 10000  # 비어있지 않은 MP4
+    assert out.exists() and out.stat().st_size > 10000
+    # 장면당 클립 1개(문장 분할 안 함): scene_*.mp4 가 정확히 2개
+    work = tmp_path / "video_smoketest"
+    clips = sorted(work.glob("scene_*.mp4"))
+    assert len(clips) == 2

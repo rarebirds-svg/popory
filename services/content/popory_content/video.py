@@ -1,5 +1,4 @@
 # 영상 생성 — claude 대본(generate_scenes) + macOS say + Pillow 텍스트카드 + ffmpeg 슬라이드쇼(render_video).
-import re
 import shutil
 import subprocess
 import textwrap
@@ -106,15 +105,10 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
     img.save(out_png)
 
 
-def _split_sentences(text: str) -> list[str]:
-    parts = re.split(r"(?<=[.?!])\s*", text.strip())
-    return [p.strip() for p in parts if p.strip()]
-
-
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False) -> Path:
-    """장면→문장별 클립(같은 배경·제목, 하단 자막 교체)→concat MP4."""
+    """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → concat MP4."""
     if not Path(FONT_PATH).exists():
         raise VideoError(f"한국어 폰트 없음: {FONT_PATH}")
     work = TMP / f"video_{job_id}"
@@ -122,6 +116,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     clips: list[Path] = []
     for i, scene in enumerate(scenes):
         caption = str(scene["caption"]).strip()
+        narration = str(scene["narration"]).strip() or " "
         bg_bytes = None
         prompt = scene.get("image_prompt")
         if image_fetcher and prompt:
@@ -129,25 +124,23 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                 bg_bytes = image_fetcher(prompt)
             except Exception:  # noqa: BLE001 — 이미지 실패는 단색 폴백
                 bg_bytes = None
-        sentences = _split_sentences(str(scene["narration"])) or [str(scene["narration"]).strip() or " "]
-        for j, sent in enumerate(sentences):
-            audio_bytes = synthesize(sent, voice=voice)
-            if audio_bytes:
-                audio = work / f"{i}_{j}.mp3"
-                audio.write_bytes(audio_bytes)
-            else:
-                audio = work / f"{i}_{j}.aiff"
-                _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), sent])
-            dur = _duration(audio)
-            png = work / f"{i}_{j}.png"
-            _render_card(caption, sent, png, bg_image_bytes=bg_bytes, portrait=portrait)
-            clip = work / f"{i}_{j}.mp4"
-            _run([
-                FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(audio),
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{dur:.3f}",
-                "-c:a", "aac", "-shortest", str(clip),
-            ])
-            clips.append(clip)
+        audio_bytes = synthesize(narration, voice=voice)
+        if audio_bytes:
+            audio = work / f"{i}.mp3"
+            audio.write_bytes(audio_bytes)
+        else:
+            audio = work / f"{i}.aiff"
+            _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), narration])
+        dur = _duration(audio)
+        png = work / f"{i}.png"
+        _render_card(caption, "", png, bg_image_bytes=bg_bytes, portrait=portrait)
+        clip = work / f"scene_{i}.mp4"
+        _run([
+            FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(audio),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{dur:.3f}",
+            "-c:a", "aac", "-shortest", str(clip),
+        ])
+        clips.append(clip)
 
     concat = work / "concat.txt"
     concat.write_text("".join(f"file '{p}'\n" for p in clips), encoding="utf-8")
