@@ -62,3 +62,9 @@ export const TopicCreateSchema = z.object({
 });
 export type TopicCreate = z.infer<typeof TopicCreateSchema>;
 export type TopicPlatform = z.infer<typeof TopicPlatformSchema>;
+
+export const TopicAddJobsSchema = z.object({
+  platforms: z.array(TopicPlatformSchema).min(1).max(5),
+  style_profile_id: z.string().max(64).optional(),
+});
+export type TopicAddJobs = z.infer<typeof TopicAddJobsSchema>;
