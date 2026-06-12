@@ -55,7 +55,7 @@ async function insertItems(db: Env["DB"], ownerSub: string, items: Recommendatio
     const key = it.title.trim();
     if (!key || seen.has(key)) { skippedTitles.push(it.title); continue; }
     seen.add(key);
-    fresh.push(it);
+    fresh.push({ ...it, title: key });
   }
   if (fresh.length > 0) {
     await db.batch(fresh.map((it) =>
@@ -84,14 +84,15 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
     const u = c.get("user")!;
     const parsed = RecommendationCreateSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text("bad request", 400);
-    const dup = await c.env.DB.prepare("SELECT id FROM content_recommendations WHERE owner_sub=? AND title=?").bind(u.sub, parsed.data.title.trim()).first();
+    const title = parsed.data.title.trim();
+    const dup = await c.env.DB.prepare("SELECT id FROM content_recommendations WHERE owner_sub=? AND title=?").bind(u.sub, title).first();
     if (dup) return c.text("duplicate", 409);
     const id = ulid();
     const now = Math.floor(Date.now() / 1000);
     await c.env.DB.prepare(
       `INSERT INTO content_recommendations (id, owner_sub, title, author, recommender, status, note, created_at, updated_at)
        VALUES (?,?,?,?, '대공', 'pending', ?, ?, ?)`,
-    ).bind(id, u.sub, parsed.data.title, parsed.data.author ?? null, parsed.data.note ?? null, now, now).run();
+    ).bind(id, u.sub, title, parsed.data.author ?? null, parsed.data.note ?? null, now, now).run();
     return c.json({ id }, 201);
   });
 
@@ -136,8 +137,10 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
     vals.push(id, u.sub);
     try {
       await c.env.DB.prepare(`UPDATE content_recommendations SET ${sets.join(", ")} WHERE id=? AND owner_sub=?`).bind(...vals).run();
-    } catch {
-      return c.text("duplicate", 409); // UNIQUE(owner_sub,title) 충돌
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/UNIQUE|constraint/i.test(msg)) return c.text("duplicate", 409); // UNIQUE(owner_sub,title) 충돌
+      throw e;
     }
     return c.body(null, 204);
   });
