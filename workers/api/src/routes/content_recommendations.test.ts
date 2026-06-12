@@ -2,7 +2,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
 import { ensureActiveKey } from "../db/signing_keys";
-import { signSession } from "@popory/auth";
+import { signSession, signAreaToken } from "@popory/auth";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -88,5 +88,69 @@ describe("POST /api/content/recommendations/bulk", () => {
     expect(out.skipped).toBe(2); // 이미있는책(토픽), 추천중복(추천)
     const ones = await env.DB.prepare("SELECT author FROM content_recommendations WHERE title=?").bind("원씽").first<{ author: string }>();
     expect(ones?.author).toBe("게리 켈러");
+  });
+});
+
+async function serviceToken() {
+  const k = await ensureActiveKey(env.DB);
+  // 실제 동작 패턴은 content_instagram_upload.test.ts:21 참조 — aud 필수.
+  return signAreaToken({ privateJwk: k.privateJwk, kid: k.kid, claims: { sub: "services-content", email: "svc@e.com", area: "content-recommend", aud: "popory-portal" } });
+}
+
+describe("POST /api/content/recommendations/service-bulk", () => {
+  it("서비스 토큰으로 owner_sub 지정 등록 — recommender=시스템", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/service-bulk", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", items: [{ title: "넥서스", author: "유발 하라리" }] }),
+    });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT recommender FROM content_recommendations WHERE title=?").bind("넥서스").first<{ recommender: string }>();
+    expect(row?.recommender).toBe("시스템");
+  });
+
+  it("서비스 토큰 없으면 401", async () => {
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/service-bulk", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", items: [{ title: "x" }] }),
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("PATCH/DELETE/dismiss /api/content/recommendations/:id", () => {
+  async function makeOne(ck: string, title = "원본") {
+    await SELF.fetch("https://e.com/api/content/recommendations", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ title }) });
+    return (await env.DB.prepare("SELECT id FROM content_recommendations WHERE title=?").bind(title).first<{ id: string }>())!.id;
+  }
+
+  it("PATCH로 제목·저자 수정", async () => {
+    const ck = await userCookie();
+    const id = await makeOne(ck);
+    const res = await SELF.fetch(`https://e.com/api/content/recommendations/${id}`, {
+      method: "PATCH", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ title: "수정됨", author: "새저자" }),
+    });
+    expect(res.status).toBe(204);
+    const row = await env.DB.prepare("SELECT title, author FROM content_recommendations WHERE id=?").bind(id).first<{ title: string; author: string }>();
+    expect(row?.title).toBe("수정됨");
+    expect(row?.author).toBe("새저자");
+  });
+
+  it("DELETE로 물리 삭제", async () => {
+    const ck = await userCookie();
+    const id = await makeOne(ck);
+    const res = await SELF.fetch(`https://e.com/api/content/recommendations/${id}`, { method: "DELETE", headers: { cookie: ck } });
+    expect(res.status).toBe(204);
+    const row = await env.DB.prepare("SELECT id FROM content_recommendations WHERE id=?").bind(id).first();
+    expect(row).toBeNull();
+  });
+
+  it("타인 항목 수정/삭제는 404", async () => {
+    const ck1 = await userCookie("u1", "u1@e.com");
+    const id = await makeOne(ck1);
+    const ck2 = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://e.com/api/content/recommendations/${id}`, { method: "DELETE", headers: { cookie: ck2 } });
+    expect(res.status).toBe(404);
   });
 });
