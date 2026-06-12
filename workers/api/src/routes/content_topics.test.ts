@@ -239,4 +239,18 @@ describe("POST /api/content/topics/:id/jobs", () => {
     });
     expect(res.status).toBe(404);
   });
+
+  it("같은 요청 내 중복 플랫폼은 1개만 추가한다", async () => {
+    const ck = await userCookie();
+    const topicId = await makeTopic(ck, [{ platform: "naver-blog" }]);
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topicId}/jobs`, {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ platforms: [{ platform: "youtube" }, { platform: "youtube" }] }),
+    });
+    const out = await res.json<{ added_job_ids: string[]; skipped_platforms: string[] }>();
+    expect(out.added_job_ids).toHaveLength(1);
+    expect(out.skipped_platforms).toContain("youtube");
+    const { results } = await env.DB.prepare("SELECT platform FROM content_jobs WHERE topic_id=? AND platform='youtube'").bind(topicId).all();
+    expect(results).toHaveLength(1);
+  });
 });

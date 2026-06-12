@@ -97,7 +97,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     const topic = await c.env.DB.prepare("SELECT id, owner_sub, topic FROM content_topics WHERE id=?")
       .bind(topicId).first<{ id: string; owner_sub: string; topic: string }>();
     if (!topic || topic.owner_sub !== u.sub) return c.text("not found", 404);
-    const parsed = TopicAddJobsSchema.safeParse(await c.req.json());
+    const parsed = TopicAddJobsSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text("bad request", 400);
     const { platforms, style_profile_id } = parsed.data;
     if (style_profile_id) {
@@ -110,7 +110,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     ).bind(topicId).all<{ platform: string }>();
     const present = new Set(existing.map((r) => r.platform));
     const now = Math.floor(Date.now() / 1000);
-    const stmts = [];
+    const stmts: D1PreparedStatement[] = [];
     const addedJobIds: string[] = [];
     const skippedPlatforms: string[] = [];
     for (const p of platforms) {
