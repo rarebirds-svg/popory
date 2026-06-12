@@ -25,25 +25,34 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     }
     const topicId = ulid();
     const now = Math.floor(Date.now() / 1000);
-    await c.env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at) VALUES (?,?,?,?)")
-      .bind(topicId, u.sub, topic, now).run();
+    // 주제·작업·소스 INSERT를 batch(암묵적 트랜잭션)로 묶는다 — 중간 실패 시
+    // 전부 롤백되어, 작업 없는 빈 주제가 남는 일이 없게 한다.
+    const stmts = [
+      c.env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at) VALUES (?,?,?,?)")
+        .bind(topicId, u.sub, topic, now),
+    ];
     const jobIds: string[] = [];
     for (const p of platforms) {
       const jobId = ulid();
       const paramsJson = p.options ? JSON.stringify(p.options) : null;
-      await c.env.DB.prepare(
-        `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, topic_id, created_at, updated_at)
-         VALUES (?,?,?,?,'idle',?,?,?,?,?)`,
-      ).bind(jobId, u.sub, topic, p.platform, style_profile_id ?? null, paramsJson, topicId, now, now).run();
+      stmts.push(
+        c.env.DB.prepare(
+          `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, topic_id, created_at, updated_at)
+           VALUES (?,?,?,?,'idle',?,?,?,?,?)`,
+        ).bind(jobId, u.sub, topic, p.platform, style_profile_id ?? null, paramsJson, topicId, now, now),
+      );
       jobIds.push(jobId);
     }
     for (const s of sources ?? []) {
       for (const jobId of jobIds) {
-        await c.env.DB.prepare(
-          `INSERT INTO content_sources (id, job_id, kind, url, title, note, added_by, created_at) VALUES (?,?,'manual',?,?,?,?,?)`,
-        ).bind(ulid(), jobId, s.url ?? null, s.title ?? null, s.note ?? null, u.sub, now).run();
+        stmts.push(
+          c.env.DB.prepare(
+            `INSERT INTO content_sources (id, job_id, kind, url, title, note, added_by, created_at) VALUES (?,?,'manual',?,?,?,?,?)`,
+          ).bind(ulid(), jobId, s.url ?? null, s.title ?? null, s.note ?? null, u.sub, now),
+        );
       }
     }
+    await c.env.DB.batch(stmts);
     return c.json({ topic_id: topicId, job_ids: jobIds }, 201);
   });
 
