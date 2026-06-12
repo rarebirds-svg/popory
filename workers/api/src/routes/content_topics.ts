@@ -1,7 +1,7 @@
 // 주제 그룹 CRUD — 주제 생성 시 플랫폼별 idle 작업 일괄 생성.
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { TopicCreateSchema } from "@popory/types";
+import { TopicCreateSchema, TopicAddJobsSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
 import type { ServiceVars } from "../middleware/service_auth";
 
@@ -88,5 +88,45 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
       "SELECT id, platform, status, params_json, error, updated_at FROM content_jobs WHERE topic_id=? ORDER BY created_at",
     ).bind(row.id).all();
     return c.json({ id: row.id, topic: row.topic, created_at: row.created_at, jobs });
+  });
+
+  app.post("/api/content/topics/:id/jobs", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const topicId = c.req.param("id");
+    const topic = await c.env.DB.prepare("SELECT id, owner_sub, topic FROM content_topics WHERE id=?")
+      .bind(topicId).first<{ id: string; owner_sub: string; topic: string }>();
+    if (!topic || topic.owner_sub !== u.sub) return c.text("not found", 404);
+    const parsed = TopicAddJobsSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.text("bad request", 400);
+    const { platforms, style_profile_id } = parsed.data;
+    if (style_profile_id) {
+      const sp = await c.env.DB.prepare("SELECT id FROM style_profiles WHERE id=? AND owner_sub=?")
+        .bind(style_profile_id, u.sub).first();
+      if (!sp) return c.text("style profile not found", 404);
+    }
+    const { results: existing } = await c.env.DB.prepare(
+      "SELECT DISTINCT platform FROM content_jobs WHERE topic_id=?",
+    ).bind(topicId).all<{ platform: string }>();
+    const present = new Set(existing.map((r) => r.platform));
+    const now = Math.floor(Date.now() / 1000);
+    const stmts: D1PreparedStatement[] = [];
+    const addedJobIds: string[] = [];
+    const skippedPlatforms: string[] = [];
+    for (const p of platforms) {
+      if (present.has(p.platform)) { skippedPlatforms.push(p.platform); continue; }
+      present.add(p.platform); // 같은 요청 내 중복도 1회만
+      const jobId = ulid();
+      const paramsJson = p.options ? JSON.stringify(p.options) : null;
+      stmts.push(
+        c.env.DB.prepare(
+          `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, topic_id, created_at, updated_at)
+           VALUES (?,?,?,?,'idle',?,?,?,?,?)`,
+        ).bind(jobId, u.sub, topic.topic, p.platform, style_profile_id ?? null, paramsJson, topicId, now, now),
+      );
+      addedJobIds.push(jobId);
+    }
+    if (stmts.length > 0) await c.env.DB.batch(stmts);
+    return c.json({ added_job_ids: addedJobIds, skipped_platforms: skippedPlatforms }, 201);
   });
 }
