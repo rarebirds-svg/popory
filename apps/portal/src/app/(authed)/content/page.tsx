@@ -5,6 +5,8 @@ import { headers } from "next/headers";
 import { Header, Kicker } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
+import { RecommendationActions } from "./RecommendationActions";
+import { BulkAddRecommendations } from "./BulkAddRecommendations";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -12,6 +14,7 @@ export const runtime = "edge";
 interface JobSlot { id: string; platform: string; status: string; }
 interface TopicRow { id: string; topic: string; created_at: number; jobs: JobSlot[]; }
 interface LegacyJob { id: string; topic: string; platform: string; status: string; created_at: number; }
+interface Recommendation { id: string; title: string; author: string | null; recommender: string; note: string | null; }
 
 const PLATFORM_SHORT: Record<string, string> = {
   "naver-blog": "블로그",
@@ -41,11 +44,19 @@ async function fetchLegacyJobs(cookie: string): Promise<LegacyJob[]> {
   return ((await res.json()) as { jobs: LegacyJob[] }).jobs;
 }
 
+async function fetchRecommendations(cookie: string): Promise<Recommendation[]> {
+  const res = await fetch(`${API_BASE}/api/content/recommendations`, { headers: { cookie }, cache: "no-store" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { recommendations: Recommendation[] }).recommendations;
+}
+
 export default async function ContentPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/");
   const cookie = (await headers()).get("cookie") ?? "";
-  const [topics, legacyJobs] = await Promise.all([fetchTopics(cookie), fetchLegacyJobs(cookie)]);
+  const [topics, legacyJobs, recommendations] = await Promise.all([
+    fetchTopics(cookie), fetchLegacyJobs(cookie), fetchRecommendations(cookie),
+  ]);
 
   return (
     <div>
@@ -100,6 +111,31 @@ export default async function ContentPage() {
             </ul>
           </details>
         )}
+
+        <section className="mt-12">
+          <div className="flex items-baseline gap-3">
+            <Kicker>추천 컨텐츠</Kicker>
+            <span className="ml-auto"><BulkAddRecommendations /></span>
+          </div>
+          {recommendations.length === 0 ? (
+            <p className="mt-4 text-sm text-popory-muted">아직 추천 컨텐츠가 없습니다.</p>
+          ) : (
+            <ul className="mt-4 divide-y divide-popory-border">
+              {recommendations.map((r) => (
+                <li key={r.id} className="flex items-center gap-3 py-3">
+                  <span className="flex-1 truncate text-sm text-popory-fg">
+                    {r.title}
+                    {r.author && <span className="text-popory-muted"> · {r.author}</span>}
+                  </span>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs ${r.recommender === "대공" ? "border-popory-accent text-popory-accent" : "border-popory-border text-popory-muted"}`}>
+                    {r.recommender}
+                  </span>
+                  <RecommendationActions rec={r} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </main>
     </div>
   );
