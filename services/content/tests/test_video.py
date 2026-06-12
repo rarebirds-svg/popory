@@ -43,6 +43,14 @@ def test_render_card_landscape_creates_correct_size(tmp_path):
     assert img.size == (1920, 1080)
 
 
+def test_zoompan_filter_landscape_and_portrait():
+    from popory_content.video import _zoompan_filter
+    fl = _zoompan_filter(3.0, portrait=False)
+    assert "zoompan" in fl and "s=1920x1080" in fl and "fps=30" in fl
+    fp = _zoompan_filter(3.0, portrait=True)
+    assert "s=1080x1920" in fp
+
+
 @pytest.mark.skipif(not _HAS_TOOLS, reason="ffmpeg/say/폰트 없음 (CI 등)")
 def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
     import popory_content.video as v

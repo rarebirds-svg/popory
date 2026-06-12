@@ -105,6 +105,18 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
     img.save(out_png)
 
 
+def _zoompan_filter(dur: float, portrait: bool = False) -> str:
+    """정지 이미지에 느린 줌인(켄번스). 입력을 1.2배로 키워 떨림을 줄인다."""
+    w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
+    frames = max(1, round(dur * 30))
+    up_w, up_h = int(w * 1.2), int(h * 1.2)
+    return (
+        f"scale={up_w}:{up_h},"
+        f"zoompan=z='min(zoom+0.0006,1.12)':d={frames}"
+        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,format=yuv420p"
+    )
+
+
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False) -> Path:
@@ -137,6 +149,8 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         clip = work / f"scene_{i}.mp4"
         _run([
             FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(audio),
+            "-filter_complex", f"[0:v]{_zoompan_filter(dur, portrait)}[v]",
+            "-map", "[v]", "-map", "1:a",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{dur:.3f}",
             "-c:a", "aac", "-shortest", str(clip),
         ])
