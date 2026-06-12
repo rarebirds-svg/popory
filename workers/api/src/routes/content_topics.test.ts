@@ -60,6 +60,21 @@ describe("POST /api/content/topics", () => {
     expect(row?.status).toBe("registered");
   });
 
+  it("저자가 붙은 제목으로 주제를 만들면 동명(제목만) 추천도 registered로 전환한다", async () => {
+    const ck = await userCookie();
+    // 추천은 제목만 저장됨
+    await SELF.fetch("https://example.com/api/content/recommendations", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ title: "원씽", author: "게리 켈러" }),
+    });
+    // 등록 버튼이 보내는 형식: "제목 - 저자"
+    await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "원씽 - 게리 켈러", platforms: [{ platform: "naver-blog" }] }),
+    });
+    const row = await env.DB.prepare("SELECT status FROM content_recommendations WHERE title=?").bind("원씽").first<{ status: string }>();
+    expect(row?.status).toBe("registered");
+  });
+
   it("미인증 요청 401", async () => {
     const res = await SELF.fetch("https://example.com/api/content/topics", {
       method: "POST", headers: { "content-type": "application/json" },

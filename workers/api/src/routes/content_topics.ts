@@ -54,9 +54,12 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     }
     await c.env.DB.batch(stmts);
     // 같은 제목의 pending 추천이 있으면 registered로 동기화(부가 — 실패 무시).
+    // 등록 버튼은 "제목 - 저자" 형식으로 보내므로, 토픽 원문과 마지막 ' - ' 앞
+    // 제목 부분(추천은 제목만 저장)을 둘 다 매칭해 동명 pending 추천을 전환한다.
+    const recTitle = topic.includes(" - ") ? topic.slice(0, topic.lastIndexOf(" - ")).trim() : topic;
     await c.env.DB.prepare(
-      "UPDATE content_recommendations SET status='registered', updated_at=? WHERE owner_sub=? AND title=? AND status='pending'",
-    ).bind(now, u.sub, topic).run().catch(() => {});
+      "UPDATE content_recommendations SET status='registered', updated_at=? WHERE owner_sub=? AND status='pending' AND (title=? OR title=?)",
+    ).bind(now, u.sub, topic, recTitle).run().catch(() => {});
     return c.json({ topic_id: topicId, job_ids: jobIds }, 201);
   });
 
