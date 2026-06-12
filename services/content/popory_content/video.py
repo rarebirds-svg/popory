@@ -112,7 +112,7 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
-                 image_fetcher: Any = None, voice: str = "ko-KR-Neural2-A",
+                 image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False) -> Path:
     """장면→문장별 클립(같은 배경·제목, 하단 자막 교체)→concat MP4."""
     if not Path(FONT_PATH).exists():
@@ -159,7 +159,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
 def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
                job_id: str = "adhoc", image_fetcher: Any = None, scene_count: int = 8,
                image_style_kw: str = "photorealistic, cinematic",
-               voice: str = "ko-KR-Neural2-A",
+               voice: str = "ko-KR-Chirp3-HD-Aoede",
                portrait: bool = False,
                system_prompt_builder=None, user_msg_builder=None) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
     scenes, meta = generate_scenes(topic=topic, sources=sources, style_samples=style_samples,
