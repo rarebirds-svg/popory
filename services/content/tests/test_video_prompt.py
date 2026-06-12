@@ -48,9 +48,10 @@ def test_system_prompt_demands_consistent_style_suffix():
     assert "watercolor painting" in sp
 
 
-def test_video_and_shorts_prompts_forbid_people_in_images():
-    """잘린·기형 인체 방지 — image_prompt에 사람 금지·사물 위주 지시가 있어야 한다."""
+def test_video_and_shorts_prompts_require_natural_whole_people():
+    """사람은 허용하되 잘리거나 기형이 되지 않게 온전히 표현하도록 지시해야 한다(하드 금지 아님)."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
     for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
-        assert "사람" in sp and "절대 넣지 않습니다" in sp
-        assert "정물" in sp  # 사물·풍경·정물 위주 대안 제시
+        assert "사람이 등장해도 좋되" in sp       # 인물 허용
+        assert "잘리거나 기형이 되지 않게" in sp   # 온전·정상 인체 요구
+        assert "절대 넣지 않습니다" not in sp      # 하드 금지 제거 확인
