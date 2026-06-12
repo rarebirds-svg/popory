@@ -167,3 +167,76 @@ describe("POST /api/content/jobs/:id/start", () => {
     expect(res2.status).toBe(409);
   });
 });
+
+describe("POST /api/content/topics/:id/jobs", () => {
+  async function makeTopic(ck: string, platforms: object[]) {
+    const r = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "추가테스트주제", platforms }),
+    });
+    return (await r.json<{ topic_id: string }>()).topic_id;
+  }
+
+  it("없는 플랫폼을 idle 작업으로 추가한다", async () => {
+    const ck = await userCookie();
+    const topicId = await makeTopic(ck, [{ platform: "naver-blog" }]);
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topicId}/jobs`, {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ platforms: [{ platform: "youtube", options: { length: "5", voice: "male", image_style: "photo" } }] }),
+    });
+    expect(res.status).toBe(201);
+    const out = await res.json<{ added_job_ids: string[]; skipped_platforms: string[] }>();
+    expect(out.added_job_ids).toHaveLength(1);
+    expect(out.skipped_platforms).toEqual([]);
+    const job = await env.DB.prepare("SELECT platform, status, topic_id, params_json FROM content_jobs WHERE id=?").bind(out.added_job_ids[0]).first<{ platform: string; status: string; topic_id: string; params_json: string }>();
+    expect(job?.platform).toBe("youtube");
+    expect(job?.status).toBe("idle");
+    expect(job?.topic_id).toBe(topicId);
+    expect(JSON.parse(job!.params_json).length).toBe("5");
+  });
+
+  it("이미 있는 플랫폼은 skip한다", async () => {
+    const ck = await userCookie();
+    const topicId = await makeTopic(ck, [{ platform: "naver-blog" }]);
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topicId}/jobs`, {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ platforms: [{ platform: "naver-blog" }, { platform: "shorts" }] }),
+    });
+    const out = await res.json<{ added_job_ids: string[]; skipped_platforms: string[] }>();
+    expect(out.added_job_ids).toHaveLength(1); // shorts만 추가
+    expect(out.skipped_platforms).toEqual(["naver-blog"]);
+    const { results } = await env.DB.prepare("SELECT platform FROM content_jobs WHERE topic_id=? ORDER BY platform").bind(topicId).all<{ platform: string }>();
+    expect(results.map((r) => r.platform).sort()).toEqual(["naver-blog", "shorts"]);
+  });
+
+  it("타인 주제에 추가하면 404", async () => {
+    const ck1 = await userCookie("u1", "u1@e.com");
+    const topicId = await makeTopic(ck1, [{ platform: "naver-blog" }]);
+    const ck2 = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topicId}/jobs`, {
+      method: "POST", headers: { cookie: ck2, "content-type": "application/json" },
+      body: JSON.stringify({ platforms: [{ platform: "youtube" }] }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("빈 platforms는 400", async () => {
+    const ck = await userCookie();
+    const topicId = await makeTopic(ck, [{ platform: "naver-blog" }]);
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topicId}/jobs`, {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ platforms: [] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("존재하지 않는 style_profile_id는 404", async () => {
+    const ck = await userCookie();
+    const topicId = await makeTopic(ck, [{ platform: "naver-blog" }]);
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topicId}/jobs`, {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ platforms: [{ platform: "youtube" }], style_profile_id: "nope" }),
+    });
+    expect(res.status).toBe(404);
+  });
+});
