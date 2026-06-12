@@ -38,3 +38,11 @@ def test_build_shorts_user_message_includes_topic():
     msg = build_shorts_user_message("전세사기 예방", [])
     assert "전세사기 예방" in msg
     assert "scenes_json" in msg
+
+
+def test_system_prompt_demands_consistent_style_suffix():
+    from popory_content.video_prompt import build_video_system_prompt
+    sp = build_video_system_prompt([], scene_count=8, image_style_kw="watercolor painting")
+    # 모든 장면이 같은 톤이 되도록 '일관된'/'동일' 류 지시가 image_prompt 규칙에 있어야 한다
+    assert "일관" in sp
+    assert "watercolor painting" in sp
