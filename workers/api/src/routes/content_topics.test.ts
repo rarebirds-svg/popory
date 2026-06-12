@@ -20,6 +20,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_sources");
   await env.DB.exec("DELETE FROM content_jobs");
   await env.DB.exec("DELETE FROM content_topics");
+  await env.DB.exec("DELETE FROM content_recommendations");
 });
 
 describe("POST /api/content/topics", () => {
@@ -44,6 +45,34 @@ describe("POST /api/content/topics", () => {
     const jobs = await env.DB.prepare("SELECT platform, status FROM content_jobs WHERE topic_id=? ORDER BY created_at").bind(topic_id).all<{ platform: string; status: string }>();
     expect(jobs.results.map((j) => j.platform)).toEqual(["naver-blog", "youtube"]);
     expect(jobs.results.every((j) => j.status === "idle")).toBe(true);
+  });
+
+  it("같은 제목의 pending 추천을 registered로 전환한다", async () => {
+    const ck = await userCookie();
+    await SELF.fetch("https://example.com/api/content/recommendations", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ title: "원씽" }),
+    });
+    await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "원씽", platforms: [{ platform: "naver-blog" }] }),
+    });
+    const row = await env.DB.prepare("SELECT status FROM content_recommendations WHERE title=?").bind("원씽").first<{ status: string }>();
+    expect(row?.status).toBe("registered");
+  });
+
+  it("저자가 붙은 제목으로 주제를 만들면 동명(제목만) 추천도 registered로 전환한다", async () => {
+    const ck = await userCookie();
+    // 추천은 제목만 저장됨
+    await SELF.fetch("https://example.com/api/content/recommendations", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ title: "원씽", author: "게리 켈러" }),
+    });
+    // 등록 버튼이 보내는 형식: "제목 - 저자"
+    await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "원씽 - 게리 켈러", platforms: [{ platform: "naver-blog" }] }),
+    });
+    const row = await env.DB.prepare("SELECT status FROM content_recommendations WHERE title=?").bind("원씽").first<{ status: string }>();
+    expect(row?.status).toBe("registered");
   });
 
   it("미인증 요청 401", async () => {
