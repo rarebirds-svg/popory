@@ -935,8 +935,10 @@ def _client() -> PortalClient:
     key_file = os.environ["POPORY_CONTENT_KEY_FILE"]
     base = os.environ["POPORY_PORTAL_API_BASE"]
     material = KeyMaterial.load(Path(key_file))
-    token = sign_for_portal(material, area=AREA, ttl_seconds=300)
-    return PortalClient(base_url=base, token=token)
+    return PortalClient(
+        base_url=base,
+        token_provider=lambda: sign_for_portal(material, area=AREA, ttl_seconds=300),
+    )
 
 
 def _parse(output: str) -> list[dict]:
@@ -995,7 +997,7 @@ if __name__ == "__main__":
     sys.exit(run())
 ```
 
-> 재사용 근거: claude CLI 호출은 기존 `generate.py:run_claude_cli`(`--system-prompt-file`·재시도·타임아웃 내장)를 그대로 쓴다 — 플래그 불일치·중복 구현 방지. `_parse`는 파싱 실패 시 예외를 던져 `run_claude_cli`의 재시도 로직에 태운다. `append_log(logs_dir, record)`·`PortalClient(base_url=, token=)`·`sign_for_portal(material, area=, ttl_seconds=)` 시그니처는 검증 완료(실제 코드와 일치).
+> 재사용 근거: claude CLI 호출은 기존 `generate.py:run_claude_cli`(`--system-prompt-file`·재시도·타임아웃 내장)를 그대로 쓴다 — 플래그 불일치·중복 구현 방지. `_parse`는 파싱 실패 시 예외를 던져 `run_claude_cli`의 재시도 로직에 태운다. `append_log(logs_dir, record)`·`PortalClient(base_url=, token_provider=)`·`sign_for_portal(material, area=, ttl_seconds=)` 시그니처는 검증 완료(실제 코드와 일치).
 
 - [ ] **Step 2: 파싱 단위 동작 확인(로컬)**
 

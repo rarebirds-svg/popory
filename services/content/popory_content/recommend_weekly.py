@@ -27,8 +27,10 @@ def _client() -> PortalClient:
     key_file = os.environ["POPORY_CONTENT_KEY_FILE"]
     base = os.environ["POPORY_PORTAL_API_BASE"]
     material = KeyMaterial.load(Path(key_file))
-    token = sign_for_portal(material, area=AREA, ttl_seconds=300)
-    return PortalClient(base_url=base, token=token)
+    return PortalClient(
+        base_url=base,
+        token_provider=lambda: sign_for_portal(material, area=AREA, ttl_seconds=300),
+    )
 
 
 def _parse(output: str) -> list[dict]:
