@@ -51,6 +51,22 @@ def test_zoompan_filter_landscape_and_portrait():
     assert "s=1080x1920" in fp
 
 
+def test_xfade_graph_offsets_and_labels():
+    from popory_content.video import _xfade_graph
+    graph, vlabel, alabel = _xfade_graph([3.0, 4.0, 5.0], td=0.4)
+    # 첫 전환 offset = 3.0-0.4 = 2.6, 둘째 = (3.0-0.4)+(4.0-0.4) = 2.6+3.6 = 6.2
+    assert "offset=2.600" in graph
+    assert "offset=6.200" in graph
+    assert "acrossfade=d=0.4" in graph
+    assert vlabel == "v2" and alabel == "a2"
+
+
+def test_xfade_graph_single_clip_is_empty():
+    from popory_content.video import _xfade_graph
+    graph, vlabel, alabel = _xfade_graph([3.0], td=0.4)
+    assert graph == "" and vlabel == "0:v" and alabel == "0:a"
+
+
 @pytest.mark.skipif(not _HAS_TOOLS, reason="ffmpeg/say/폰트 없음 (CI 등)")
 def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
     import popory_content.video as v

@@ -117,6 +117,26 @@ def _zoompan_filter(dur: float, portrait: bool = False) -> str:
     )
 
 
+def _xfade_graph(durations: list[float], td: float = 0.4) -> tuple[str, str, str]:
+    """클립 길이 배열로 xfade/acrossfade filter_complex 그래프를 만든다.
+    반환: (filter_complex 문자열, 최종 비디오 라벨, 최종 오디오 라벨)."""
+    if len(durations) <= 1:
+        return "", "0:v", "0:a"
+    parts: list[str] = []
+    v_prev, a_prev = "0:v", "0:a"
+    total = durations[0]
+    for i in range(1, len(durations)):
+        off = total - td
+        v_out, a_out = f"v{i}", f"a{i}"
+        parts.append(
+            f"[{v_prev}][{i}:v]xfade=transition=fade:duration={td}:offset={off:.3f}[{v_out}]"
+        )
+        parts.append(f"[{a_prev}][{i}:a]acrossfade=d={td}[{a_out}]")
+        v_prev, a_prev = v_out, a_out
+        total += durations[i] - td
+    return ";".join(parts), v_prev, a_prev
+
+
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False) -> Path:
@@ -156,10 +176,21 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         ])
         clips.append(clip)
 
-    concat = work / "concat.txt"
-    concat.write_text("".join(f"file '{p}'\n" for p in clips), encoding="utf-8")
+    durations = [_duration(c) for c in clips]
     out = work / "out.mp4"
-    _run([FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c", "copy", str(out)])
+    if len(clips) == 1:
+        shutil.copy(clips[0], out)
+        return out
+    graph, vlabel, alabel = _xfade_graph(durations)
+    cmd = [FFMPEG_BIN, "-y"]
+    for c in clips:
+        cmd += ["-i", str(c)]
+    cmd += [
+        "-filter_complex", graph,
+        "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", str(out),
+    ]
+    _run(cmd)
     return out
 
 
