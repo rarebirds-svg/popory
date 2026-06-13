@@ -7,6 +7,7 @@ import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
 import { RecommendationActions } from "./RecommendationActions";
 import { BulkAddRecommendations } from "./BulkAddRecommendations";
+import { DeleteButton } from "./DeleteButton";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -78,8 +79,8 @@ export default async function ContentPage() {
         {topics.length > 0 && (
           <ul className="mt-8 divide-y divide-popory-border">
             {topics.map((t) => (
-              <li key={t.id}>
-                <Link href={`/content/topics/${t.id}`} className="flex items-center gap-3 py-3 hover:opacity-80">
+              <li key={t.id} className="flex items-center gap-3 py-3">
+                <Link href={`/content/topics/${t.id}`} className="flex min-w-0 flex-1 items-center gap-3 hover:opacity-80">
                   <span className="flex-1 truncate text-sm text-popory-fg">{t.topic}</span>
                   <span className="flex items-center gap-1.5 shrink-0">
                     {t.jobs.map((j) => (
@@ -90,6 +91,8 @@ export default async function ContentPage() {
                     ))}
                   </span>
                 </Link>
+                <DeleteButton path={`/api/content/topics/${t.id}`}
+                  confirmText={`"${t.topic}" 주제와 생성된 콘텐츠를 모두 삭제할까요? 되돌릴 수 없습니다.`} />
               </li>
             ))}
           </ul>
@@ -100,12 +103,14 @@ export default async function ContentPage() {
             <summary className="cursor-pointer text-xs text-popory-muted">이전 작업 ({legacyJobs.length}개)</summary>
             <ul className="mt-2 divide-y divide-popory-border">
               {legacyJobs.map((j) => (
-                <li key={j.id}>
-                  <Link href={`/content/${j.id}`} className="flex items-center gap-3 py-3 hover:opacity-80">
+                <li key={j.id} className="flex items-center gap-3 py-3">
+                  <Link href={`/content/${j.id}`} className="flex min-w-0 flex-1 items-center gap-3 hover:opacity-80">
                     <span className="flex-1 truncate text-sm text-popory-fg">{j.topic}</span>
                     <span className={`inline-block h-1.5 w-1.5 rounded-full ${STATUS_DOT[j.status] ?? "bg-gray-300"}`} />
                     <span className="shrink-0 text-xs text-popory-muted">{PLATFORM_SHORT[j.platform] ?? j.platform}</span>
                   </Link>
+                  <DeleteButton path={`/api/content/jobs/${j.id}`}
+                    confirmText={`"${j.topic}" 콘텐츠를 삭제할까요? 되돌릴 수 없습니다.`} />
                 </li>
               ))}
             </ul>
