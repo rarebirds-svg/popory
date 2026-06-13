@@ -113,6 +113,9 @@ IMAGE_MAX_ATTEMPTS = 3
 IMAGE_BACKOFF = [2, 5]
 IMAGE_FAIL_RATIO = 0.5
 IMAGEGEN_URL = os.environ.get("POPORY_IMAGEGEN_URL", "http://localhost:8765/generate")
+# 로컬 fp32 SDXL/SD 생성은 맥미니 16GB 메모리 압박에서 장면당 ~110초가 걸린다.
+# 120초는 빠듯해 종종 read timeout → 재시도 낭비 → 단색 폴백을 유발했다. 여유 상향.
+IMAGE_TIMEOUT_SECONDS = int(os.environ.get("POPORY_IMAGEGEN_TIMEOUT", "300"))
 
 
 def _safe_image(client, prompt: str, job_id: str = "?"):
@@ -120,7 +123,7 @@ def _safe_image(client, prompt: str, job_id: str = "?"):
     last = ""
     for attempt in range(1, IMAGE_MAX_ATTEMPTS + 1):
         try:
-            resp = requests.post(IMAGEGEN_URL, json={"prompt": prompt}, timeout=120)
+            resp = requests.post(IMAGEGEN_URL, json={"prompt": prompt}, timeout=IMAGE_TIMEOUT_SECONDS)
             if resp.status_code >= 400:
                 raise RuntimeError(f"imagegen {resp.status_code}: {resp.text[:200]}")
             return resp.content
