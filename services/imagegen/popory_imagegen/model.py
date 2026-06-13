@@ -1,7 +1,9 @@
 # SDXL 로컬 이미지 생성 — ModelManager(lazy-load·직렬화·유휴 언로드) + diffusers 실 로더.
 import gc
+import os
 import threading
 import time
+from io import BytesIO
 from typing import Any, Callable
 
 
@@ -38,3 +40,73 @@ class ModelManager:
     @property
     def loaded(self) -> bool:
         return self._pipe is not None
+
+
+NEGATIVE_DEFAULT = "deformed, distorted, extra limbs, bad anatomy, text, watermark, signature"
+
+
+class _DiffusersPipe:
+    """diffusers 파이프라인 래퍼 — generate()->PNG bytes, close()로 MPS 메모리 해제."""
+
+    def __init__(self, pipe: Any, steps: int, guidance: float, width: int, height: int):
+        self._pipe = pipe
+        self._steps = steps
+        self._guidance = guidance
+        self._w = width
+        self._h = height
+
+    def generate(self, prompt: str, negative_prompt: str | None = None,
+                 steps: int | None = None, width: int | None = None,
+                 height: int | None = None) -> bytes:
+        img = self._pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt or NEGATIVE_DEFAULT,
+            num_inference_steps=steps or self._steps,
+            guidance_scale=self._guidance,
+            width=width or self._w,
+            height=height or self._h,
+        ).images[0]
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def close(self) -> None:
+        try:
+            import torch
+            del self._pipe
+            if torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except Exception:  # noqa: BLE001 — 정리 실패는 무시
+            pass
+
+
+def build_pipe(model_name: str | None = None) -> _DiffusersPipe:
+    """env POPORY_IMAGEGEN_MODEL(realvisxl|sd15)에 따라 diffusers 파이프 구성.
+    파라미터는 맥미니 스모크로 핀고정한다(diffusers 버전차 흡수)."""
+    import torch
+    from diffusers import (
+        EulerDiscreteScheduler,
+        StableDiffusionPipeline,
+        StableDiffusionXLPipeline,
+    )
+
+    name = model_name or os.environ.get("POPORY_IMAGEGEN_MODEL", "realvisxl")
+    if name == "sd15":
+        pipe = StableDiffusionPipeline.from_pretrained(
+            "SG161222/Realistic_Vision_V6.0_B1_noVAE",
+            torch_dtype=torch.float16,
+            safety_checker=None,
+        ).to("mps")
+        return _DiffusersPipe(pipe, steps=25, guidance=6.0, width=768, height=768)
+    # realvisxl + SDXL-Lightning 8-step LoRA
+    pipe = StableDiffusionXLPipeline.from_pretrained(
+        "SG161222/RealVisXL_V5.0", torch_dtype=torch.float16
+    ).to("mps")
+    pipe.load_lora_weights(
+        "ByteDance/SDXL-Lightning", weight_name="sdxl_lightning_8step_lora.safetensors"
+    )
+    pipe.fuse_lora()
+    pipe.scheduler = EulerDiscreteScheduler.from_config(
+        pipe.scheduler.config, timestep_spacing="trailing"
+    )
+    return _DiffusersPipe(pipe, steps=8, guidance=0.0, width=1024, height=1024)
