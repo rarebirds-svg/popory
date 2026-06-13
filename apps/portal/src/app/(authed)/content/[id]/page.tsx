@@ -25,6 +25,7 @@ interface JobDetail {
   params_json: string | null;
   error: string | null;
   created_at: number;
+  updated_at: number;
   youtube_status: string | null;
   youtube_video_id: string | null;
   youtube_error: string | null;
@@ -87,7 +88,7 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                 ? "대기 중입니다. 워커가 작업을 가져가면 생성을 시작합니다."
                 : "생성 중입니다. 리서치·작성·검토에 보통 2~5분 걸립니다."}
             </p>
-            <AutoRefresh since={job.created_at} />
+            <AutoRefresh since={job.updated_at} />
           </div>
         )}
 

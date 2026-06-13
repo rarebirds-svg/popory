@@ -19,13 +19,16 @@ import time
 import urllib.request
 from pathlib import Path
 
+from popory_brief import limit_detect
+
 BRIEF_DIR = Path(__file__).resolve().parent
 VENV_PY = BRIEF_DIR / ".venv" / "bin" / "python"
-CLAUDE_BIN = "/opt/homebrew/bin/claude"
+# 기본 claude CLI 경로. BRIEF_CLAUDE_BIN 환경변수로 오버라이드 가능(E2E 테스트용 스텁 주입).
+CLAUDE_BIN = os.environ.get("BRIEF_CLAUDE_BIN", "/opt/homebrew/bin/claude")
 DEFAULT_MODEL = "claude-sonnet-4-6"
 TIMEOUT_SECONDS = 1800
-LIMIT_MARKERS = ("usage limit", "rate limit", "limit reached", "resets at", "too many requests")
-BACKOFF_SECONDS = [60, 180]
+# BRIEF_BACKOFF_SECONDS(csv)로 오버라이드 가능(E2E 테스트는 빈 값). 1차 실패 후 대기 초.
+BACKOFF_SECONDS = [int(s) for s in os.environ.get("BRIEF_BACKOFF_SECONDS", "60,180").split(",") if s.strip()]
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
 
@@ -146,8 +149,8 @@ WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브�
             if result.returncode == 0:
                 break
 
-            combined = (result.stdout + result.stderr).lower()
-            is_limit = any(m in combined for m in LIMIT_MARKERS)
+            combined = result.stdout + result.stderr
+            is_limit = limit_detect.is_limit_message(combined)
             print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit})", file=sys.stderr)
             print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
             print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
@@ -158,6 +161,11 @@ WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브�
                 time.sleep(wait)
                 attempt += 1
                 continue
+            if is_limit:
+                # 백오프로 못 흡수한 장시간 한도. reset epoch를 stdout에 알리고 exit 6.
+                reset_epoch = limit_detect.reset_epoch_or_fallback(combined, datetime.datetime.now(KST))
+                print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+                sys.exit(6)
             sys.exit(5)
     finally:
         sys_prompt_path.unlink(missing_ok=True)
