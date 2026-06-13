@@ -103,7 +103,9 @@ def build_pipe(model_name: str | None = None) -> _DiffusersPipe:
         # 16GB 공유 메모리 — 생성 피크 메모리를 낮춰 OOM(SIGKILL) 방지
         pipe.enable_attention_slicing()
         pipe.vae.enable_tiling()
-        return _DiffusersPipe(pipe, steps=25, guidance=6.0, width=768, height=768)
+        # 16GB 메모리 압박에서 768·25스텝은 장면당 ~110초라 워커 타임아웃을 유발했다.
+        # 640·20스텝으로 피크 메모리·시간을 낮춘다(배경은 cover-crop·오버레이라 충분).
+        return _DiffusersPipe(pipe, steps=20, guidance=6.0, width=640, height=640)
     # realvisxl + SDXL-Lightning 8-step LoRA
     pipe = StableDiffusionXLPipeline.from_pretrained(
         "SG161222/RealVisXL_V5.0", torch_dtype=torch.float16
