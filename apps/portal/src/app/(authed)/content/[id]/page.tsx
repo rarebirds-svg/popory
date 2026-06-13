@@ -7,6 +7,7 @@ import { API_BASE } from "@/lib/env";
 import { DraftEditor } from "./DraftEditor";
 import { AutoRefresh } from "./AutoRefresh";
 import { RetryButton } from "./RetryButton";
+import { RegenerateButton } from "./RegenerateButton";
 import { YoutubeUpload } from "./YoutubeUpload";
 import { CarouselPreview } from "./CarouselPreview";
 import { InstagramUpload } from "./InstagramUpload";
@@ -102,11 +103,18 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
 
         {(job.status === "review" || job.status === "done") && (job.platform === "youtube" || job.platform === "shorts") && (
           <div className="mt-8 space-y-4">
+            {(() => {
+              const m = job.meta_json ? (JSON.parse(job.meta_json) as { images_missing?: number; images_total?: number }) : {};
+              return m.images_missing ? (
+                <p className="text-xs text-amber-600">배경 이미지 일부 누락 ({m.images_missing}/{m.images_total}). 재생성을 권장합니다.</p>
+              ) : null;
+            })()}
             <video controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video`} />
             <details>
               <summary className="cursor-pointer text-xs text-popory-accent">대본 보기</summary>
               <pre className="mt-2 whitespace-pre-wrap rounded-md border border-popory-border bg-popory-card p-3 text-xs text-popory-fg">{job.draft}</pre>
             </details>
+            <RegenerateButton jobId={job.id} />
             {showYtUpload && (
               <YoutubeUpload jobId={job.id} connected={ytConnected} initialStatus={job.youtube_status} initialVideoId={job.youtube_video_id} initialError={job.youtube_error} />
             )}
