@@ -1,7 +1,17 @@
 # 워커가 claim→generate→result 를 올바른 상태로 호출하는지 검증.
+import io
+
 import pytest
+from PIL import Image
 
 from popory_content import worker
+
+
+def _png(color=(10, 20, 30)) -> bytes:
+    """디코드 가능한 유효 PNG 바이트(이미지 검증 통과용)."""
+    b = io.BytesIO()
+    Image.new("RGB", (8, 8), color).save(b, format="PNG")
+    return b.getvalue()
 
 
 @pytest.fixture(autouse=True)
@@ -113,12 +123,51 @@ def test_safe_image_returns_none_on_error(monkeypatch):
 
 
 def test_safe_image_returns_bytes(monkeypatch):
+    png = _png()
+
     class Resp:
         status_code = 200
-        content = b"\x89PNG"
+        content = png
 
     monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
-    assert worker._safe_image(None, "prompt") == b"\x89PNG"
+    assert worker._safe_image(None, "prompt") == png
+
+
+def test_safe_image_corrupt_bytes_retries_then_none(monkeypatch):
+    # 연결 끊김으로 잘린 바이트(디코드 불가)는 재시도 후 None+로깅(조용한 폴백 방지).
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    class Resp:
+        status_code = 200
+        content = b"\x89PNG\r\n\x1a\n" + b"truncated-garbage"  # 잘린 PNG
+
+    def fake_post(url, json=None, timeout=None):
+        calls["n"] += 1
+        return Resp()
+
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "p", "job1") is None
+    assert calls["n"] == worker.IMAGE_MAX_ATTEMPTS  # 깨진 응답도 재시도
+
+
+def test_safe_image_corrupt_then_valid_recovers(monkeypatch):
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    png = _png((40, 50, 60))
+    calls = {"n": 0}
+
+    def fake_post(url, json=None, timeout=None):
+        calls["n"] += 1
+
+        class Resp:
+            status_code = 200
+            content = b"\x89PNG-broken" if calls["n"] == 1 else png
+
+        return Resp()
+
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "p") == png
+    assert calls["n"] == 2  # 첫 깨진 응답 → 재시도 → 복구
 
 
 def test_run_upload_once_uploads_and_reports(monkeypatch):
@@ -165,9 +214,11 @@ def test_safe_image_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(worker.time, "sleep", lambda s: None)
     calls = {"n": 0}
 
+    png = _png()
+
     class Resp:
         status_code = 200
-        content = b"img"
+        content = png
 
     def fake_post(url, json=None, timeout=None):
         calls["n"] += 1
@@ -176,7 +227,7 @@ def test_safe_image_retries_then_succeeds(monkeypatch):
         return Resp()
 
     monkeypatch.setattr(worker.requests, "post", fake_post)
-    assert worker._safe_image(None, "p") == b"img"
+    assert worker._safe_image(None, "p") == png
     assert calls["n"] == 3
 
 

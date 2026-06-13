@@ -23,6 +23,13 @@ def test_render_card_with_and_without_bg(tmp_path):
     assert p2.exists() and p2.stat().st_size > 1000
 
 
+def test_render_card_corrupt_bytes_falls_back(tmp_path):
+    # 깨진 이미지 바이트가 와도 크래시하지 않고 단색 카드로 폴백한다.
+    out = tmp_path / "corrupt.png"
+    _render_card("제목", "문장", out, bg_image_bytes=b"\x89PNG-not-a-real-image")
+    assert out.exists() and out.stat().st_size > 1000
+
+
 def test_render_card_portrait_creates_correct_size(tmp_path):
     """portrait=True 시 1080×1920 PNG가 생성된다."""
     from popory_content.video import _render_card

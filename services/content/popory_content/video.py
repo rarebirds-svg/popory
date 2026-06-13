@@ -82,11 +82,15 @@ def _scrim_bottom(img: Image.Image, w: int = LANDSCAPE_W, h: int = LANDSCAPE_H) 
 def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes | None = None, portrait: bool = False) -> None:
     w = PORTRAIT_W if portrait else LANDSCAPE_W
     h = PORTRAIT_H if portrait else LANDSCAPE_H
+    img = None
     if bg_image_bytes:
-        bg = Image.open(BytesIO(bg_image_bytes)).convert("RGB")
-        img = _cover(bg, w, h)
-        _scrim_bottom(img, w, h)
-    else:
+        try:
+            bg = Image.open(BytesIO(bg_image_bytes)).convert("RGB")
+            img = _cover(bg, w, h)
+            _scrim_bottom(img, w, h)
+        except Exception:  # noqa: BLE001 — 깨진 이미지 바이트는 단색 폴백(작업 전체 크래시 방지)
+            img = None
+    if img is None:
         img = Image.new("RGB", (w, h), BG)
     d = ImageDraw.Draw(img)
     if portrait:

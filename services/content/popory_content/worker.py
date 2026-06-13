@@ -2,9 +2,11 @@
 import os
 import sys
 import time
+from io import BytesIO
 from pathlib import Path
 
 import requests
+from PIL import Image
 
 from popory_content.generate import generate, GenerateError
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
@@ -118,15 +120,25 @@ IMAGEGEN_URL = os.environ.get("POPORY_IMAGEGEN_URL", "http://localhost:8765/gene
 IMAGE_TIMEOUT_SECONDS = int(os.environ.get("POPORY_IMAGEGEN_TIMEOUT", "300"))
 
 
+def _verify_image(data: bytes) -> None:
+    """imagegen 응답이 디코드 가능한 완전한 이미지인지 확인한다. 연결 끊김으로 잘린
+    바이트(BrokenPipe)면 raise → 재시도·image_failed 로깅으로 이어져 조용한 단색 폴백을 막는다."""
+    if not data:
+        raise RuntimeError("empty image response")
+    Image.open(BytesIO(data)).load()  # 잘린/깨진 이미지면 여기서 예외
+
+
 def _safe_image(client, prompt: str, job_id: str = "?"):
-    """로컬 이미지 서비스로 배경 1장 생성. 일시 실패는 재시도, 최종 실패는 로그+None."""
+    """로컬 이미지 서비스로 배경 1장 생성. 일시 실패·깨진 응답은 재시도, 최종 실패는 로그+None."""
     last = ""
     for attempt in range(1, IMAGE_MAX_ATTEMPTS + 1):
         try:
             resp = requests.post(IMAGEGEN_URL, json={"prompt": prompt}, timeout=IMAGE_TIMEOUT_SECONDS)
             if resp.status_code >= 400:
                 raise RuntimeError(f"imagegen {resp.status_code}: {resp.text[:200]}")
-            return resp.content
+            content = resp.content
+            _verify_image(content)  # 잘린/깨진 바이트면 raise → 재시도
+            return content
         except Exception as e:  # noqa: BLE001
             last = str(e)[:200]
             if attempt < IMAGE_MAX_ATTEMPTS:
