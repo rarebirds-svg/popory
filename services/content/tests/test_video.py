@@ -101,9 +101,31 @@ def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
         {"caption": "테스트 장면 하나", "narration": "이것은 첫 문장입니다. 두 번째 문장이에요."},
         {"caption": "테스트 장면 둘", "narration": "이것은 다른 장면입니다. 마지막 문장입니다."},
     ]
-    out = render_video(scenes, job_id="smoketest")
+    out, _, _ = render_video(scenes, job_id="smoketest")
     assert out.exists() and out.stat().st_size > 10000
     # 장면당 클립 1개(문장 분할 안 함): scene_*.mp4 가 정확히 2개
     work = tmp_path / "video_smoketest"
     clips = sorted(work.glob("scene_*.mp4"))
     assert len(clips) == 2
+
+
+def test_render_video_counts_missing_images(monkeypatch, tmp_path):
+    from popory_content import video
+    monkeypatch.setattr(video, "FONT_PATH", str(tmp_path))  # 폰트 존재 체크 통과
+    monkeypatch.setattr(video, "synthesize", lambda text, voice=None: b"AUDIO")
+    monkeypatch.setattr(video, "_run", lambda cmd: None)
+    monkeypatch.setattr(video, "_duration", lambda path: 1.0)
+    monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    monkeypatch.setattr(video, "_xfade_graph", lambda durs, td=0.4: ("", "v", "a"))
+    scenes = [
+        {"caption": "a", "narration": "n1", "image_prompt": "ok one"},
+        {"caption": "b", "narration": "n2", "image_prompt": "fail two"},
+        {"caption": "c", "narration": "n3", "image_prompt": "fail three"},
+        {"caption": "d", "narration": "n4"},  # image_prompt 없음 → total 미포함
+    ]
+    fetcher = lambda p: b"IMG" if "ok" in p else None
+    out, missing, total = video.render_video(scenes, job_id="vbtest", image_fetcher=fetcher)
+    assert total == 3   # image_prompt 있는 장면 수
+    assert missing == 2 # 'fail' 2개

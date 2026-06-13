@@ -175,13 +175,15 @@ def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
 
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
-                 portrait: bool = False) -> Path:
+                 portrait: bool = False) -> tuple[Path, int, int]:
     """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → xfade 합산 후 loudnorm 마스터 MP4."""
     if not Path(FONT_PATH).exists():
         raise VideoError(f"한국어 폰트 없음: {FONT_PATH}")
     work = TMP / f"video_{job_id}"
     work.mkdir(parents=True, exist_ok=True)
     clips: list[Path] = []
+    images_missing = 0
+    images_total = 0
     for i, scene in enumerate(scenes):
         caption = str(scene["caption"]).strip()
         narration = str(scene["narration"]).strip() or " "
@@ -192,6 +194,10 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                 bg_bytes = image_fetcher(prompt)
             except Exception:  # noqa: BLE001 — 이미지 실패는 단색 폴백
                 bg_bytes = None
+        if prompt:
+            images_total += 1
+            if bg_bytes is None:
+                images_missing += 1
         audio_bytes = synthesize(narration, voice=voice)
         if audio_bytes:
             audio = work / f"{i}.mp3"
@@ -229,7 +235,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         _run(cmd)
     out = work / "out.mp4"
     _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id))
-    return out
+    return out, images_missing, images_total
 
 
 def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
@@ -237,9 +243,9 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
                image_style_kw: str = "photorealistic, cinematic",
                voice: str = "ko-KR-Chirp3-HD-Aoede",
                portrait: bool = False,
-               system_prompt_builder=None, user_msg_builder=None) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+               system_prompt_builder=None, user_msg_builder=None) -> tuple[Path, list[dict[str, Any]], dict[str, Any], int, int]:
     scenes, meta = generate_scenes(topic=topic, sources=sources, style_samples=style_samples,
                                    job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw,
                                    system_prompt_builder=system_prompt_builder, user_msg_builder=user_msg_builder)
-    mp4 = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice, portrait=portrait)
-    return mp4, scenes, meta
+    mp4, img_missing, img_total = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice, portrait=portrait)
+    return mp4, scenes, meta, img_missing, img_total

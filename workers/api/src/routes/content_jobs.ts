@@ -119,6 +119,20 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     return c.json({ ok: true });
   });
 
+  app.post("/api/content/jobs/:id/regenerate", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const row = await c.env.DB.prepare("SELECT id, owner_sub, platform, status FROM content_jobs WHERE id=?")
+      .bind(c.req.param("id")).first<{ id: string; owner_sub: string; platform: string; status: string }>();
+    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    if (!["youtube", "shorts", "instagram-image"].includes(row.platform)) return c.text("not regeneratable", 409);
+    if (row.status !== "review" && row.status !== "failed") return c.text("not regeneratable", 409);
+    const now = Math.floor(Date.now() / 1000);
+    await c.env.DB.prepare("UPDATE content_jobs SET status='queued', error=NULL, updated_at=? WHERE id=?")
+      .bind(now, row.id).run();
+    return c.json({ ok: true });
+  });
+
   app.post("/api/content/jobs/claim", requireService, async (c) => {
     const svc = c.get("service")!;
     if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);

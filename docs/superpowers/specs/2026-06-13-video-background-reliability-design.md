@@ -57,13 +57,15 @@ def _safe_image(client, prompt: str):
 
 ### 2. 누락 이미지 집계 (video.py)
 
+> 2026-06-13 다른 터미널의 영상 품질 개선(켄번스·xfade·BGM·장면 통째 TTS)이 main(`0780040`)에 머지되어 `render_video`가 재구성됨. silent 폴백 로직은 동일하게 남아 있어 본 수정의 접근은 유효. 아래 라인은 갱신된 구조 기준.
+
 `render_video`가 배경이 None이 된 장면 수를 집계해 반환한다.
 - `images_total` = `image_prompt`가 있는 장면 수.
 - `images_missing` = 그 중 `bg_bytes`가 None(페치 실패)인 장면 수.
 
-현재 `render_video(...) -> Path`를 `-> tuple[Path, int, int]`(out, missing, total)로 변경. 루프(video.py:123~)에서 prompt 있는 장면마다 `total += 1`, `bg_bytes is None`이면 `missing += 1`. 반환 `return out, missing, total`.
+현재 `render_video(scenes, ...) -> Path`(video.py:176)를 `-> tuple[Path, int, int]`(out, missing, total)로 변경. 장면 루프(video.py:185~213, `bg_bytes` 설정은 188~194)에서 `prompt`가 있으면 `total += 1`, 그 장면의 `bg_bytes`가 None이면 `missing += 1`. 함수 끝(`_master_audio` 후 `return out`, video.py:232)을 `return out, missing, total`로 변경.
 
-`make_video(...)`(video.py:159~)는 현재 `(mp4, scenes, meta)` 반환 → `render_video` 결과를 받아 `(mp4, scenes, meta, missing, total)`로 확장.
+`make_video(...)`(video.py:235)는 현재 `mp4 = render_video(...); return mp4, scenes, meta`. `render_video`의 3-튜플을 받도록 `mp4, img_missing, img_total = render_video(...)`로 바꾸고 `return mp4, scenes, meta, img_missing, img_total`로 확장.
 
 ### 3. 워커 영상 분기 상태 결정 (worker.py)
 

@@ -45,21 +45,21 @@ def run_once(client) -> bool:
     try:
         if platform == "youtube":
             opts = parse_options(job.get("params_json"))
-            mp4, scenes, meta = make_video(
+            mp4, scenes, meta, img_missing, img_total = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
-                image_fetcher=lambda p: _safe_image(client, p),
+                image_fetcher=lambda p: _safe_image(client, p, job_id),
                 scene_count=SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
             )
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
-            _report(client, job_id, {"status": "review", "draft": script, "meta": meta}, "review")
+            _finalize_video(client, job_id, script, meta, img_missing, img_total)
         elif platform == "shorts":
             opts = parse_shorts_options(job.get("params_json"))
-            mp4, scenes, meta = make_video(
+            mp4, scenes, meta, img_missing, img_total = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
-                image_fetcher=lambda p: _safe_image(client, p),
+                image_fetcher=lambda p: _safe_image(client, p, job_id),
                 scene_count=SHORT_SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
@@ -69,7 +69,7 @@ def run_once(client) -> bool:
             )
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
-            _report(client, job_id, {"status": "review", "draft": script, "meta": meta}, "review")
+            _finalize_video(client, job_id, script, meta, img_missing, img_total)
         elif platform == "instagram-image":
             import json as _json
             params: dict = {}
@@ -107,12 +107,36 @@ def _report(client, job_id: str, body: dict, status_label: str) -> None:
         append_log(LOGS_DIR, {"worker": "content", "status": "report_failed", "job": job_id, "error": str(e)[:300]})
 
 
-def _safe_image(client, prompt: str):
-    """AI 이미지 1장. 실패하면 None(단색 폴백)."""
-    try:
-        return client.post_for_bytes("/api/content/ai-image", json={"prompt": prompt})
-    except Exception:  # noqa: BLE001
-        return None
+IMAGE_MAX_ATTEMPTS = 3
+IMAGE_BACKOFF = [2, 5]
+IMAGE_FAIL_RATIO = 0.5
+
+
+def _safe_image(client, prompt: str, job_id: str = "?"):
+    """AI 이미지 1장. 일시 실패는 재시도, 최종 실패는 로그+None(단색 폴백)."""
+    last = ""
+    for attempt in range(1, IMAGE_MAX_ATTEMPTS + 1):
+        try:
+            return client.post_for_bytes("/api/content/ai-image", json={"prompt": prompt})
+        except Exception as e:  # noqa: BLE001
+            last = str(e)[:200]
+            if attempt < IMAGE_MAX_ATTEMPTS:
+                time.sleep(IMAGE_BACKOFF[attempt - 1])
+    append_log(LOGS_DIR, {"worker": "content", "status": "image_failed", "job": job_id, "error": last})
+    return None
+
+
+def _finalize_video(client, job_id, script, meta, img_missing, img_total):
+    """누락 이미지 비율로 status 결정. 대부분 실패면 failed, 일부면 review+경고."""
+    if img_total > 0 and img_missing / img_total >= IMAGE_FAIL_RATIO:
+        _report(client, job_id, {
+            "status": "failed", "draft": script, "meta": meta,
+            "error": f"배경 이미지 생성 실패 ({img_missing}/{img_total} 장면) — 재생성 필요",
+        }, "failed")
+    else:
+        if img_missing:
+            meta = {**meta, "images_missing": img_missing, "images_total": img_total}
+        _report(client, job_id, {"status": "review", "draft": script, "meta": meta}, "review")
 
 
 def _issue_media_token(client, r2_key: str) -> str:
