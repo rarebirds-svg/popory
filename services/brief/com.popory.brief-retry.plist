@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- popory 브리프 세션 한도 자동 복구. 10분마다 retry_pending.sh 폴링(리셋 전·pending 없으면 즉시 종료). -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.popory.brief-retry</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/daegong/projects/popory/services/brief/retry_pending.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/daegong/projects/popory/services/brief</string>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/daegong/projects/popory/services/brief/logs/retry.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/daegong/projects/popory/services/brief/logs/retry.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>LANG</key>
+        <string>ko_KR.UTF-8</string>
+        <key>LC_ALL</key>
+        <string>ko_KR.UTF-8</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

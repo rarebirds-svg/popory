@@ -80,6 +80,9 @@ declare -a BUNDLED_SLUGS=()
 declare -a ALL_SLUGS=()
 GEN_FAIL_SLUGS=""
 GEN_OK_COUNT=0
+LIMIT_FAIL_SLUGS=""     # 한도(exit 6)로 실패한 카테고리 — 자동 재시도 대상
+LIMIT_FAIL_CUSTOM=""    # 한도로 실패한 커스텀 주제 id
+LIMIT_RESET_MAX=0       # 수집한 reset epoch 중 최대값
 
 # 카테고리 목록을 배열로 적재
 while IFS=' ' read -r SLUG MODE; do
@@ -180,6 +183,11 @@ if [ -n "${CUSTOM_SLUGS}" ]; then
     OUT_FILE="/tmp/brief_custom_stdout_${TID}.tmp"
     [ -f "${OUT_FILE}" ] && cat "${OUT_FILE}" >> "${LOG_FILE}"
     CEXIT=1; [ -f "${EXIT_FILE}" ] && CEXIT=$(cat "${EXIT_FILE}")
+    if [ "${CEXIT}" -eq 6 ] && [ -f "${OUT_FILE}" ]; then
+      R=$(grep -o '__BRIEF_LIMIT_RESET__=[0-9]*' "${OUT_FILE}" | head -1 | cut -d= -f2)
+      [ -n "${R}" ] && [ "${R}" -gt "${LIMIT_RESET_MAX}" ] && LIMIT_RESET_MAX=${R}
+      LIMIT_FAIL_CUSTOM="${LIMIT_FAIL_CUSTOM}${TID},"
+    fi
     rm -f "${EXIT_FILE}" "${OUT_FILE}"
     if [ "${CEXIT}" -eq 0 ]; then
       log "\"custom ok topic=${TID}\""
@@ -203,11 +211,17 @@ while IFS=' ' read -r SLUG MODE; do
 
   GEN_EXIT=1
   [ -f "${EXIT_FILE}" ] && GEN_EXIT=$(cat "${EXIT_FILE}")
+  # 한도(exit 6) 실패면 reset epoch 수집 (tmp 파일 삭제 전)
+  if [ "${GEN_EXIT}" -eq 6 ] && [ -f "${OUT_FILE}" ]; then
+    R=$(grep -o '__BRIEF_LIMIT_RESET__=[0-9]*' "${OUT_FILE}" | head -1 | cut -d= -f2)
+    [ -n "${R}" ] && [ "${R}" -gt "${LIMIT_RESET_MAX}" ] && LIMIT_RESET_MAX=${R}
+  fi
   rm -f "${EXIT_FILE}" "${OUT_FILE}"
 
   if [ "${GEN_EXIT}" -ne 0 ]; then
     log "\"generate fail category=${SLUG} exit=${GEN_EXIT}\""
     GEN_FAIL_SLUGS="${GEN_FAIL_SLUGS}${SLUG},"
+    [ "${GEN_EXIT}" -eq 6 ] && LIMIT_FAIL_SLUGS="${LIMIT_FAIL_SLUGS}${SLUG},"
     continue
   fi
   GEN_OK_COUNT=$((GEN_OK_COUNT + 1))
@@ -320,7 +334,28 @@ fi
 
 # 6) 최종 요약 + 임시 파일 정리
 GEN_FAIL_CSV="${GEN_FAIL_SLUGS%,}"
-log "\"done dry_run=${DRY_RUN} generated_ok=${GEN_OK_COUNT} failed=${GEN_FAIL_CSV:-none}\""
+LIMIT_CAT_CSV="${LIMIT_FAIL_SLUGS%,}"
+LIMIT_CUS_CSV="${LIMIT_FAIL_CUSTOM%,}"
+log "\"done dry_run=${DRY_RUN} generated_ok=${GEN_OK_COUNT} failed=${GEN_FAIL_CSV:-none} limit_fail=${LIMIT_CAT_CSV:-none}\""
+
+# retry_pending.sh가 캡처하는 한도 실패 보고 (stdout)
+echo "__RUN_LIMIT_FAIL_CATS__=${LIMIT_CAT_CSV}"
+echo "__RUN_LIMIT_RESET__=${LIMIT_RESET_MAX}"
+
+# 정규(전체) 실행에서만 pending 마커 관리. --only(재시도) 모드는 retry_pending.sh가 전담.
+if [ -z "${ONLY_SLUG}" ] && [ ${DRY_RUN} -eq 0 ]; then
+  PENDING_FILE="/tmp/brief_pending_${DATE}.json"
+  if [ -n "${LIMIT_CAT_CSV}" ] || [ -n "${LIMIT_CUS_CSV}" ]; then
+    "${VENV_PY}" "${BRIEF_DIR}/write_pending.py" --file "${PENDING_FILE}" \
+      --date "${DATE}" --reset-at "${LIMIT_RESET_MAX}" \
+      --categories "${LIMIT_CAT_CSV}" --custom "${LIMIT_CUS_CSV}" >> "${LOG_FILE}" 2>&1
+    log "\"pending written cats=${LIMIT_CAT_CSV:-none} custom=${LIMIT_CUS_CSV:-none} reset_at=${LIMIT_RESET_MAX}\""
+  elif [ -f "${PENDING_FILE}" ]; then
+    rm -f "${PENDING_FILE}"
+    log "\"pending cleared (no limit failures)\""
+  fi
+fi
+
 find /tmp -maxdepth 1 -name 'brief_*.md' -mtime +7 -delete 2>/dev/null
 find /tmp -maxdepth 1 -name 'brief_*.meta.json' -mtime +7 -delete 2>/dev/null
 find /tmp -maxdepth 1 -name 'bundle_*.md' -mtime +7 -delete 2>/dev/null

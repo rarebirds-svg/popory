@@ -6,7 +6,7 @@
 성공 시 stdout JSON 한 줄.
     {"status":"ok","category":"...","date":"...","body_file":"...","meta_file":"..."}
 
-실패 시 비제로 exit code (2/4/5).
+실패 시 비제로 exit code (2/4/5). 장시간 사용량 한도는 exit 6 + stdout `__BRIEF_LIMIT_RESET__=<epoch>`.
 
 요구사항.
     /opt/homebrew/bin/claude (Claude Code CLI). Claude Max OAuth는 keychain에서 자동 로드.
@@ -23,6 +23,7 @@ from pathlib import Path
 
 from popory_brief.categories import load_category
 from popory_brief.log import append_log, KST
+from popory_brief import limit_detect
 
 LOGS_DIR = Path(__file__).resolve().parent / "logs"
 CLAUDE_BIN = "/opt/homebrew/bin/claude"
@@ -76,7 +77,7 @@ def main() -> None:
 
     # Claude Max 사용량 한도(5시간 윈도우)는 stdout에 메시지를 남기고 exit 1로 끝난다.
     # 일시적 throttle는 백오프 재시도로 흡수하고, 그 외 에러는 즉시 실패한다.
-    LIMIT_MARKERS = ("usage limit", "rate limit", "limit reached", "resets at", "too many requests")
+    # 백오프로도 못 흡수하는 장시간 한도는 exit 6 + reset epoch로 알려 retry 잡이 복구한다.
     BACKOFF_SECONDS = [60, 180]  # 1차 실패 후 대기 초. 길이 = 추가 재시도 횟수
 
     attempt = 0
@@ -97,8 +98,8 @@ def main() -> None:
             if result.returncode == 0:
                 break
 
-            combined = (result.stdout + result.stderr).lower()
-            is_limit = any(m in combined for m in LIMIT_MARKERS)
+            combined = result.stdout + result.stderr
+            is_limit = limit_detect.is_limit_message(combined)
             print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit})", file=sys.stderr)
             print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
             print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
@@ -109,6 +110,11 @@ def main() -> None:
                 time.sleep(wait)
                 attempt += 1
                 continue
+            if is_limit:
+                # 백오프로 못 흡수한 장시간 한도. reset epoch를 stdout에 알리고 exit 6.
+                reset_epoch = limit_detect.reset_epoch_or_fallback(combined, datetime.datetime.now(KST))
+                print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+                sys.exit(6)
             sys.exit(5)
     finally:
         sys_prompt_path.unlink(missing_ok=True)
