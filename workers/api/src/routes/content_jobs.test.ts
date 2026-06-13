@@ -360,3 +360,56 @@ describe("GET /api/content/jobs/:id/carousel/:n (user)", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("POST /api/content/jobs/:id/regenerate", () => {
+  async function makeJob(ck: string, platform = "youtube", status = "review", youtubeStatus: string | null = "done") {
+    const r = await SELF.fetch("https://example.com/api/content/jobs", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platform }),
+    });
+    const { id } = await r.json<{ id: string }>();
+    await env.DB.prepare("UPDATE content_jobs SET status=?, youtube_status=? WHERE id=?").bind(status, youtubeStatus, id).run();
+    return id;
+  }
+
+  it("review 영상 작업을 queued로 되돌리고 youtube_status는 보존", async () => {
+    const ck = await userCookie();
+    const id = await makeJob(ck, "youtube", "review", "done");
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/regenerate`, { method: "POST", headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const job = await env.DB.prepare("SELECT status, youtube_status FROM content_jobs WHERE id=?").bind(id).first<{ status: string; youtube_status: string }>();
+    expect(job?.status).toBe("queued");
+    expect(job?.youtube_status).toBe("done");
+  });
+
+  it("failed 영상 작업도 재생성 가능", async () => {
+    const ck = await userCookie();
+    const id = await makeJob(ck, "shorts", "failed", null);
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/regenerate`, { method: "POST", headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const job = await env.DB.prepare("SELECT status FROM content_jobs WHERE id=?").bind(id).first<{ status: string }>();
+    expect(job?.status).toBe("queued");
+  });
+
+  it("영상 플랫폼이 아니면 409", async () => {
+    const ck = await userCookie();
+    const id = await makeJob(ck, "naver-blog", "review", null);
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/regenerate`, { method: "POST", headers: { cookie: ck } });
+    expect(res.status).toBe(409);
+  });
+
+  it("queued 상태면 409", async () => {
+    const ck = await userCookie();
+    const id = await makeJob(ck, "youtube", "queued", null);
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/regenerate`, { method: "POST", headers: { cookie: ck } });
+    expect(res.status).toBe(409);
+  });
+
+  it("타인 작업은 404", async () => {
+    const ck1 = await userCookie("u1", "u1@e.com");
+    const id = await makeJob(ck1, "youtube", "review", null);
+    const ck2 = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/regenerate`, { method: "POST", headers: { cookie: ck2 } });
+    expect(res.status).toBe(404);
+  });
+});
