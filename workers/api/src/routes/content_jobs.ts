@@ -6,6 +6,7 @@ import { requireAuth, type AppVars } from "../middleware/session";
 import { requireService, type ServiceVars } from "../middleware/service_auth";
 import { verifyAreaToken } from "@popory/auth";
 import { loadJwks } from "../db/signing_keys";
+import { deleteContentJob } from "../db/content_delete";
 
 function ulid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -130,6 +131,16 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const now = Math.floor(Date.now() / 1000);
     await c.env.DB.prepare("UPDATE content_jobs SET status='queued', error=NULL, updated_at=? WHERE id=?")
       .bind(now, row.id).run();
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/content/jobs/:id", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const row = await c.env.DB.prepare("SELECT id, owner_sub, draft_r2_key FROM content_jobs WHERE id=?")
+      .bind(c.req.param("id")).first<{ id: string; owner_sub: string; draft_r2_key: string | null }>();
+    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    await deleteContentJob(c.env, row.id, row.draft_r2_key);
     return c.json({ ok: true });
   });
 

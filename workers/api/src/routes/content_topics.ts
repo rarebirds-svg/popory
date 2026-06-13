@@ -4,6 +4,7 @@ import type { Env } from "../types";
 import { TopicCreateSchema, TopicAddJobsSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
 import type { ServiceVars } from "../middleware/service_auth";
+import { deleteContentJob } from "../db/content_delete";
 
 function ulid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -128,5 +129,19 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     }
     if (stmts.length > 0) await c.env.DB.batch(stmts);
     return c.json({ added_job_ids: addedJobIds, skipped_platforms: skippedPlatforms }, 201);
+  });
+
+  app.delete("/api/content/topics/:id", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const topicId = c.req.param("id");
+    const topic = await c.env.DB.prepare("SELECT id, owner_sub FROM content_topics WHERE id=?")
+      .bind(topicId).first<{ id: string; owner_sub: string }>();
+    if (!topic || topic.owner_sub !== u.sub) return c.text("not found", 404);
+    const { results: jobs } = await c.env.DB.prepare("SELECT id, draft_r2_key FROM content_jobs WHERE topic_id=?")
+      .bind(topicId).all<{ id: string; draft_r2_key: string | null }>();
+    for (const j of jobs) await deleteContentJob(c.env, j.id, j.draft_r2_key);
+    await c.env.DB.prepare("DELETE FROM content_topics WHERE id=?").bind(topicId).run();
+    return c.json({ ok: true });
   });
 }

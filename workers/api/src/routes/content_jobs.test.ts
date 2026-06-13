@@ -413,3 +413,38 @@ describe("POST /api/content/jobs/:id/regenerate", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("DELETE /api/content/jobs/:id", () => {
+  it("본인 작업과 소스를 함께 삭제한다", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", sources: [{ url: "https://x" }] }),
+    });
+    const { id } = await create.json<{ id: string }>();
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}`, { method: "DELETE", headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const job = await env.DB.prepare("SELECT id FROM content_jobs WHERE id=?").bind(id).first();
+    expect(job).toBeNull();
+    const src = await env.DB.prepare("SELECT id FROM content_sources WHERE job_id=?").bind(id).first();
+    expect(src).toBeNull();
+  });
+
+  it("타인 작업은 404", async () => {
+    const ck1 = await userCookie("u1", "u1@e.com");
+    const create = await SELF.fetch("https://example.com/api/content/jobs", {
+      method: "POST", headers: { cookie: ck1, "content-type": "application/json" }, body: JSON.stringify({ topic: "t" }),
+    });
+    const { id } = await create.json<{ id: string }>();
+    const ck2 = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}`, { method: "DELETE", headers: { cookie: ck2 } });
+    expect(res.status).toBe(404);
+    const job = await env.DB.prepare("SELECT id FROM content_jobs WHERE id=?").bind(id).first();
+    expect(job).not.toBeNull();
+  });
+
+  it("미인증 요청 401", async () => {
+    const res = await SELF.fetch("https://example.com/api/content/jobs/anything", { method: "DELETE" });
+    expect(res.status).toBe(401);
+  });
+});

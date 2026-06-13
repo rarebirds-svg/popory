@@ -254,3 +254,34 @@ describe("POST /api/content/topics/:id/jobs", () => {
     expect(results).toHaveLength(1);
   });
 });
+
+describe("DELETE /api/content/topics/:id", () => {
+  it("주제와 하위 작업을 모두 삭제한다", async () => {
+    const ck = await userCookie();
+    const cr = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "지울주제", platforms: [{ platform: "naver-blog" }, { platform: "youtube" }] }),
+    });
+    const { topic_id } = await cr.json<{ topic_id: string }>();
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topic_id}`, { method: "DELETE", headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const topic = await env.DB.prepare("SELECT id FROM content_topics WHERE id=?").bind(topic_id).first();
+    expect(topic).toBeNull();
+    const { results } = await env.DB.prepare("SELECT id FROM content_jobs WHERE topic_id=?").bind(topic_id).all();
+    expect(results).toHaveLength(0);
+  });
+
+  it("타인 주제는 404이고 삭제되지 않는다", async () => {
+    const ck1 = await userCookie("u1", "u1@e.com");
+    const cr = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck1, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platforms: [{ platform: "naver-blog" }] }),
+    });
+    const { topic_id } = await cr.json<{ topic_id: string }>();
+    const ck2 = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topic_id}`, { method: "DELETE", headers: { cookie: ck2 } });
+    expect(res.status).toBe(404);
+    const topic = await env.DB.prepare("SELECT id FROM content_topics WHERE id=?").bind(topic_id).first();
+    expect(topic).not.toBeNull();
+  });
+});
