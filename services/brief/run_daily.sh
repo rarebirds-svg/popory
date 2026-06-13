@@ -247,8 +247,9 @@ while IFS=' ' read -r SLUG MODE; do
 done <<< "${CATEGORIES}"
 
 if [ ${GEN_OK_COUNT} -eq 0 ]; then
-  log "\"abort: all categories generate failed\""
-  exit 5
+  # 전부 실패해도 종료하지 않는다 — 한도(exit 6) 실패면 종료부에서 pending이 기록돼야
+  # retry 잡이 자동 복구한다. 발송 단계는 빈 배열 가드로 자연히 skip된다.
+  log "\"all categories generate failed — 발송 skip, 종료부 pending 처리로 진행\""
 fi
 
 # 4) standalone 카테고리 발송 (카테고리별 1통씩)
