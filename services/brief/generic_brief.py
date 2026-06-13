@@ -23,10 +23,12 @@ from popory_brief import limit_detect
 
 BRIEF_DIR = Path(__file__).resolve().parent
 VENV_PY = BRIEF_DIR / ".venv" / "bin" / "python"
-CLAUDE_BIN = "/opt/homebrew/bin/claude"
+# 기본 claude CLI 경로. BRIEF_CLAUDE_BIN 환경변수로 오버라이드 가능(E2E 테스트용 스텁 주입).
+CLAUDE_BIN = os.environ.get("BRIEF_CLAUDE_BIN", "/opt/homebrew/bin/claude")
 DEFAULT_MODEL = "claude-sonnet-4-6"
 TIMEOUT_SECONDS = 1800
-BACKOFF_SECONDS = [60, 180]
+# BRIEF_BACKOFF_SECONDS(csv)로 오버라이드 가능(E2E 테스트는 빈 값). 1차 실패 후 대기 초.
+BACKOFF_SECONDS = [int(s) for s in os.environ.get("BRIEF_BACKOFF_SECONDS", "60,180").split(",") if s.strip()]
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
 

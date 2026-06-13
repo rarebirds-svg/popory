@@ -15,6 +15,7 @@
 import argparse
 import datetime
 import json
+import os
 import re
 import subprocess
 import sys
@@ -26,7 +27,8 @@ from popory_brief.log import append_log, KST
 from popory_brief import limit_detect
 
 LOGS_DIR = Path(__file__).resolve().parent / "logs"
-CLAUDE_BIN = "/opt/homebrew/bin/claude"
+# 기본 claude CLI 경로. BRIEF_CLAUDE_BIN 환경변수로 오버라이드 가능(E2E 테스트용 스텁 주입).
+CLAUDE_BIN = os.environ.get("BRIEF_CLAUDE_BIN", "/opt/homebrew/bin/claude")
 DEFAULT_MODEL = "claude-sonnet-4-6"
 TIMEOUT_SECONDS = 1800
 
@@ -78,7 +80,8 @@ def main() -> None:
     # Claude Max 사용량 한도(5시간 윈도우)는 stdout에 메시지를 남기고 exit 1로 끝난다.
     # 일시적 throttle는 백오프 재시도로 흡수하고, 그 외 에러는 즉시 실패한다.
     # 백오프로도 못 흡수하는 장시간 한도는 exit 6 + reset epoch로 알려 retry 잡이 복구한다.
-    BACKOFF_SECONDS = [60, 180]  # 1차 실패 후 대기 초. 길이 = 추가 재시도 횟수
+    # BRIEF_BACKOFF_SECONDS(csv)로 오버라이드 가능(E2E 테스트는 "0"). 1차 실패 후 대기 초. 길이 = 추가 재시도 횟수.
+    BACKOFF_SECONDS = [int(s) for s in os.environ.get("BRIEF_BACKOFF_SECONDS", "60,180").split(",") if s.strip()]
 
     attempt = 0
     try:
