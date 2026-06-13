@@ -104,9 +104,10 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
         {(job.status === "review" || job.status === "done") && (job.platform === "youtube" || job.platform === "shorts") && (
           <div className="mt-8 space-y-4">
             {(() => {
-              const m = job.meta_json ? (JSON.parse(job.meta_json) as { images_missing?: number; images_total?: number }) : {};
-              return m.images_missing ? (
-                <p className="text-xs text-amber-600">배경 이미지 일부 누락 ({m.images_missing}/{m.images_total}). 재생성을 권장합니다.</p>
+              const missing = typeof meta?.images_missing === "number" ? meta.images_missing : 0;
+              const total = typeof meta?.images_total === "number" ? meta.images_total : 0;
+              return missing ? (
+                <p className="text-xs text-amber-600">배경 이미지 일부 누락 ({missing}/{total}). 재생성을 권장합니다.</p>
               ) : null;
             })()}
             <video controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video`} />
