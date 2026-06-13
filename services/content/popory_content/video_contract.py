@@ -21,4 +21,6 @@ def parse_video(text: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     for s in scenes:
         if not s.get("caption") or not s.get("narration"):
             raise ContractError("scene 에 caption/narration 누락")
+        if not s.get("image_prompt"):
+            raise ContractError("scene 에 image_prompt 누락")
     return scenes, meta
