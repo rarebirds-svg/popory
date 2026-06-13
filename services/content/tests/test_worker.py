@@ -198,6 +198,17 @@ def test_youtube_most_images_failed_reports_failed(monkeypatch):
     assert "배경 이미지 생성 실패" in result[1]["error"]
 
 
+def test_youtube_half_images_failed_reports_failed(monkeypatch):
+    monkeypatch.setattr(worker, "make_video",
+                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 3, 6))
+    client = FakeClient({"job": {"id": "j3", "topic": "t", "platform": "youtube",
+                                 "params_json": '{"length":"5","voice":"male","image_style":"photo"}'},
+                         "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    result = [p for p in client.patched if p[0].endswith("/result")][-1]
+    assert result[1]["status"] == "failed"
+
+
 def test_youtube_few_images_failed_reports_review(monkeypatch):
     monkeypatch.setattr(worker, "make_video",
                         lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 1, 6))

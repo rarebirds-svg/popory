@@ -47,7 +47,7 @@ def run_once(client) -> bool:
             opts = parse_options(job.get("params_json"))
             mp4, scenes, meta, img_missing, img_total = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
-                image_fetcher=lambda p: _safe_image(client, p),
+                image_fetcher=lambda p: _safe_image(client, p, job_id),
                 scene_count=SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
@@ -59,7 +59,7 @@ def run_once(client) -> bool:
             opts = parse_shorts_options(job.get("params_json"))
             mp4, scenes, meta, img_missing, img_total = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
-                image_fetcher=lambda p: _safe_image(client, p),
+                image_fetcher=lambda p: _safe_image(client, p, job_id),
                 scene_count=SHORT_SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
@@ -112,7 +112,7 @@ IMAGE_BACKOFF = [2, 5]
 IMAGE_FAIL_RATIO = 0.5
 
 
-def _safe_image(client, prompt: str):
+def _safe_image(client, prompt: str, job_id: str = "?"):
     """AI 이미지 1장. 일시 실패는 재시도, 최종 실패는 로그+None(단색 폴백)."""
     last = ""
     for attempt in range(1, IMAGE_MAX_ATTEMPTS + 1):
@@ -122,7 +122,7 @@ def _safe_image(client, prompt: str):
             last = str(e)[:200]
             if attempt < IMAGE_MAX_ATTEMPTS:
                 time.sleep(IMAGE_BACKOFF[attempt - 1])
-    append_log(LOGS_DIR, {"worker": "content", "status": "image_failed", "error": last})
+    append_log(LOGS_DIR, {"worker": "content", "status": "image_failed", "job": job_id, "error": last})
     return None
 
 
