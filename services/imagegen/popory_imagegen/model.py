@@ -92,11 +92,17 @@ def build_pipe(model_name: str | None = None) -> _DiffusersPipe:
 
     name = model_name or os.environ.get("POPORY_IMAGEGEN_MODEL", "realvisxl")
     if name == "sd15":
+        # fp16 파일을 로드해 fp32로 업캐스트한다. MPS fp16 연산은 NaN→검은 이미지를
+        # 내므로 연산은 fp32로, 다운로드는 작은 fp16 가중치 재사용으로 막는다.
         pipe = StableDiffusionPipeline.from_pretrained(
-            "SG161222/Realistic_Vision_V6.0_B1_noVAE",
-            torch_dtype=torch.float16,
+            "Lykon/dreamshaper-8",
+            torch_dtype=torch.float32,
+            variant="fp16",
             safety_checker=None,
         ).to("mps")
+        # 16GB 공유 메모리 — 생성 피크 메모리를 낮춰 OOM(SIGKILL) 방지
+        pipe.enable_attention_slicing()
+        pipe.vae.enable_tiling()
         return _DiffusersPipe(pipe, steps=25, guidance=6.0, width=768, height=768)
     # realvisxl + SDXL-Lightning 8-step LoRA
     pipe = StableDiffusionXLPipeline.from_pretrained(
