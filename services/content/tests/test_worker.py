@@ -14,6 +14,7 @@ class FakeClient:
     def __init__(self, claim_response):
         self._claim = claim_response
         self.patched = []
+        self.uploaded = []
 
     def post(self, path, *, json=None):
         assert path == "/api/content/jobs/claim"
@@ -21,6 +22,10 @@ class FakeClient:
 
     def patch(self, path, *, json):
         self.patched.append((path, json))
+        return {"ok": True}
+
+    def put_binary(self, path, *, data, content_type):
+        self.uploaded.append(path)
         return {"ok": True}
 
 
@@ -71,7 +76,7 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
 
     def fake_make_video(**kw):
         captured.update(kw)
-        return (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"})
+        return (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"}, 0, 1)
 
     monkeypatch.setattr(worker, "make_video", fake_make_video)
 
@@ -149,3 +154,57 @@ def test_run_upload_once_no_job():
             return {}
 
     assert worker.run_upload_once(C()) is False
+
+
+def test_safe_image_retries_then_succeeds(monkeypatch):
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    class C:
+        def post_for_bytes(self, path, *, json):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("boom")
+            return b"img"
+
+    assert worker._safe_image(C(), "p") == b"img"
+    assert calls["n"] == 3
+
+
+def test_safe_image_all_fail_returns_none(monkeypatch):
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+
+    class C:
+        def post_for_bytes(self, path, *, json):
+            raise RuntimeError("boom")
+
+    assert worker._safe_image(C(), "p") is None
+
+
+class _Mp4:
+    def read_bytes(self):
+        return b""
+
+
+def test_youtube_most_images_failed_reports_failed(monkeypatch):
+    monkeypatch.setattr(worker, "make_video",
+                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 5, 6))
+    client = FakeClient({"job": {"id": "j1", "topic": "t", "platform": "youtube",
+                                 "params_json": '{"length":"5","voice":"male","image_style":"photo"}'},
+                         "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    result = [p for p in client.patched if p[0].endswith("/result")][-1]
+    assert result[1]["status"] == "failed"
+    assert "배경 이미지 생성 실패" in result[1]["error"]
+
+
+def test_youtube_few_images_failed_reports_review(monkeypatch):
+    monkeypatch.setattr(worker, "make_video",
+                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 1, 6))
+    client = FakeClient({"job": {"id": "j2", "topic": "t", "platform": "youtube",
+                                 "params_json": '{"length":"5","voice":"male","image_style":"photo"}'},
+                         "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    result = [p for p in client.patched if p[0].endswith("/result")][-1]
+    assert result[1]["status"] == "review"
+    assert result[1]["meta"]["images_missing"] == 1
