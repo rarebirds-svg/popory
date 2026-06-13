@@ -102,18 +102,23 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
     assert "illustration" in captured.get("image_style_kw")
 
 
-def test_safe_image_returns_none_on_error():
-    class C:
-        def post_for_bytes(self, path, *, json):
-            raise worker.PortalError("boom", exit_code=4)
-    assert worker._safe_image(C(), "prompt") is None
+def test_safe_image_returns_none_on_error(monkeypatch):
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+
+    def fake_post(url, json=None, timeout=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "prompt") is None
 
 
-def test_safe_image_returns_bytes():
-    class C:
-        def post_for_bytes(self, path, *, json):
-            return b"\x89PNG"
-    assert worker._safe_image(C(), "prompt") == b"\x89PNG"
+def test_safe_image_returns_bytes(monkeypatch):
+    class Resp:
+        status_code = 200
+        content = b"\x89PNG"
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(None, "prompt") == b"\x89PNG"
 
 
 def test_run_upload_once_uploads_and_reports(monkeypatch):
@@ -160,25 +165,40 @@ def test_safe_image_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(worker.time, "sleep", lambda s: None)
     calls = {"n": 0}
 
-    class C:
-        def post_for_bytes(self, path, *, json):
-            calls["n"] += 1
-            if calls["n"] < 3:
-                raise RuntimeError("boom")
-            return b"img"
+    class Resp:
+        status_code = 200
+        content = b"img"
 
-    assert worker._safe_image(C(), "p") == b"img"
+    def fake_post(url, json=None, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("boom")
+        return Resp()
+
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "p") == b"img"
     assert calls["n"] == 3
 
 
 def test_safe_image_all_fail_returns_none(monkeypatch):
     monkeypatch.setattr(worker.time, "sleep", lambda s: None)
 
-    class C:
-        def post_for_bytes(self, path, *, json):
-            raise RuntimeError("boom")
+    def fake_post(url, json=None, timeout=None):
+        raise RuntimeError("boom")
 
-    assert worker._safe_image(C(), "p") is None
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "p") is None
+
+
+def test_safe_image_http_error_returns_none(monkeypatch):
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+
+    class Resp:
+        status_code = 500
+        text = "err"
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(None, "p") is None
 
 
 class _Mp4:

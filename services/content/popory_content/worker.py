@@ -4,6 +4,8 @@ import sys
 import time
 from pathlib import Path
 
+import requests
+
 from popory_content.generate import generate, GenerateError
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
 from popory_content.video import make_video, VideoError
@@ -110,14 +112,18 @@ def _report(client, job_id: str, body: dict, status_label: str) -> None:
 IMAGE_MAX_ATTEMPTS = 3
 IMAGE_BACKOFF = [2, 5]
 IMAGE_FAIL_RATIO = 0.5
+IMAGEGEN_URL = os.environ.get("POPORY_IMAGEGEN_URL", "http://localhost:8765/generate")
 
 
 def _safe_image(client, prompt: str, job_id: str = "?"):
-    """AI 이미지 1장. 일시 실패는 재시도, 최종 실패는 로그+None(단색 폴백)."""
+    """로컬 이미지 서비스로 배경 1장 생성. 일시 실패는 재시도, 최종 실패는 로그+None."""
     last = ""
     for attempt in range(1, IMAGE_MAX_ATTEMPTS + 1):
         try:
-            return client.post_for_bytes("/api/content/ai-image", json={"prompt": prompt})
+            resp = requests.post(IMAGEGEN_URL, json={"prompt": prompt}, timeout=120)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"imagegen {resp.status_code}: {resp.text[:200]}")
+            return resp.content
         except Exception as e:  # noqa: BLE001
             last = str(e)[:200]
             if attempt < IMAGE_MAX_ATTEMPTS:
