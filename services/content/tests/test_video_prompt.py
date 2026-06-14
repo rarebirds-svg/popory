@@ -48,10 +48,10 @@ def test_system_prompt_demands_consistent_style_suffix():
     assert "watercolor painting" in sp
 
 
-def test_video_and_shorts_prompts_require_natural_whole_people():
-    """사람은 허용하되 잘리거나 기형이 되지 않게 온전히 표현하도록 지시해야 한다(하드 금지 아님)."""
+def test_video_and_shorts_prompts_avoid_frontfacing_faces():
+    """무서운 얼굴 방지 — 정면 얼굴 구도를 피하고 뒷모습·실루엣·원경으로 유도(사람 자체는 허용)."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
     for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
-        assert "사람이 등장해도 좋되" in sp       # 인물 허용
-        assert "잘리거나 기형이 되지 않게" in sp   # 온전·정상 인체 요구
-        assert "절대 넣지 않습니다" not in sp      # 하드 금지 제거 확인
+        assert "정면" in sp             # 정면 얼굴 회피 지시
+        assert "뒷모습" in sp           # 얼굴이 안 드러나는 대안 구도
+        assert "사람이 필요하면" in sp   # 사람 자체는 허용(하드 금지 아님)

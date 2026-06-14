@@ -42,7 +42,13 @@ class ModelManager:
         return self._pipe is not None
 
 
-NEGATIVE_DEFAULT = "deformed, distorted, extra limbs, bad anatomy, text, watermark, signature"
+NEGATIVE_DEFAULT = (
+    "deformed, distorted, disfigured, mutated, extra limbs, bad anatomy, "
+    "deformed face, ugly face, mutated face, asymmetric eyes, deformed eyes, "
+    "extra fingers, fused fingers, malformed hands, "
+    "creepy, scary, horror, uncanny, grotesque, "
+    "text, watermark, signature"
+)
 
 
 class _DiffusersPipe:
