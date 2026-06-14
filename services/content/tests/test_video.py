@@ -12,8 +12,10 @@ from popory_content.video import (
     _split_sentences,
     _sentence_spans,
     _render_subtitle_png,
+    _deepen_voice,
     FONT_PATH,
 )
+from popory_content import video as _video
 
 _HAS_TOOLS = bool(shutil.which("ffmpeg") and shutil.which("say") and Path(FONT_PATH).exists())
 
@@ -59,6 +61,27 @@ def test_sentence_spans_covers_full_duration():
 
 def test_sentence_spans_single():
     assert _sentence_spans(["하나"], 5.0) == [(0.0, 5.0)]
+
+
+def test_deepen_voice_disabled_returns_original(tmp_path, monkeypatch):
+    monkeypatch.setattr(_video, "VOICE_DEEPEN_SEMITONES", 0.0)
+    p = tmp_path / "0.mp3"
+    p.write_bytes(b"x")
+    assert _deepen_voice(p) == p          # 0이면 변형 안 함
+
+
+def test_deepen_voice_builds_pitchdown_filter(tmp_path, monkeypatch):
+    monkeypatch.setattr(_video, "VOICE_DEEPEN_SEMITONES", 2.0)
+    cmds = []
+    monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
+    src = tmp_path / "0.mp3"
+    src.write_bytes(b"x")
+    out = _deepen_voice(src)
+    assert out.name == "0_deep.mp3"        # 새 파일로 출력
+    af = cmds[0][cmds[0].index("-af") + 1]
+    assert "asetrate" in af and "atempo" in af   # 피치 다운
+    assert "treble" in af                         # 명료도(프레즌스) 복원
+    assert "equalizer=f=350" in af                # 머드 컷
 
 
 def test_render_subtitle_png_is_transparent(tmp_path):

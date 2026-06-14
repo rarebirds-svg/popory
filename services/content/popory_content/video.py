@@ -1,4 +1,5 @@
 # 영상 생성 — claude 대본(generate_scenes) + macOS say + Pillow 텍스트카드 + ffmpeg 슬라이드쇼(render_video).
+import os
 import re
 import shutil
 import subprocess
@@ -218,6 +219,29 @@ def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
     _run(cmd)
 
 
+# 묵직한 중저음 정도(반음). 0이면 미적용. env로 조절.
+VOICE_DEEPEN_SEMITONES = float(os.environ.get("POPORY_VOICE_DEEPEN_SEMITONES", "2"))
+
+
+def _deepen_voice(audio: Path) -> Path:
+    """TTS 음성을 묵직한 중저음으로(-N반음). asetrate 피치다운은 포먼트도 내려 답답해지므로
+    머드(350Hz)컷 + 프레즌스(4kHz) 부스트로 명료도를 복원한다(B 방식). 실패하면 원본 유지."""
+    if VOICE_DEEPEN_SEMITONES <= 0:
+        return audio
+    ratio = 2 ** (-VOICE_DEEPEN_SEMITONES / 12)
+    tempo = 2 ** (VOICE_DEEPEN_SEMITONES / 12)
+    out = audio.with_name(f"{audio.stem}_deep.mp3")
+    af = (
+        f"aresample=24000,asetrate={int(24000 * ratio)},aresample=24000,atempo={tempo:.4f},"
+        "equalizer=f=350:width_type=q:w=1.2:g=-3,treble=g=4:f=4000"
+    )
+    try:
+        _run([FFMPEG_BIN, "-y", "-i", str(audio), "-af", af, str(out)])
+        return out
+    except Exception:  # noqa: BLE001 — 변형 실패시 원본 음성 유지
+        return audio
+
+
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False) -> tuple[Path, int, int]:
@@ -250,6 +274,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         else:
             audio = work / f"{i}.aiff"
             _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), narration])
+        audio = _deepen_voice(audio)  # 묵직한 중저음으로 변형
         dur = _duration(audio)
         base_png = work / f"{i}.png"
         _render_card(caption, "", base_png, bg_image_bytes=bg_bytes, portrait=portrait)
