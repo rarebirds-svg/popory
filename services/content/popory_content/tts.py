@@ -10,17 +10,23 @@ LANGUAGE = "ko-KR"
 
 _SENT = re.compile(r"(?<=[.?!])\s+")
 _COMMA = re.compile(r"\s*[,，]\s*")
+# 문장 앞 의미 없는 간투사/추임새: 음·흠(허밍, 공백만으로도) 또는 어·아·에(쉼표 동반 시)
+_FILLER = re.compile(r"^\s*(?:음+|흠+|어+|아+|에+)\s*,\s*|^\s*(?:음+|흠+)\s+")
 
 
 def _split_for_pauses(text: str) -> str:
-    """쉼표 뒤는 [pause short](짧은 호흡), 문장 끝은 [pause](더 긴 호흡) 마크업으로
-    계단식 호흡을 만든다(쉼표에서 급하게 안 읽도록). 리터럴 대괄호는 제거(마크업 오인 방지)."""
+    """문장 끝은 [pause long], 쉼표 뒤는 [pause]로 한 템포 쉬게 한다(급하게 안 읽도록).
+    문장 앞 간투사(음·어·아…)는 제거. 리터럴 대괄호는 제거(마크업 오인 방지)."""
     text = text.replace("[", "").replace("]", "")
     parts = [p.strip() for p in _SENT.split(text.strip()) if p.strip()]
     if not parts:
         return text.strip()
-    parts = [_COMMA.sub(", [pause short] ", p) for p in parts]
-    return " [pause] ".join(parts)
+    out = []
+    for p in parts:
+        p = (_FILLER.sub("", p).strip() or p)   # 간투사 제거(전부 지워지면 원문 유지)
+        p = _COMMA.sub(", [pause] ", p)          # 쉼표 뒤 호흡
+        out.append(p)
+    return " [pause long] ".join(out)             # 문장 끝 더 긴 호흡
 
 
 def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:

@@ -42,29 +42,41 @@ def test_split_for_pauses_strips_literal_brackets():
     # 내레이션의 리터럴 대괄호는 제거되고, 문장 사이 pause 마크업만 남는다
     assert "[단독]" not in out
     assert "단독 첫 문장입니다." in out
-    assert "[pause]" in out  # 문장 구분 pause는 유지
+    assert "[pause long]" in out  # 문장 구분 pause(한 템포)
 
 
 def test_split_for_pauses_inserts_pause_markup():
     from popory_content.tts import _split_for_pauses
     out = _split_for_pauses("첫째 문장입니다. 둘째 문장이에요!")
-    assert out == "첫째 문장입니다. [pause] 둘째 문장이에요!"
+    assert out == "첫째 문장입니다. [pause long] 둘째 문장이에요!"
 
 
-def test_split_for_pauses_comma_gets_short_pause():
+def test_split_for_pauses_comma_gets_pause():
     from popory_content.tts import _split_for_pauses
     out = _split_for_pauses("사과와, 배 그리고, 감을 샀습니다.")
-    # 쉼표 뒤에는 짧은 호흡([pause short])이 들어간다 — 급하게 안 읽도록
-    assert out.count("[pause short]") == 2
-    assert ", [pause short] 배" in out
+    # 쉼표 뒤에는 호흡([pause])이 들어간다 — 급하게 안 읽도록
+    assert out.count("[pause]") == 2
+    assert ", [pause] 배" in out
 
 
 def test_split_for_pauses_comma_shorter_than_sentence():
     from popory_content.tts import _split_for_pauses
     out = _split_for_pauses("그는, 천천히 말했다. 그리고 떠났다.")
-    # 쉼표는 [pause short], 문장 끝은 더 긴 [pause] — 계단식
-    assert "[pause short]" in out
+    # 쉼표는 [pause], 문장 끝은 더 긴 [pause long] — 계단식
     assert "[pause]" in out
+    assert "[pause long]" in out
+
+
+def test_split_for_pauses_strips_leading_filler():
+    from popory_content.tts import _split_for_pauses
+    # 문장 앞 간투사(음·어·아) 제거
+    assert _split_for_pauses("음, 그러니까 중요합니다.").startswith("그러니까")
+    assert "음" not in _split_for_pauses("음 그래서 떠났다.")
+    out = _split_for_pauses("첫 문장이다. 어, 둘째 문장이다.")
+    assert "어," not in out and "둘째 문장이다" in out
+    # 진짜 단어는 보존(어머니·아침)
+    assert "어머니" in _split_for_pauses("어머니가 오셨다.")
+    assert "아침" in _split_for_pauses("아침에 일어났다.")
 
 
 @responses.activate
@@ -77,6 +89,6 @@ def test_synthesize_uses_markup_and_rate(monkeypatch):
     body = responses.calls[0].request.body
     payload = _json.loads(body if isinstance(body, str) else body.decode())
     assert payload["input"].get("markup")  # text 아니라 markup 사용
-    assert "[pause]" in payload["input"]["markup"]  # 문장 사이 pause
+    assert "[pause long]" in payload["input"]["markup"]  # 문장 사이 pause
     assert payload["audioConfig"]["speakingRate"] == 0.96
     assert payload["voice"]["name"] == "ko-KR-Chirp3-HD-Aoede"
