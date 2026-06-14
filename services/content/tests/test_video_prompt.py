@@ -48,6 +48,15 @@ def test_system_prompt_demands_consistent_style_suffix():
     assert "watercolor painting" in sp
 
 
+def test_prompts_brand_and_no_subscribe_cta():
+    """description에 포포리 책방 브랜딩 + 구독·좋아요 유도 금지(내레이션·설명 모두)."""
+    from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
+    for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
+        assert "포포리 책방" in sp        # 채널 브랜딩
+        assert "구독" in sp               # 구독 요청 금지 지시가 명시됨
+        assert "넣지 않습니다" in sp       # 금지 형태
+
+
 def test_video_and_shorts_prompts_allow_natural_faces():
     """SDXL은 얼굴을 잘 그리므로 얼굴 허용 — 단 자연스러운 표정·정상 인체로 유도."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
