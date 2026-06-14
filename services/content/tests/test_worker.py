@@ -252,6 +252,62 @@ def test_safe_image_http_error_returns_none(monkeypatch):
     assert worker._safe_image(None, "p") is None
 
 
+class _CFClient:
+    """post_for_bytes만 가진 가짜 PortalClient(CF flux 경로 테스트용)."""
+
+    def __init__(self, result):
+        self.result = result  # bytes 또는 raise할 Exception
+        self.calls = 0
+
+    def post_for_bytes(self, path, *, json):
+        self.calls += 1
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def test_safe_image_uses_cloudflare_first(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    local = {"n": 0}
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: local.__setitem__("n", local["n"] + 1))
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 1
+    assert local["n"] == 0  # CF 성공이면 로컬 호출 안 함
+
+
+def test_safe_image_falls_back_to_local_on_cf_quota(monkeypatch, tmp_path):
+    from popory_content.portal_client import PortalError
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    client = _CFClient(PortalError("ai-image 500: 4006: you have used up your daily free allocation of 10,000 neurons", exit_code=4))
+    png = _png((1, 2, 3))
+
+    class Resp:
+        status_code = 200
+        content = png
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(client, "p") == png   # 한도 → 로컬 폴백
+    assert worker._cf_exhausted_today() is True       # 오늘 소진 기록됨
+
+
+def test_safe_image_skips_cf_when_exhausted(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    worker._mark_cf_exhausted()                       # 오늘 소진 상태
+    png = _png()
+    client = _CFClient(png)
+
+    class Resp:
+        status_code = 200
+        content = png
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 0   # 소진이면 CF 건너뛰고 바로 로컬
+
+
 class _Mp4:
     def read_bytes(self):
         return b""

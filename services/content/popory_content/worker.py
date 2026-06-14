@@ -1,4 +1,6 @@
 # 포털 큐에서 컨텐츠 작업을 claim → claude 생성 → 결과 회신. __main__ 은 무한 poll 루프.
+import datetime
+import json
 import os
 import sys
 import time
@@ -118,18 +120,59 @@ IMAGEGEN_URL = os.environ.get("POPORY_IMAGEGEN_URL", "http://localhost:8765/gene
 # 로컬 fp32 SDXL/SD 생성은 맥미니 16GB 메모리 압박에서 장면당 ~110초가 걸린다.
 # 120초는 빠듯해 종종 read timeout → 재시도 낭비 → 단색 폴백을 유발했다. 여유 상향.
 IMAGE_TIMEOUT_SECONDS = int(os.environ.get("POPORY_IMAGEGEN_TIMEOUT", "300"))
+# 1순위 = Cloudflare flux-schnell(무료 ~10k neurons/일). 한도 소진(4006)이면 로컬 RealVisXL 폴백.
+USE_CF_IMAGE = os.environ.get("POPORY_USE_CF_IMAGE", "1") != "0"
+CF_AI_IMAGE_PATH = "/api/content/ai-image"
+CF_QUOTA_FILE = LOGS_DIR / "cf_quota.json"
 
 
 def _verify_image(data: bytes) -> None:
-    """imagegen 응답이 디코드 가능한 완전한 이미지인지 확인한다. 연결 끊김으로 잘린
+    """이미지 응답이 디코드 가능한 완전한 이미지인지 확인한다. 연결 끊김으로 잘린
     바이트(BrokenPipe)면 raise → 재시도·image_failed 로깅으로 이어져 조용한 단색 폴백을 막는다."""
     if not data:
         raise RuntimeError("empty image response")
     Image.open(BytesIO(data)).load()  # 잘린/깨진 이미지면 여기서 예외
 
 
+def _utc_today() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+
+def _cf_exhausted_today() -> bool:
+    """CF 무료 한도(4006)가 오늘(UTC) 소진됐는지. 다음 UTC 날 자동 리셋."""
+    try:
+        return json.loads(CF_QUOTA_FILE.read_text()).get("exhausted_date") == _utc_today()
+    except Exception:  # noqa: BLE001 — 파일 없음/깨짐이면 미소진으로 간주
+        return False
+
+
+def _mark_cf_exhausted() -> None:
+    try:
+        CF_QUOTA_FILE.write_text(json.dumps({"exhausted_date": _utc_today()}))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _try_cloudflare(client, prompt: str) -> bytes | None:
+    """CF flux-schnell로 1장. 한도(4006/neurons)면 그날 소진 표시 후 None(→로컬 폴백). 그 외 실패도 None."""
+    try:
+        content = client.post_for_bytes(CF_AI_IMAGE_PATH, json={"prompt": prompt})
+        _verify_image(content)
+        return content
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+        if "4006" in msg or "neuron" in msg.lower():
+            _mark_cf_exhausted()
+        return None
+
+
 def _safe_image(client, prompt: str, job_id: str = "?"):
-    """로컬 이미지 서비스로 배경 1장 생성. 일시 실패·깨진 응답은 재시도, 최종 실패는 로그+None."""
+    """배경 1장 생성. 1순위 CF flux-schnell(무료), 한도 소진·실패 시 로컬 RealVisXL 폴백.
+    깨진 응답은 검증으로 걸러 재시도, 최종 실패만 image_failed 로그+None."""
+    if USE_CF_IMAGE and client is not None and not _cf_exhausted_today():
+        img = _try_cloudflare(client, prompt)
+        if img is not None:
+            return img
     last = ""
     for attempt in range(1, IMAGE_MAX_ATTEMPTS + 1):
         try:
