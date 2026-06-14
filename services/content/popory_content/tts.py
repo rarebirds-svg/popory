@@ -9,14 +9,18 @@ TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
 LANGUAGE = "ko-KR"
 
 _SENT = re.compile(r"(?<=[.?!])\s+")
+_COMMA = re.compile(r"\s*[,，]\s*")
 
 
 def _split_for_pauses(text: str) -> str:
-    """문장 사이에 Chirp3-HD 네이티브 [pause short] 마크업을 끼워 호흡을 만든다.
-    리터럴 대괄호는 마크업 오인을 막기 위해 제거한다."""
+    """쉼표 뒤는 [pause short](짧은 호흡), 문장 끝은 [pause](더 긴 호흡) 마크업으로
+    계단식 호흡을 만든다(쉼표에서 급하게 안 읽도록). 리터럴 대괄호는 제거(마크업 오인 방지)."""
     text = text.replace("[", "").replace("]", "")
     parts = [p.strip() for p in _SENT.split(text.strip()) if p.strip()]
-    return " [pause short] ".join(parts) if parts else text.strip()
+    if not parts:
+        return text.strip()
+    parts = [_COMMA.sub(", [pause short] ", p) for p in parts]
+    return " [pause] ".join(parts)
 
 
 def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
