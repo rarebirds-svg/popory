@@ -29,12 +29,12 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
 
   // YouTube 동영상 옵션
   const [ytLength, setYtLength] = useState<"3"|"5"|"7"|"10">("5");
-  const [ytVoice, setYtVoice] = useState<"female-calm"|"female-bright"|"male">("female-calm");
+  const [ytVoice, setYtVoice] = useState<"female-calm"|"female-bright"|"male">("male");
   const [ytStyle, setYtStyle] = useState<"photo"|"illust"|"watercolor"|"minimal">("photo");
 
   // Shorts 옵션
   const [shLength, setShLength] = useState<"15"|"30"|"60">("30");
-  const [shVoice, setShVoice] = useState<"female-calm"|"female-bright"|"male">("female-calm");
+  const [shVoice, setShVoice] = useState<"female-calm"|"female-bright"|"male">("male");
   const [shStyle, setShStyle] = useState<"photo"|"illust"|"watercolor"|"minimal">("photo");
 
   // 인스타 이미지 옵션

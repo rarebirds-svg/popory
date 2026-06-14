@@ -219,8 +219,8 @@ def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
     _run(cmd)
 
 
-# 묵직한 중저음 정도(반음). 0이면 미적용. env로 조절.
-VOICE_DEEPEN_SEMITONES = float(os.environ.get("POPORY_VOICE_DEEPEN_SEMITONES", "2"))
+# 묵직한 중저음 정도(반음). 0이면 미적용(기본). env로 켤 수 있음.
+VOICE_DEEPEN_SEMITONES = float(os.environ.get("POPORY_VOICE_DEEPEN_SEMITONES", "0"))
 
 
 def _deepen_voice(audio: Path) -> Path:
