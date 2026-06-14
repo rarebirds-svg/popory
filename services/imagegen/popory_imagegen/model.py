@@ -112,15 +112,20 @@ def build_pipe(model_name: str | None = None) -> _DiffusersPipe:
         # 16GB 메모리 압박에서 768·25스텝은 장면당 ~110초라 워커 타임아웃을 유발했다.
         # 640·20스텝으로 피크 메모리·시간을 낮춘다(배경은 cover-crop·오버레이라 충분).
         return _DiffusersPipe(pipe, steps=20, guidance=6.0, width=640, height=640)
-    # realvisxl + SDXL-Lightning 8-step LoRA
+    # realvisxl(SDXL) + SDXL-Lightning 8-step LoRA. 맥미니 M4 16GB MPS 검증 레시피:
+    # ① bfloat16 — fp16은 MPS에서 오버플로(NaN→검정), bf16은 fp32 지수범위라 안전(크기는 fp16과 동일).
+    # ② attention_slicing 미사용 — MPS에서 SDXL UNET을 NaN(검은 이미지)으로 만드는 범인이라 끔.
+    # ③ upcast_vae — VAE를 fp32로 디코드(안전). 768·8스텝 장당 ~18초, OOM 없음.
     pipe = StableDiffusionXLPipeline.from_pretrained(
-        "SG161222/RealVisXL_V5.0", torch_dtype=torch.float16
+        "SG161222/RealVisXL_V5.0", torch_dtype=torch.bfloat16
     ).to("mps")
     pipe.load_lora_weights(
         "ByteDance/SDXL-Lightning", weight_name="sdxl_lightning_8step_lora.safetensors"
     )
     pipe.fuse_lora()
+    pipe.unload_lora_weights()  # fuse 후 LoRA 가중치 메모리 해제
     pipe.scheduler = EulerDiscreteScheduler.from_config(
         pipe.scheduler.config, timestep_spacing="trailing"
     )
-    return _DiffusersPipe(pipe, steps=8, guidance=0.0, width=1024, height=1024)
+    pipe.upcast_vae()
+    return _DiffusersPipe(pipe, steps=8, guidance=0.0, width=768, height=768)

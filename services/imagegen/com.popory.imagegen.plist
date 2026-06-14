@@ -21,9 +21,9 @@
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>POPORY_IMAGEGEN_MODEL</key>
-        <string>sd15</string>
+        <string>realvisxl</string>
         <key>POPORY_IMAGEGEN_IDLE_SECONDS</key>
-        <string>600</string>
+        <string>120</string>
         <key>HF_HOME</key>
         <string>/Users/daegong/projects/popory/services/imagegen/.hf</string>
     </dict>

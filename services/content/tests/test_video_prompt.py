@@ -48,10 +48,10 @@ def test_system_prompt_demands_consistent_style_suffix():
     assert "watercolor painting" in sp
 
 
-def test_video_and_shorts_prompts_avoid_frontfacing_faces():
-    """무서운 얼굴 방지 — 정면 얼굴 구도를 피하고 뒷모습·실루엣·원경으로 유도(사람 자체는 허용)."""
+def test_video_and_shorts_prompts_allow_natural_faces():
+    """SDXL은 얼굴을 잘 그리므로 얼굴 허용 — 단 자연스러운 표정·정상 인체로 유도."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
     for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
-        assert "정면" in sp             # 정면 얼굴 회피 지시
-        assert "뒷모습" in sp           # 얼굴이 안 드러나는 대안 구도
-        assert "사람이 필요하면" in sp   # 사람 자체는 허용(하드 금지 아님)
+        assert "얼굴이 보여도" in sp        # 얼굴 허용
+        assert "자연스러운 표정" in sp      # 무서운/과장 표정 방지
+        assert "정상" in sp                 # 해부학적 정상 인체
