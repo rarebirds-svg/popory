@@ -372,14 +372,16 @@ describe("POST /api/content/jobs/:id/regenerate", () => {
     return id;
   }
 
-  it("review 영상 작업을 queued로 되돌리고 youtube_status는 보존", async () => {
+  it("review 영상 작업을 queued로 되돌리고 업로드 상태도 리셋", async () => {
     const ck = await userCookie();
     const id = await makeJob(ck, "youtube", "review", "done");
+    await env.DB.prepare("UPDATE content_jobs SET youtube_video_id='vid_old' WHERE id=?").bind(id).run();
     const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/regenerate`, { method: "POST", headers: { cookie: ck } });
     expect(res.status).toBe(200);
-    const job = await env.DB.prepare("SELECT status, youtube_status FROM content_jobs WHERE id=?").bind(id).first<{ status: string; youtube_status: string }>();
+    const job = await env.DB.prepare("SELECT status, youtube_status, youtube_video_id FROM content_jobs WHERE id=?").bind(id).first<{ status: string; youtube_status: string | null; youtube_video_id: string | null }>();
     expect(job?.status).toBe("queued");
-    expect(job?.youtube_status).toBe("done");
+    expect(job?.youtube_status).toBeNull();      // 옛 업로드 상태가 새 영상에 남으면 안 됨
+    expect(job?.youtube_video_id).toBeNull();
   });
 
   it("failed 영상 작업도 재생성 가능", async () => {
