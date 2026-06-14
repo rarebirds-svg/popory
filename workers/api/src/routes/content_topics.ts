@@ -85,7 +85,9 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
       .bind(c.req.param("id")).first<{ id: string; owner_sub: string; topic: string; created_at: number }>();
     if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
     const { results: jobs } = await c.env.DB.prepare(
-      "SELECT id, platform, status, params_json, error, updated_at FROM content_jobs WHERE topic_id=? ORDER BY created_at",
+      "SELECT id, platform, status, params_json, error, updated_at, " +
+        "youtube_status, youtube_video_id, instagram_status, instagram_media_id " +
+        "FROM content_jobs WHERE topic_id=? ORDER BY created_at",
     ).bind(row.id).all();
     return c.json({ id: row.id, topic: row.topic, created_at: row.created_at, jobs });
   });

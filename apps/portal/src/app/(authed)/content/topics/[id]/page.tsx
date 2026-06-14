@@ -19,6 +19,10 @@ interface JobSlot {
   params_json: string | null;
   error: string | null;
   updated_at: number;
+  youtube_status: string | null;
+  youtube_video_id: string | null;
+  instagram_status: string | null;
+  instagram_media_id: string | null;
 }
 
 interface TopicDetail {
@@ -35,27 +39,38 @@ const PLATFORM_LABEL: Record<string, string> = {
   "instagram-image": "인스타 이미지",
 };
 
-const STATUS_LABEL: Record<string, string> = {
-  idle: "대기 중",
-  queued: "큐 대기",
-  running: "생성 중",
-  review: "검토 필요",
-  done: "완료",
-  failed: "실패",
+const TONE: Record<string, string> = {
+  muted: "bg-popory-card text-popory-muted border-popory-border",
+  yellow: "bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:border-yellow-800",
+  blue: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800",
+  purple: "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-300 dark:border-purple-800",
+  green: "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800",
+  red: "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800",
 };
 
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    idle: "bg-popory-card text-popory-muted border-popory-border",
-    queued: "bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:border-yellow-800",
-    running: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800",
-    review: "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-300 dark:border-purple-800",
-    done: "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800",
-    failed: "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800",
-  };
+// 생성 상태 + 업로드 상태를 합쳐 컨텐츠의 실제 진행을 한 라벨로 보여준다(클릭 없이 파악).
+function jobStatusInfo(job: JobSlot): { label: string; tone: string } {
+  const up = job.platform === "instagram-image" ? job.instagram_status : job.youtube_status;
+  const upLabel = job.platform === "instagram-image" ? "인스타" : "유튜브";
+  if (up === "done") return { label: `${upLabel} 업로드 완료`, tone: "green" };
+  if (up === "requested" || up === "uploading") return { label: `${upLabel} 업로드 중…`, tone: "blue" };
+  if (up === "failed") return { label: `${upLabel} 업로드 실패`, tone: "red" };
+  switch (job.status) {
+    case "idle": return { label: "시작 전", tone: "muted" };
+    case "queued": return { label: "생성 대기 중", tone: "yellow" };
+    case "running": return { label: "생성 중…", tone: "blue" };
+    case "review": return { label: "생성 완료 · 검토 필요", tone: "purple" };
+    case "done": return { label: "검토 완료", tone: "green" };
+    case "failed": return { label: "생성 실패", tone: "red" };
+    default: return { label: job.status, tone: "muted" };
+  }
+}
+
+function StatusBadge({ job }: { job: JobSlot }) {
+  const { label, tone } = jobStatusInfo(job);
   return (
-    <span className={`rounded-full border px-2 py-0.5 text-xs ${colors[status] ?? colors.idle}`}>
-      {STATUS_LABEL[status] ?? status}
+    <span className={`rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${TONE[tone] ?? TONE.muted}`}>
+      {label}
     </span>
   );
 }
@@ -91,12 +106,23 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ id
 
         <TopicAutoRefresh active={hasActive} />
 
-        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+        {/* 상단: 유형 추가 + 스타일 프로필 */}
+        <div className="mt-8">
+          <AddPlatformForm
+            topicId={topic.id}
+            existingPlatforms={topic.jobs.map((j) => j.platform)}
+            profiles={profiles}
+          />
+        </div>
+
+        {/* 하단: 컨텐츠 (유형별 상태를 클릭 없이 한눈에) */}
+        <h2 className="mt-10 text-sm font-semibold text-popory-fg">컨텐츠</h2>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
           {topic.jobs.map((job) => (
             <div key={job.id} className="rounded-lg border border-popory-border bg-popory-card p-4 space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-medium text-popory-fg">{PLATFORM_LABEL[job.platform] ?? job.platform}</span>
-                <StatusBadge status={job.status} />
+                <StatusBadge job={job} />
               </div>
 
               {job.status === "idle" && <StartJobButton jobId={job.id} />}
@@ -104,13 +130,13 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ id
               {(job.status === "queued" || job.status === "running") && (
                 <div className="flex items-center gap-2 text-xs text-popory-muted">
                   <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-popory-accent" />
-                  {job.status === "queued" ? "워커 대기 중…" : "생성 중…"}
+                  {job.status === "queued" ? "생성 대기 중…" : "생성 중…"}
                 </div>
               )}
 
               {(job.status === "review" || job.status === "done") && (
                 <Link href={`/content/${job.id}`} className="inline-block rounded-md border border-popory-border px-3 py-1.5 text-xs hover:bg-popory-card">
-                  결과 보기 →
+                  {job.status === "review" ? "검토 · 업로드 →" : "결과 보기 →"}
                 </Link>
               )}
 
@@ -125,12 +151,6 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ id
             </div>
           ))}
         </div>
-
-        <AddPlatformForm
-          topicId={topic.id}
-          existingPlatforms={topic.jobs.map((j) => j.platform)}
-          profiles={profiles}
-        />
       </main>
     </div>
   );
