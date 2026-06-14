@@ -1,4 +1,5 @@
 # 영상 생성 — claude 대본(generate_scenes) + macOS say + Pillow 텍스트카드 + ffmpeg 슬라이드쇼(render_video).
+import re
 import shutil
 import subprocess
 import textwrap
@@ -111,6 +112,46 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
     img.save(out_png)
 
 
+def _split_sentences(text: str) -> list[str]:
+    """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음)."""
+    parts = re.split(r"(?<=[.?!])\s*", text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _sentence_spans(sentences: list[str], total_dur: float) -> list[tuple[float, float]]:
+    """장면 오디오(통째 합성, 자연 음성)를 문장 글자수 비례로 나눠 각 문장의 [start,end] 추정.
+    문장별 TTS 없이 자막 타이밍을 잡아 억양 연속성(자연스러움)을 보존한다."""
+    weights = [max(1, len(s)) for s in sentences]
+    total_w = sum(weights) or 1
+    spans: list[tuple[float, float]] = []
+    acc = 0.0
+    for i, _ in enumerate(weights):
+        start = acc
+        acc = total_dur * sum(weights[: i + 1]) / total_w
+        end = total_dur if i == len(weights) - 1 else acc
+        spans.append((start, end))
+    return spans
+
+
+def _render_subtitle_png(sentence: str, out_png: Path, portrait: bool = False) -> None:
+    """문장 자막을 투명 배경 PNG로 렌더(장면 클립 위에 타이밍 오버레이용). 가독성 위해 검정 외곽선."""
+    w = PORTRAIT_W if portrait else LANDSCAPE_W
+    h = PORTRAIT_H if portrait else LANDSCAPE_H
+    if portrait:
+        sub_font = ImageFont.truetype(FONT_PATH, 46)
+        sub_wrap, sub_y = 18, h - 320
+    else:
+        sub_font = ImageFont.truetype(FONT_PATH, 64)
+        sub_wrap, sub_y = 30, h - 240
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    s = "\n".join(textwrap.wrap(sentence, width=sub_wrap)) or " "
+    d.multiline_text((w / 2, sub_y), s, font=sub_font, fill=(255, 255, 255, 255),
+                     anchor="ma", align="center", spacing=14,
+                     stroke_width=3, stroke_fill=(0, 0, 0, 230))
+    img.save(out_png)
+
+
 def _zoompan_filter(dur: float, portrait: bool = False) -> str:
     """정지 이미지에 장면 전체에 걸친 느린 줌인(켄번스).
     zoompan을 2배 해상도(수퍼샘플)로 돌린 뒤 다운스케일해 정수 pan 떨림을 서브픽셀로 묻는다.
@@ -210,13 +251,27 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             audio = work / f"{i}.aiff"
             _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), narration])
         dur = _duration(audio)
-        png = work / f"{i}.png"
-        _render_card(caption, "", png, bg_image_bytes=bg_bytes, portrait=portrait)
+        base_png = work / f"{i}.png"
+        _render_card(caption, "", base_png, bg_image_bytes=bg_bytes, portrait=portrait)
+        # 문장별 타이밍 자막: 장면 오디오는 통째 합성(자연 음성), 자막만 글자수 비례 타이밍으로
+        # zoompan 위에 오버레이(자막은 줌과 무관하게 안정적으로 고정).
+        sentences = _split_sentences(narration)
+        spans = _sentence_spans(sentences, dur)
+        inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio)]
+        graph = f"[0:v]{_zoompan_filter(dur, portrait)}[v0]"
+        prev = "v0"
+        for k, (st, en) in enumerate(spans):
+            sub_png = work / f"sub_{i}_{k}.png"
+            _render_subtitle_png(sentences[k], sub_png, portrait=portrait)
+            inputs += ["-loop", "1", "-i", str(sub_png)]
+            out = f"v{k + 1}"
+            graph += f";[{prev}][{k + 2}:v]overlay=0:0:enable='between(t,{st:.3f},{en:.3f})'[{out}]"
+            prev = out
         clip = work / f"scene_{i}.mp4"
         _run([
-            FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(audio),
-            "-filter_complex", f"[0:v]{_zoompan_filter(dur, portrait)}[v]",
-            "-map", "[v]", "-map", "1:a",
+            FFMPEG_BIN, "-y", *inputs,
+            "-filter_complex", graph,
+            "-map", f"[{prev}]", "-map", "1:a",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{dur:.3f}",
             "-c:a", "aac", "-shortest", str(clip),
         ])

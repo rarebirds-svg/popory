@@ -6,7 +6,14 @@ from pathlib import Path
 import pytest
 from PIL import Image as _Image
 
-from popory_content.video import render_video, _render_card, FONT_PATH
+from popory_content.video import (
+    render_video,
+    _render_card,
+    _split_sentences,
+    _sentence_spans,
+    _render_subtitle_png,
+    FONT_PATH,
+)
 
 _HAS_TOOLS = bool(shutil.which("ffmpeg") and shutil.which("say") and Path(FONT_PATH).exists())
 
@@ -28,6 +35,40 @@ def test_render_card_corrupt_bytes_falls_back(tmp_path):
     out = tmp_path / "corrupt.png"
     _render_card("제목", "문장", out, bg_image_bytes=b"\x89PNG-not-a-real-image")
     assert out.exists() and out.stat().st_size > 1000
+
+
+def test_split_sentences():
+    assert _split_sentences("첫 문장이다. 둘째 문장! 셋째?") == ["첫 문장이다.", "둘째 문장!", "셋째?"]
+    assert _split_sentences("  ") == []
+    assert _split_sentences("문장 하나만") == ["문장 하나만"]
+
+
+def test_sentence_spans_covers_full_duration():
+    sents = ["가나다.", "라마바사아.", "자."]  # 글자수 비례
+    spans = _sentence_spans(sents, 10.0)
+    assert len(spans) == 3
+    assert spans[0][0] == 0.0           # 첫 문장은 0에서 시작
+    assert spans[-1][1] == 10.0         # 마지막 문장은 총 길이에서 끝
+    # 연속(겹치거나 빈틈 없음)
+    for a, b in zip(spans, spans[1:]):
+        assert abs(a[1] - b[0]) < 1e-6
+    # 글자수 많은 둘째 문장이 가장 길다
+    durs = [e - s for s, e in spans]
+    assert durs[1] == max(durs)
+
+
+def test_sentence_spans_single():
+    assert _sentence_spans(["하나"], 5.0) == [(0.0, 5.0)]
+
+
+def test_render_subtitle_png_is_transparent(tmp_path):
+    out = tmp_path / "sub.png"
+    _render_subtitle_png("자막 문장입니다.", out)
+    img = _Image.open(out)
+    assert img.mode == "RGBA"           # 투명 오버레이용
+    assert img.size == (1920, 1080)
+    # 완전 투명이 아닌 픽셀(글자)이 존재
+    assert img.getextrema()[3][1] > 0
 
 
 def test_render_card_portrait_creates_correct_size(tmp_path):
@@ -123,6 +164,7 @@ def test_render_video_counts_missing_images(monkeypatch, tmp_path):
     monkeypatch.setattr(video, "_run", lambda cmd: None)
     monkeypatch.setattr(video, "_duration", lambda path: 1.0)
     monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_render_subtitle_png", lambda *a, **k: None)
     monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm: None)
     monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
     monkeypatch.setattr(video, "_xfade_graph", lambda durs, td=0.4: ("", "v", "a"))
