@@ -10,7 +10,7 @@ from popory_content.video import (
     render_video,
     _render_card,
     _split_sentences,
-    _sentence_spans,
+    _spans_from_durations,
     _render_subtitle_png,
     _deepen_voice,
     FONT_PATH,
@@ -45,22 +45,24 @@ def test_split_sentences():
     assert _split_sentences("문장 하나만") == ["문장 하나만"]
 
 
-def test_sentence_spans_covers_full_duration():
-    sents = ["가나다.", "라마바사아.", "자."]  # 글자수 비례
-    spans = _sentence_spans(sents, 10.0)
+def test_spans_from_durations_track_real_audio_lengths():
+    # 자막 타이밍은 문장별 실측 길이를 그대로 따른다(글자수 추정 아님). 문장 사이 gap만큼 띄움.
+    spans = _spans_from_durations([2.0, 3.0, 1.0], 0.5)
     assert len(spans) == 3
-    assert spans[0][0] == 0.0           # 첫 문장은 0에서 시작
-    assert spans[-1][1] == 10.0         # 마지막 문장은 총 길이에서 끝
-    # 연속(겹치거나 빈틈 없음)
-    for a, b in zip(spans, spans[1:]):
-        assert abs(a[1] - b[0]) < 1e-6
-    # 글자수 많은 둘째 문장이 가장 길다
-    durs = [e - s for s, e in spans]
-    assert durs[1] == max(durs)
+    assert spans[0][0] == 0.0
+    # 비마지막 문장은 다음 문장 시작까지(갭 포함) 자막 유지 → 깜빡임 없음
+    assert abs(spans[0][1] - 2.5) < 1e-6     # 0+2.0+0.5
+    assert abs(spans[1][0] - 2.5) < 1e-6
+    assert abs(spans[1][1] - 6.0) < 1e-6     # 2.5+3.0+0.5
+    assert abs(spans[2][0] - 6.0) < 1e-6
+    assert abs(spans[2][1] - 7.0) < 1e-6     # 마지막은 발화 끝(뒤 갭 없음)
+    # 각 문장 자막의 시작 간격은 실측 길이+gap을 정확히 반영(누적 드리프트 없음)
+    assert abs((spans[1][0] - spans[0][0]) - (2.0 + 0.5)) < 1e-6
+    assert abs((spans[2][0] - spans[1][0]) - (3.0 + 0.5)) < 1e-6
 
 
-def test_sentence_spans_single():
-    assert _sentence_spans(["하나"], 5.0) == [(0.0, 5.0)]
+def test_spans_from_durations_single():
+    assert _spans_from_durations([5.0], 0.5) == [(0.0, 5.0)]
 
 
 def test_deepen_voice_disabled_returns_original(tmp_path, monkeypatch):

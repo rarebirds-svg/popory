@@ -119,19 +119,44 @@ def _split_sentences(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def _sentence_spans(sentences: list[str], total_dur: float) -> list[tuple[float, float]]:
-    """장면 오디오(통째 합성, 자연 음성)를 문장 글자수 비례로 나눠 각 문장의 [start,end] 추정.
-    문장별 TTS 없이 자막 타이밍을 잡아 억양 연속성(자연스러움)을 보존한다."""
-    weights = [max(1, len(s)) for s in sentences]
-    total_w = sum(weights) or 1
-    spans: list[tuple[float, float]] = []
+# 문장별 TTS 클립 사이에 넣는 짧은 호흡(무음) 길이(초). 자막 타이밍이 이 값을 그대로 반영한다.
+SENTENCE_GAP = 0.35
+
+
+def _spans_from_durations(durs: list[float], gap: float = SENTENCE_GAP) -> list[tuple[float, float]]:
+    """문장별 실측 오디오 길이로 자막 [start,end]를 정확히 계산(글자수 추정 아님 → 누적 드리프트 없음).
+    각 문장은 자기 클립 길이만큼 재생되고 사이에 gap(무음)이 들어간다. 비마지막 문장 자막은
+    다음 문장 시작까지(갭 포함) 유지해 깜빡임을 없앤다."""
+    starts: list[float] = []
     acc = 0.0
-    for i, _ in enumerate(weights):
-        start = acc
-        acc = total_dur * sum(weights[: i + 1]) / total_w
-        end = total_dur if i == len(weights) - 1 else acc
-        spans.append((start, end))
+    for d in durs:
+        starts.append(acc)
+        acc += d + gap
+    spans: list[tuple[float, float]] = []
+    for i, st in enumerate(durs):
+        end = starts[i + 1] if i + 1 < len(durs) else starts[i] + durs[i]
+        spans.append((starts[i], end))
     return spans
+
+
+def _concat_audio_with_gaps(segments: list[Path], gap: float, out: Path) -> None:
+    """문장별 오디오 클립을 사이에 gap(무음)을 넣어 한 장면 오디오로 이어붙인다(필터 concat=재인코딩)."""
+    if len(segments) == 1:
+        shutil.copy(segments[0], out)
+        return
+    sil = out.with_name(f"{out.stem}_gap.wav")
+    _run([FFMPEG_BIN, "-y", "-f", "lavfi", "-t", f"{gap:.3f}",
+          "-i", "anullsrc=channel_layout=mono:sample_rate=24000", str(sil)])
+    seq: list[Path] = []
+    for i, s in enumerate(segments):
+        if i:
+            seq.append(sil)
+        seq.append(s)
+    inputs: list[str] = []
+    for p in seq:
+        inputs += ["-i", str(p)]
+    concat = "".join(f"[{i}:a]" for i in range(len(seq))) + f"concat=n={len(seq)}:v=0:a=1[a]"
+    _run([FFMPEG_BIN, "-y", *inputs, "-filter_complex", concat, "-map", "[a]", str(out)])
 
 
 def _render_subtitle_png(sentence: str, out_png: Path, portrait: bool = False) -> None:
@@ -267,21 +292,29 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             images_total += 1
             if bg_bytes is None:
                 images_missing += 1
-        audio_bytes = synthesize(narration, voice=voice)
-        if audio_bytes:
-            audio = work / f"{i}.mp3"
-            audio.write_bytes(audio_bytes)
-        else:
-            audio = work / f"{i}.aiff"
-            _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), narration])
-        audio = _deepen_voice(audio)  # 묵직한 중저음으로 변형
+        # 문장별로 합성·실측해 이어붙인다. 자막을 실제 음성 구간에 정확히 맞추기 위함
+        # (글자수 비례 추정은 [pause]·속도편차로 뒤로 갈수록 어긋났다). 문장 사이엔 짧은 호흡(무음).
+        sentences = _split_sentences(narration) or [narration.strip() or " "]
+        seg_audios: list[Path] = []
+        seg_durs: list[float] = []
+        for j, sent in enumerate(sentences):
+            seg_bytes = synthesize(sent, voice=voice)
+            if seg_bytes:
+                seg = work / f"{i}_{j}.mp3"
+                seg.write_bytes(seg_bytes)
+            else:
+                seg = work / f"{i}_{j}.aiff"
+                _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(seg), sent])
+            seg = _deepen_voice(seg)  # 묵직한 중저음으로 변형(길이 보존)
+            seg_audios.append(seg)
+            seg_durs.append(_duration(seg))
+        audio = work / f"{i}.mp3"
+        _concat_audio_with_gaps(seg_audios, SENTENCE_GAP, audio)
         dur = _duration(audio)
         base_png = work / f"{i}.png"
         _render_card(caption, "", base_png, bg_image_bytes=bg_bytes, portrait=portrait)
-        # 문장별 타이밍 자막: 장면 오디오는 통째 합성(자연 음성), 자막만 글자수 비례 타이밍으로
-        # zoompan 위에 오버레이(자막은 줌과 무관하게 안정적으로 고정).
-        sentences = _split_sentences(narration)
-        spans = _sentence_spans(sentences, dur)
+        # 문장별 자막을 실측 구간에 오버레이(zoompan 위, 줌과 무관하게 고정).
+        spans = _spans_from_durations(seg_durs, SENTENCE_GAP)
         inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio)]
         graph = f"[0:v]{_zoompan_filter(dur, portrait)}[v0]"
         prev = "v0"
