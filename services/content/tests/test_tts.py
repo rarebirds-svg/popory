@@ -51,20 +51,22 @@ def test_split_for_pauses_inserts_pause_markup():
     assert out == "첫째 문장입니다. [pause long] 둘째 문장이에요!"
 
 
-def test_split_for_pauses_comma_gets_pause():
+def test_split_for_pauses_comma_is_plain_not_filler():
     from popory_content.tts import _split_for_pauses
     out = _split_for_pauses("사과와, 배 그리고, 감을 샀습니다.")
-    # 쉼표 뒤에는 호흡([pause])이 들어간다 — 급하게 안 읽도록
-    assert out.count("[pause]") == 2
-    assert ", [pause] 배" in out
+    # 문장 안의 쉼표는 콤마 그대로 둬 자연스러운 짧은 호흡만 — 강제 쉼 토큰([pause]) 삽입 금지
+    # (강제 [pause]는 Chirp3-HD가 "어/으/응" 추임새로 채우는 원인)
+    assert "[pause]" not in out
+    assert "사과와, 배 그리고, 감을 샀습니다." in out
 
 
-def test_split_for_pauses_comma_shorter_than_sentence():
+def test_split_for_pauses_comma_plain_but_sentence_break_pauses():
     from popory_content.tts import _split_for_pauses
     out = _split_for_pauses("그는, 천천히 말했다. 그리고 떠났다.")
-    # 쉼표는 [pause], 문장 끝은 더 긴 [pause long] — 계단식
-    assert "[pause]" in out
+    # 쉼표는 마크업 없이 콤마 그대로, 문장 끝에서만 [pause long]
+    assert "그는, 천천히 말했다." in out
     assert "[pause long]" in out
+    assert "[pause]" not in out and "[pause short]" not in out
 
 
 def test_split_for_pauses_strips_leading_filler():
@@ -77,6 +79,29 @@ def test_split_for_pauses_strips_leading_filler():
     # 진짜 단어는 보존(어머니·아침)
     assert "어머니" in _split_for_pauses("어머니가 오셨다.")
     assert "아침" in _split_for_pauses("아침에 일어났다.")
+
+
+def test_split_for_pauses_keeps_grouped_number_together():
+    from popory_content.tts import _split_for_pauses
+    # 천 단위 콤마(숫자-콤마-숫자)는 호흡을 넣지 않고 붙여 읽는다: 1,700 → 1700(천칠백)
+    out = _split_for_pauses("회원이 1,700명 늘었다.")
+    assert "1700명" in out
+    assert "[pause]" not in out  # 천 단위 콤마는 쉼표 호흡 대상이 아니다
+
+
+def test_split_for_pauses_grouped_number_multiple_commas():
+    from popory_content.tts import _split_for_pauses
+    out = _split_for_pauses("매출은 1,234,567원이다.")
+    assert "1234567원" in out
+    assert "[pause]" not in out
+
+
+def test_split_for_pauses_list_comma_stays_plain():
+    from popory_content.tts import _split_for_pauses
+    # 나열 쉼표는 콤마 그대로(짧은 호흡) — 강제 쉼 토큰 없음
+    out = _split_for_pauses("사과, 배를 샀다.")
+    assert "사과, 배를 샀다." in out
+    assert "[pause]" not in out
 
 
 @responses.activate
