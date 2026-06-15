@@ -24,6 +24,7 @@ import { mountContentYoutubeUpload } from "./routes/content_youtube_upload";
 import { mountContentMediaToken } from "./routes/content_media_token";
 import { mountContentInstagram } from "./routes/content_instagram";
 import { mountContentInstagramUpload } from "./routes/content_instagram_upload";
+import { mountContentStatus } from "./routes/content_status";
 import { mountAreas } from "./routes/areas";
 import { mountAreasSubscribers } from "./routes/areas_subscribers";
 import { mountBriefPreferences } from "./routes/brief_preferences";
@@ -61,6 +62,7 @@ export function createApp() {
   mountContentMediaToken(app);
   mountContentInstagram(app);
   mountContentInstagramUpload(app);
+  mountContentStatus(app);
   mountContentJobs(app);
   mountContentStyleProfiles(app);
   mountContentAiImage(app);

@@ -65,7 +65,8 @@ export default async function ContentPage() {
         <Kicker>컨텐츠 관리</Kicker>
         <div className="mt-3 flex items-baseline gap-3">
           <h1 className="font-serif text-3xl font-semibold tracking-tight text-popory-fg">내 컨텐츠</h1>
-          <Link href="/content/styles" className="ml-auto text-sm text-popory-muted hover:text-popory-fg">스타일 프로필</Link>
+          <Link href="/content/status" className="ml-auto text-sm text-popory-muted hover:text-popory-fg">생성 상태</Link>
+          <Link href="/content/styles" className="text-sm text-popory-muted hover:text-popory-fg">스타일 프로필</Link>
           <Link href="/content/youtube" className="text-sm text-popory-muted hover:text-popory-fg">YouTube</Link>
           <Link href="/content/instagram" className="text-sm text-popory-muted hover:text-popory-fg">Instagram</Link>
           <Link href="/content/new" className="text-sm font-medium text-popory-accent">+ 새 작업</Link>

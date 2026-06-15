@@ -124,6 +124,10 @@ IMAGE_TIMEOUT_SECONDS = int(os.environ.get("POPORY_IMAGEGEN_TIMEOUT", "300"))
 USE_CF_IMAGE = os.environ.get("POPORY_USE_CF_IMAGE", "1") != "0"
 CF_AI_IMAGE_PATH = "/api/content/ai-image"
 CF_QUOTA_FILE = LOGS_DIR / "cf_quota.json"
+# 포털 readiness 하트비트(생성 가능 여부 페이지용).
+HEARTBEAT_PATH = "/api/content/worker-heartbeat"
+HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("POPORY_HEARTBEAT_INTERVAL", "30"))
+IMAGEGEN_HEALTH_URL = IMAGEGEN_URL.replace("/generate", "/health")
 
 
 def _verify_image(data: bytes) -> None:
@@ -151,6 +155,39 @@ def _mark_cf_exhausted() -> None:
         CF_QUOTA_FILE.write_text(json.dumps({"exhausted_date": _utc_today()}))
     except Exception:  # noqa: BLE001
         pass
+
+
+def _imagegen_ok() -> bool:
+    """로컬 imagegen 서버 /health 응답 여부."""
+    try:
+        return requests.get(IMAGEGEN_HEALTH_URL, timeout=3).status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _cf_reset_date() -> str | None:
+    """CF 무료 한도가 오늘 소진됐다면 리셋되는 다음 UTC 날짜(YYYY-MM-DD), 아니면 None."""
+    if not _cf_exhausted_today():
+        return None
+    tomorrow = datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=1)
+    return tomorrow.strftime("%Y-%m-%d")
+
+
+def heartbeat_payload() -> dict:
+    """포털에 보고할 워커 생성 readiness 상태."""
+    return {
+        "cf_image_exhausted": _cf_exhausted_today(),
+        "cf_reset_date": _cf_reset_date(),
+        "imagegen_ok": _imagegen_ok(),
+    }
+
+
+def report_heartbeat(client) -> None:
+    """포털에 하트비트 보고. 실패는 non-fatal(생성 작업에 영향 없음)."""
+    try:
+        client.post(HEARTBEAT_PATH, json=heartbeat_payload())
+    except Exception as e:  # noqa: BLE001
+        append_log(LOGS_DIR, {"worker": "content", "status": "heartbeat_failed", "error": str(e)[:200]})
 
 
 def _try_cloudflare(client, prompt: str) -> bytes | None:
@@ -318,8 +355,12 @@ def run_custom_brief_once(client) -> bool:
 def main() -> None:
     client = _build_client()
     append_log(LOGS_DIR, {"worker": "content", "status": "start"})
+    last_hb = 0.0
     while True:
         try:
+            if time.monotonic() - last_hb >= HEARTBEAT_INTERVAL_SECONDS:
+                report_heartbeat(client)
+                last_hb = time.monotonic()
             processed = run_once(client)
             if not processed:
                 processed = run_upload_once(client)
