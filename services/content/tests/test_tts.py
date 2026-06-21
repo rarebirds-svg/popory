@@ -104,6 +104,86 @@ def test_split_for_pauses_list_comma_stays_plain():
     assert "[pause]" not in out
 
 
+def test_normalize_dash_separator_to_comma():
+    from popory_content.tts import _normalize_for_tts
+    # 구분용 하이픈(앞뒤 공백)을 Chirp3-HD가 "갑작스러운 끊김"으로 읽어 어색 → 쉼표로
+    assert _normalize_for_tts("현명한 투자자 - 벤저민 그레이엄") == "현명한 투자자, 벤저민 그레이엄"
+    # em·en 대시도 동일
+    assert _normalize_for_tts("투자—위험") == "투자, 위험"
+    assert _normalize_for_tts("투자–위험") == "투자, 위험"
+
+
+def test_normalize_ellipsis_to_comma():
+    from popory_content.tts import _normalize_for_tts
+    # 말줄임표를 과한 "망설임"으로 연기 → 쉼표 한 박자로
+    assert _normalize_for_tts("그래서… 결국 투자했다.") == "그래서, 결국 투자했다."
+    assert _normalize_for_tts("그래서... 결국 투자했다.") == "그래서, 결국 투자했다."
+
+
+def test_normalize_strips_quotes_keep_content():
+    from popory_content.tts import _normalize_for_tts
+    assert _normalize_for_tts('그는 "투자하라"고 했다.') == "그는 투자하라고 했다."
+    assert _normalize_for_tts("「현명한 투자자」를 읽다.") == "현명한 투자자를 읽다."
+    assert _normalize_for_tts("‘안전마진’이 핵심이다.") == "안전마진이 핵심이다."
+
+
+def test_normalize_colon_semicolon_not_between_digits():
+    from popory_content.tts import _normalize_for_tts
+    assert _normalize_for_tts("결론: 투자하라.") == "결론, 투자하라."
+    assert _normalize_for_tts("이유는 셋이다; 첫째.") == "이유는 셋이다, 첫째."
+    # 숫자 사이 콜론(시간·비율)은 보존
+    assert _normalize_for_tts("오후 3:00에 만난다.") == "오후 3:00에 만난다."
+    assert _normalize_for_tts("비율은 2:1이다.") == "비율은 2:1이다."
+
+
+def test_normalize_slash_not_between_digits():
+    from popory_content.tts import _normalize_for_tts
+    assert _normalize_for_tts("주식/채권 비중") == "주식 채권 비중"
+    # 숫자 사이 슬래시(날짜·분수)는 보존
+    assert _normalize_for_tts("2024/06/21 발표") == "2024/06/21 발표"
+
+
+def test_normalize_middot_and_ampersand():
+    from popory_content.tts import _normalize_for_tts
+    assert _normalize_for_tts("투자·금융 시장") == "투자, 금융 시장"
+    assert _normalize_for_tts("리스크 & 리턴") == "리스크 리턴"
+
+
+def test_normalize_tilde_range_and_plain():
+    from popory_content.tts import _normalize_for_tts
+    # 숫자 범위 틸드 → "에서", 그 외 틸드는 제거
+    assert _normalize_for_tts("3~5년 투자") == "3에서 5년 투자"
+    assert _normalize_for_tts("좋아요~ 시작합니다.") == "좋아요 시작합니다."
+
+
+def test_normalize_parens_drop_keep_particle():
+    from popory_content.tts import _normalize_for_tts
+    # 괄호 제거: 여는 괄호 앞은 띄우고, 닫는 괄호 뒤 조사는 앞말에 붙여 읽게
+    assert _normalize_for_tts("투자(주식)는 위험하다.") == "투자 주식는 위험하다."
+
+
+def test_normalize_strips_markdown_symbols():
+    from popory_content.tts import _normalize_for_tts
+    assert _normalize_for_tts("**중요** 핵심 #포인트 > 인용") == "중요 핵심 포인트 인용"
+
+
+def test_normalize_leaves_plain_text_and_commas():
+    from popory_content.tts import _normalize_for_tts
+    # 일반 문장·나열 쉼표·마침표·물음표는 그대로
+    assert _normalize_for_tts("안녕하세요. 반갑습니다?") == "안녕하세요. 반갑습니다?"
+    assert _normalize_for_tts("사과, 배, 감을 샀다.") == "사과, 배, 감을 샀다."
+
+
+def test_split_for_pauses_applies_normalization():
+    from popory_content.tts import _split_for_pauses
+    # 정규화가 합성 파이프라인에 실제로 적용된다 + 천 단위 콤마 보존과 공존
+    out = _split_for_pauses("현명한 투자자 - 그레이엄. 회원이 1,700명 늘었다.")
+    assert "투자자, 그레이엄." in out
+    assert "1700명" in out
+    assert "[pause long]" in out
+    assert " - " not in out
+
+
 @responses.activate
 def test_synthesize_uses_markup_and_rate(monkeypatch):
     monkeypatch.setenv("GOOGLE_TTS_API_KEY", "k")
