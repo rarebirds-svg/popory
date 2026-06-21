@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { Header, Kicker } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
+import { friendlyError } from "@/lib/content-errors";
 import { DraftEditor } from "./DraftEditor";
 import { AutoRefresh } from "./AutoRefresh";
 import { RetryButton } from "./RetryButton";
@@ -92,15 +93,24 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
           </div>
         )}
 
-        {job.status === "failed" && (
-          <div className="mt-8">
-            <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-              <div className="font-semibold">생성 실패</div>
-              <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{job.error ?? "원인 미상"}</pre>
+        {job.status === "failed" && (() => {
+          const fe = friendlyError(500, job.error ?? "");
+          return (
+            <div className="mt-8">
+              <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+                <div className="font-semibold">생성에 실패했어요</div>
+                <p className="mt-1">{fe.message}</p>
+                {fe.detail && (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-xs text-red-700/80 dark:text-red-300/80">자세히</summary>
+                    <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{fe.detail}</pre>
+                  </details>
+                )}
+              </div>
+              <RetryButton jobId={job.id} />
             </div>
-            <RetryButton jobId={job.id} />
-          </div>
-        )}
+          );
+        })()}
 
         {(job.status === "review" || job.status === "done") && (job.platform === "youtube" || job.platform === "shorts") && (
           <div className="mt-8 space-y-4">

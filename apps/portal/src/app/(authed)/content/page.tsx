@@ -7,6 +7,7 @@ import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
 import { RecommendationActions } from "./RecommendationActions";
 import { BulkAddRecommendations } from "./BulkAddRecommendations";
+import { TONE_CLASS, statusLabel, statusDot, rollup } from "@/lib/content-status";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -21,15 +22,6 @@ const PLATFORM_SHORT: Record<string, string> = {
   youtube: "유튜브",
   shorts: "쇼츠",
   "instagram-image": "인스타",
-};
-
-const STATUS_DOT: Record<string, string> = {
-  idle: "bg-gray-300",
-  queued: "bg-yellow-400",
-  running: "bg-blue-400 animate-pulse",
-  review: "bg-purple-400",
-  done: "bg-green-500",
-  failed: "bg-red-500",
 };
 
 async function fetchTopics(cookie: string): Promise<TopicRow[]> {
@@ -63,36 +55,62 @@ export default async function ContentPage() {
       <Header email={user.email} role={user.role} apiBase={API_BASE} />
       <main className="mx-auto max-w-3xl px-4 py-10">
         <Kicker>컨텐츠 관리</Kicker>
-        <div className="mt-3 flex items-baseline gap-3">
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h1 className="font-serif text-3xl font-semibold tracking-tight text-popory-fg">내 컨텐츠</h1>
-          <Link href="/content/status" className="ml-auto text-sm text-popory-muted hover:text-popory-fg">생성 상태</Link>
-          <Link href="/content/styles" className="text-sm text-popory-muted hover:text-popory-fg">스타일 프로필</Link>
-          <Link href="/content/youtube" className="text-sm text-popory-muted hover:text-popory-fg">YouTube</Link>
-          <Link href="/content/instagram" className="text-sm text-popory-muted hover:text-popory-fg">Instagram</Link>
-          <Link href="/content/new" className="text-sm font-medium text-popory-accent">+ 새 작업</Link>
+          <Link
+            href="/content/new"
+            className="w-full rounded-md bg-popory-accent px-4 py-2 text-center text-sm font-medium text-white hover:opacity-90 sm:w-auto"
+          >
+            + 새 콘텐츠
+          </Link>
         </div>
+        <nav className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-sm text-popory-muted">
+          <Link href="/content/status" className="hover:text-popory-fg">생성 상태</Link>
+          <Link href="/content/styles" className="hover:text-popory-fg">스타일 프로필</Link>
+          <Link href="/content/youtube" className="hover:text-popory-fg">YouTube</Link>
+          <Link href="/content/instagram" className="hover:text-popory-fg">Instagram</Link>
+        </nav>
 
         {topics.length === 0 && legacyJobs.length === 0 && (
-          <p className="mt-10 text-sm text-popory-muted">아직 작업이 없습니다. "새 작업"으로 시작하세요.</p>
+          <div className="mt-10 rounded-lg border border-dashed border-popory-border px-4 py-10 text-center">
+            <p className="text-sm text-popory-muted">아직 만든 콘텐츠가 없어요.</p>
+            <Link href="/content/new" className="mt-3 inline-block rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90">
+              + 첫 콘텐츠 만들기
+            </Link>
+          </div>
         )}
 
         {topics.length > 0 && (
           <ul className="mt-8 divide-y divide-popory-border">
-            {topics.map((t) => (
-              <li key={t.id}>
-                <Link href={`/content/topics/${t.id}`} className="flex items-center gap-3 py-3 hover:opacity-80">
-                  <span className="flex-1 truncate text-sm text-popory-fg">{t.topic}</span>
-                  <span className="flex items-center gap-1.5 shrink-0">
-                    {t.jobs.map((j) => (
-                      <span key={j.id} className="flex items-center gap-1 rounded-full border border-popory-border px-2 py-0.5 text-xs text-popory-muted">
-                        <span className={`inline-block h-1.5 w-1.5 rounded-full ${STATUS_DOT[j.status] ?? "bg-gray-300"}`} />
-                        {PLATFORM_SHORT[j.platform] ?? j.platform}
-                      </span>
-                    ))}
-                  </span>
-                </Link>
-              </li>
-            ))}
+            {topics.map((t) => {
+              const roll = rollup(t.jobs);
+              return (
+                <li key={t.id}>
+                  <Link href={`/content/topics/${t.id}`} className="block py-3 hover:opacity-80">
+                    <div className="flex items-center gap-3">
+                      <span className="flex-1 truncate text-sm font-medium text-popory-fg">{t.topic}</span>
+                      {roll && (
+                        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${TONE_CLASS[roll.tone]}`}>
+                          {roll.label}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {t.jobs.map((j) => (
+                        <span
+                          key={j.id}
+                          className="flex items-center gap-1 rounded-full border border-popory-border px-2 py-0.5 text-xs text-popory-muted"
+                        >
+                          <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(j.status)}`} />
+                          {PLATFORM_SHORT[j.platform] ?? j.platform}
+                          <span className="text-popory-fg2">· {statusLabel(j.status)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         )}
 
@@ -104,8 +122,10 @@ export default async function ContentPage() {
                 <li key={j.id}>
                   <Link href={`/content/${j.id}`} className="flex items-center gap-3 py-3 hover:opacity-80">
                     <span className="flex-1 truncate text-sm text-popory-fg">{j.topic}</span>
-                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${STATUS_DOT[j.status] ?? "bg-gray-300"}`} />
-                    <span className="shrink-0 text-xs text-popory-muted">{PLATFORM_SHORT[j.platform] ?? j.platform}</span>
+                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(j.status)}`} />
+                    <span className="shrink-0 text-xs text-popory-muted">
+                      {PLATFORM_SHORT[j.platform] ?? j.platform} · {statusLabel(j.status)}
+                    </span>
                   </Link>
                 </li>
               ))}

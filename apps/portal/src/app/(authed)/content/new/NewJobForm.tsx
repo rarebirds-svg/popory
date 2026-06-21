@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
+import { friendlyError, type FriendlyError } from "@/lib/content-errors";
 
 const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
 const CHECK_LABEL = "flex items-center gap-2 cursor-pointer text-sm text-popory-fg";
@@ -14,7 +15,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [submitting, setSubmitting] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<FriendlyError | null>(null);
 
   const [topic, setTopic] = useState(initialTopic);
   const [styleId, setStyleId] = useState("");
@@ -51,7 +52,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (noneSelected) { setErr("하나 이상의 플랫폼을 선택하세요."); return; }
+    if (noneSelected) { setErr({ message: "하나 이상의 콘텐츠 유형을 선택해 주세요.", detail: "", retryable: false }); return; }
     setErr(null);
     setSubmitting(true);
     try {
@@ -83,7 +84,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
         }),
       });
       if (!res.ok) {
-        setErr(`오류 ${res.status}: ${(await res.text()).slice(0, 300)}`);
+        setErr(friendlyError(res.status, (await res.text()).slice(0, 300)));
         return;
       }
       const { topic_id } = (await res.json()) as { topic_id: string };
@@ -92,7 +93,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
         router.refresh();
       });
     } catch (e) {
-      setErr(`fetch: ${String(e).slice(0, 200)}`);
+      setErr({ message: "네트워크 연결을 확인하고 다시 시도해 주세요.", detail: String(e).slice(0, 200), retryable: true });
     } finally {
       setSubmitting(false);
     }
@@ -104,7 +105,13 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
     <form onSubmit={onSubmit} className="mt-6 space-y-5">
       {err && (
         <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          <pre className="whitespace-pre-wrap break-all font-mono text-xs">{err}</pre>
+          <p>{err.message}</p>
+          {err.detail && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs text-red-700/80 dark:text-red-300/80">자세히</summary>
+              <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{err.detail}</pre>
+            </details>
+          )}
         </div>
       )}
 
