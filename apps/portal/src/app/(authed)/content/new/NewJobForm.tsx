@@ -24,8 +24,10 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
   // 플랫폼 체크박스
   const [naverBlog, setNaverBlog] = useState(false);
   const [youtube, setYoutube] = useState(false);
-  const [youtubeShorts, setYoutubeShorts] = useState(false);
-  const [instaShorts, setInstaShorts] = useState(false);
+  const [shorts, setShorts] = useState(false);
+  // 쇼츠 1개를 어디에 올릴지(업로드 대상). 기본 둘 다.
+  const [shToYoutube, setShToYoutube] = useState(true);
+  const [shToInsta, setShToInsta] = useState(true);
   const [instaImage, setInstaImage] = useState(false);
 
   // YouTube 동영상 옵션
@@ -47,12 +49,13 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
   }
   function removeSource(i: number) { setSources((s) => s.filter((_, idx) => idx !== i)); }
 
-  const showShorts = youtubeShorts || instaShorts;
-  const noneSelected = !naverBlog && !youtube && !youtubeShorts && !instaShorts && !instaImage;
+  const showShorts = shorts;
+  const noneSelected = !naverBlog && !youtube && !shorts && !instaImage;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (noneSelected) { setErr({ message: "하나 이상의 콘텐츠 유형을 선택해 주세요.", detail: "", retryable: false }); return; }
+    if (shorts && !shToYoutube && !shToInsta) { setErr({ message: "쇼츠 업로드 대상을 하나 이상 선택해 주세요.", detail: "", retryable: false }); return; }
     setErr(null);
     setSubmitting(true);
     try {
@@ -64,10 +67,10 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
       const platforms: Array<{ platform: string; options?: object }> = [];
       if (naverBlog) platforms.push({ platform: "naver-blog" });
       if (youtube) platforms.push({ platform: "youtube", options: { length: ytLength, voice: ytVoice, image_style: ytStyle } });
-      if (showShorts) {
+      if (shorts) {
         const targets: string[] = [];
-        if (youtubeShorts) targets.push("youtube");
-        if (instaShorts) targets.push("instagram");
+        if (shToYoutube) targets.push("youtube");
+        if (shToInsta) targets.push("instagram");
         platforms.push({ platform: "shorts", options: { length: shLength, voice: shVoice, image_style: shStyle, upload_targets: targets } });
       }
       if (instaImage) platforms.push({ platform: "instagram-image", options: { slide_count: slideCount } });
@@ -133,12 +136,8 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
             유튜브 동영상
           </label>
           <label className={CHECK_LABEL}>
-            <input type="checkbox" checked={youtubeShorts} onChange={(e) => setYoutubeShorts(e.target.checked)} />
-            유튜브 쇼츠
-          </label>
-          <label className={CHECK_LABEL}>
-            <input type="checkbox" checked={instaShorts} onChange={(e) => setInstaShorts(e.target.checked)} />
-            인스타 쇼츠 (릴스)
+            <input type="checkbox" checked={shorts} onChange={(e) => setShorts(e.target.checked)} />
+            쇼츠 영상 <span className="text-popory-muted">· 유튜브·인스타 업로드</span>
           </label>
           <label className={CHECK_LABEL}>
             <input type="checkbox" checked={instaImage} onChange={(e) => setInstaImage(e.target.checked)} />
@@ -183,9 +182,20 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
 
       {showShorts && (
         <div className="rounded-md border border-popory-border p-3 space-y-3">
-          <p className="text-xs font-semibold text-popory-muted">
-            쇼츠 옵션 ({[youtubeShorts && "유튜브 쇼츠", instaShorts && "인스타 쇼츠"].filter(Boolean).join(" + ")})
-          </p>
+          <p className="text-xs font-semibold text-popory-muted">쇼츠 옵션</p>
+          <div>
+            <span className="block text-xs text-popory-muted mb-1.5">업로드 대상</span>
+            <div className="flex gap-4">
+              <label className={CHECK_LABEL}>
+                <input type="checkbox" checked={shToYoutube} onChange={(e) => setShToYoutube(e.target.checked)} />
+                유튜브
+              </label>
+              <label className={CHECK_LABEL}>
+                <input type="checkbox" checked={shToInsta} onChange={(e) => setShToInsta(e.target.checked)} />
+                인스타
+              </label>
+            </div>
+          </div>
           <div className="grid grid-cols-3 gap-3">
             <label className="block">
               <span className="block text-xs text-popory-muted mb-1">길이</span>
@@ -256,7 +266,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
       <div className="flex gap-3">
         <button type="submit" disabled={busy || noneSelected}
           className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-          {busy ? "생성 중…" : "작업 시작"}
+          {busy ? "생성 중…" : "생성 시작"}
         </button>
         <a href="/content" className="rounded-md border border-popory-border px-4 py-2 text-sm">취소</a>
       </div>

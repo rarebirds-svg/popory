@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { Header, Kicker } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
+import { TONE_CLASS, type Tone } from "@/lib/content-status";
 import { StartJobButton } from "./StartJobButton";
 import { TopicAutoRefresh } from "./TopicAutoRefresh";
 import { AddPlatformForm } from "./AddPlatformForm";
@@ -39,17 +40,8 @@ const PLATFORM_LABEL: Record<string, string> = {
   "instagram-image": "인스타 이미지",
 };
 
-const TONE: Record<string, string> = {
-  muted: "bg-popory-card text-popory-muted border-popory-border",
-  yellow: "bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:border-yellow-800",
-  blue: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800",
-  purple: "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-300 dark:border-purple-800",
-  green: "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800",
-  red: "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800",
-};
-
 // 생성 상태 + 업로드 상태를 합쳐 컨텐츠의 실제 진행을 한 라벨로 보여준다(클릭 없이 파악).
-function jobStatusInfo(job: JobSlot): { label: string; tone: string } {
+function jobStatusInfo(job: JobSlot): { label: string; tone: Tone } {
   const up = job.platform === "instagram-image" ? job.instagram_status : job.youtube_status;
   const upLabel = job.platform === "instagram-image" ? "인스타" : "유튜브";
   if (up === "done") return { label: `${upLabel} 업로드 완료`, tone: "green" };
@@ -69,7 +61,7 @@ function jobStatusInfo(job: JobSlot): { label: string; tone: string } {
 function StatusBadge({ job }: { job: JobSlot }) {
   const { label, tone } = jobStatusInfo(job);
   return (
-    <span className={`rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${TONE[tone] ?? TONE.muted}`}>
+    <span className={`rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${TONE_CLASS[tone] ?? TONE_CLASS.muted}`}>
       {label}
     </span>
   );
@@ -106,17 +98,8 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ id
 
         <TopicAutoRefresh active={hasActive} />
 
-        {/* 상단: 유형 추가 + 스타일 프로필 */}
-        <div className="mt-8">
-          <AddPlatformForm
-            topicId={topic.id}
-            existingPlatforms={topic.jobs.map((j) => j.platform)}
-            profiles={profiles}
-          />
-        </div>
-
-        {/* 하단: 컨텐츠 (유형별 상태를 클릭 없이 한눈에) */}
-        <h2 className="mt-10 text-sm font-semibold text-popory-fg">컨텐츠</h2>
+        {/* 콘텐츠 우선: 유형별 상태를 클릭 없이 한눈에 */}
+        <h2 className="mt-8 text-sm font-semibold text-popory-fg">컨텐츠</h2>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
           {topic.jobs.map((job) => (
             <div key={job.id} className="rounded-lg border border-popory-border bg-popory-card p-4 space-y-3">
@@ -151,6 +134,18 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ id
             </div>
           ))}
         </div>
+
+        {/* 보조: 이 주제에 콘텐츠 유형 더 추가 */}
+        <details className="mt-10">
+          <summary className="cursor-pointer text-sm font-medium text-popory-accent">+ 유형 추가</summary>
+          <div className="mt-3">
+            <AddPlatformForm
+              topicId={topic.id}
+              existingPlatforms={topic.jobs.map((j) => j.platform)}
+              profiles={profiles}
+            />
+          </div>
+        </details>
       </main>
     </div>
   );

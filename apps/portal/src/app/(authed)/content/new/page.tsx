@@ -29,7 +29,7 @@ export default async function NewJobPage({ searchParams }: { searchParams: Promi
     <div>
       <Header email={user.email} role={user.role} apiBase={API_BASE} />
       <main className="mx-auto max-w-2xl px-4 py-10">
-        <Kicker>새 작업</Kicker>
+        <Kicker>새 콘텐츠</Kicker>
         <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">컨텐츠 만들기</h1>
         <NewJobForm profiles={profiles} initialTopic={topic ?? ""} />
       </main>
