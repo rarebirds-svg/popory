@@ -263,6 +263,11 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
         </div>
       </div>
 
+      <p className="text-xs text-popory-muted">
+        {youtube || shorts
+          ? "영상은 생성에 보통 2~5분 걸려요. 시작하면 목록에서 진행 상황을 볼 수 있어요."
+          : "보통 1~2분이면 완성돼요. 시작하면 목록에서 진행 상황을 볼 수 있어요."}
+      </p>
       <div className="flex gap-3">
         <button type="submit" disabled={busy || noneSelected}
           className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">

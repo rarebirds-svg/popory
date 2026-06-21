@@ -124,7 +124,7 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
             <video controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video`} />
             <details>
               <summary className="cursor-pointer text-xs text-popory-accent">대본 보기</summary>
-              <pre className="mt-2 whitespace-pre-wrap rounded-md border border-popory-border bg-popory-card p-3 text-xs text-popory-fg">{job.draft}</pre>
+              <div className="mt-2 whitespace-pre-wrap rounded-md border border-popory-border bg-popory-card p-3 text-sm leading-relaxed text-popory-fg2">{job.draft}</div>
             </details>
             <RegenerateButton jobId={job.id} />
             {showYtUpload && (

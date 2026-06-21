@@ -8,6 +8,7 @@ import { API_BASE } from "@/lib/env";
 import { RecommendationActions } from "./RecommendationActions";
 import { BulkAddRecommendations } from "./BulkAddRecommendations";
 import { TONE_CLASS, statusLabel, statusDot, rollup } from "@/lib/content-status";
+import { relativeTime } from "@/lib/relative-time";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -89,6 +90,7 @@ export default async function ContentPage() {
                   <Link href={`/content/topics/${t.id}`} className="block py-3 hover:opacity-80">
                     <div className="flex items-center gap-3">
                       <span className="flex-1 truncate text-sm font-medium text-popory-fg">{t.topic}</span>
+                      <span className="shrink-0 text-xs text-popory-muted">{relativeTime(t.created_at)}</span>
                       {roll && (
                         <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${TONE_CLASS[roll.tone]}`}>
                           {roll.label}
@@ -122,6 +124,7 @@ export default async function ContentPage() {
                 <li key={j.id}>
                   <Link href={`/content/${j.id}`} className="flex items-center gap-3 py-3 hover:opacity-80">
                     <span className="flex-1 truncate text-sm text-popory-fg">{j.topic}</span>
+                    <span className="shrink-0 text-xs text-popory-muted">{relativeTime(j.created_at)}</span>
                     <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(j.status)}`} />
                     <span className="shrink-0 text-xs text-popory-muted">
                       {PLATFORM_SHORT[j.platform] ?? j.platform} · {statusLabel(j.status)}
