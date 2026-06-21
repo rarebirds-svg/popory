@@ -56,22 +56,40 @@ def _normalize_for_tts(text: str) -> str:
     return text.strip(" ,")
 
 
-def _split_for_pauses(text: str) -> str:
-    """문장 끝은 [pause long]로 한 템포 쉬게 한다. 문장 안의 쉼표는 콤마 그대로 둬
-    자연스러운 짧은 호흡만 만들고 강제 쉼 토큰은 넣지 않는다(강제 [pause]는 Chirp3-HD가
-    "어·으·응" 추임새로 채우는 원인). 문장 앞 간투사(음·어·아…)는 제거.
-    리터럴 대괄호는 제거(마크업 오인 방지)."""
+# 숫자 토큰 = 정수, 또는 .:/로 이어진 복합수(소수 3.5·시간 3:00·날짜 2024/06).
+# 토큰에 .:/가 섞였으면 소수·시간·날짜이므로 모델에 맡기고, 순수 정수만 카디널로 감싼다.
+# (구분자가 숫자 사이일 때만 토큰에 포함되므로 문장 끝 마침표 "1976."은 정수로 인식.)
+_NUM_TOKEN = re.compile(r"\d+(?:[.:/]\d+)*")
+
+
+def _wrap_cardinal(m: "re.Match[str]") -> str:
+    tok = m.group()
+    if any(c in tok for c in ".:/"):
+        return tok  # 소수·시간·날짜 — 모델 정규화에 맡김
+    return f'<say-as interpret-as="cardinal">{tok}</say-as>'
+
+
+def _prep_text(text: str) -> str:
+    """합성 직전 텍스트 정리 — 리터럴 대괄호·천 단위 콤마·특수문자·문장 앞 간투사를
+    제거/정규화하고, 문장은 공백으로 잇는다. 문장 사이 호흡은 video.py의 무음 갭이
+    담당하므로 pause 토큰은 넣지 않는다(markup→ssml 전환)."""
     text = text.replace("[", "").replace("]", "")
     text = _GROUP_COMMA.sub("", text)             # 천 단위 콤마 제거(1,700 → 1700)
     text = _normalize_for_tts(text)               # 특수문자 → 자연 운율(대시·말줄임표·따옴표 등)
     parts = [p.strip() for p in _SENT.split(text.strip()) if p.strip()]
     if not parts:
         return text.strip()
-    out = []
-    for p in parts:
-        p = (_FILLER.sub("", p).strip() or p)   # 문장 앞 간투사 제거(전부 지워지면 원문 유지)
-        out.append(p)
-    return " [pause long] ".join(out)             # 문장 끝 더 긴 호흡
+    out = [(_FILLER.sub("", p).strip() or p) for p in parts]  # 문장 앞 간투사 제거
+    return " ".join(out)
+
+
+def _to_ssml(text: str) -> str:
+    """정리된 텍스트를 SSML로 감싼다. XML 이스케이프 후 순수 정수만
+    <say-as interpret-as="cardinal">로 감싸 카디널(한자어 수사)을 강제한다 —
+    Chirp3-HD가 16을 자리별 "일육"이 아니라 "십육"으로 읽게 한다."""
+    esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    esc = _NUM_TOKEN.sub(_wrap_cardinal, esc)
+    return f"<speak>{esc}</speak>"
 
 
 def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
@@ -82,7 +100,7 @@ def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
         resp = requests.post(
             f"{TTS_URL}?key={key}",
             json={
-                "input": {"markup": _split_for_pauses(text)},
+                "input": {"ssml": _to_ssml(_prep_text(text))},
                 "voice": {"languageCode": LANGUAGE, "name": voice},
                 "audioConfig": {"audioEncoding": "MP3", "speakingRate": 0.96},
             },
