@@ -48,10 +48,19 @@ def test_system_prompt_demands_consistent_style_suffix():
     assert "watercolor painting" in sp
 
 
-def test_video_and_shorts_prompts_require_natural_whole_people():
-    """사람은 허용하되 잘리거나 기형이 되지 않게 온전히 표현하도록 지시해야 한다(하드 금지 아님)."""
+def test_prompts_brand_and_no_subscribe_cta():
+    """description에 포포리 책방 브랜딩 + 구독·좋아요 유도 금지(내레이션·설명 모두)."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
     for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
-        assert "사람이 등장해도 좋되" in sp       # 인물 허용
-        assert "잘리거나 기형이 되지 않게" in sp   # 온전·정상 인체 요구
-        assert "절대 넣지 않습니다" not in sp      # 하드 금지 제거 확인
+        assert "포포리 책방" in sp        # 채널 브랜딩
+        assert "구독" in sp               # 구독 요청 금지 지시가 명시됨
+        assert "넣지 않습니다" in sp       # 금지 형태
+
+
+def test_video_and_shorts_prompts_allow_natural_faces():
+    """SDXL은 얼굴을 잘 그리므로 얼굴 허용 — 단 자연스러운 표정·정상 인체로 유도."""
+    from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
+    for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
+        assert "얼굴이 보여도" in sp        # 얼굴 허용
+        assert "자연스러운 표정" in sp      # 무서운/과장 표정 방지
+        assert "정상" in sp                 # 해부학적 정상 인체

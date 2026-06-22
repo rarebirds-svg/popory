@@ -1,4 +1,6 @@
 # 영상 생성 — claude 대본(generate_scenes) + macOS say + Pillow 텍스트카드 + ffmpeg 슬라이드쇼(render_video).
+import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -82,11 +84,15 @@ def _scrim_bottom(img: Image.Image, w: int = LANDSCAPE_W, h: int = LANDSCAPE_H) 
 def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes | None = None, portrait: bool = False) -> None:
     w = PORTRAIT_W if portrait else LANDSCAPE_W
     h = PORTRAIT_H if portrait else LANDSCAPE_H
+    img = None
     if bg_image_bytes:
-        bg = Image.open(BytesIO(bg_image_bytes)).convert("RGB")
-        img = _cover(bg, w, h)
-        _scrim_bottom(img, w, h)
-    else:
+        try:
+            bg = Image.open(BytesIO(bg_image_bytes)).convert("RGB")
+            img = _cover(bg, w, h)
+            _scrim_bottom(img, w, h)
+        except Exception:  # noqa: BLE001 — 깨진 이미지 바이트는 단색 폴백(작업 전체 크래시 방지)
+            img = None
+    if img is None:
         img = Image.new("RGB", (w, h), BG)
     d = ImageDraw.Draw(img)
     if portrait:
@@ -104,6 +110,71 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
     d.multiline_text((80, 70), t, font=title_font, fill=HEAD_COLOR, anchor="la", align="left", spacing=10)
     s = "\n".join(textwrap.wrap(subtitle, width=sub_wrap)) or " "
     d.multiline_text((w / 2, sub_y), s, font=sub_font, fill=(255, 255, 255), anchor="ma", align="center", spacing=14)
+    img.save(out_png)
+
+
+def _split_sentences(text: str) -> list[str]:
+    """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음)."""
+    parts = re.split(r"(?<=[.?!])\s*", text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+# 문장별 TTS 클립 사이에 넣는 짧은 호흡(무음) 길이(초). 자막 타이밍이 이 값을 그대로 반영한다.
+SENTENCE_GAP = 0.35
+
+
+def _spans_from_durations(durs: list[float], gap: float = SENTENCE_GAP) -> list[tuple[float, float]]:
+    """문장별 실측 오디오 길이로 자막 [start,end]를 정확히 계산(글자수 추정 아님 → 누적 드리프트 없음).
+    각 문장은 자기 클립 길이만큼 재생되고 사이에 gap(무음)이 들어간다. 비마지막 문장 자막은
+    다음 문장 시작까지(갭 포함) 유지해 깜빡임을 없앤다."""
+    starts: list[float] = []
+    acc = 0.0
+    for d in durs:
+        starts.append(acc)
+        acc += d + gap
+    spans: list[tuple[float, float]] = []
+    for i, st in enumerate(durs):
+        end = starts[i + 1] if i + 1 < len(durs) else starts[i] + durs[i]
+        spans.append((starts[i], end))
+    return spans
+
+
+def _concat_audio_with_gaps(segments: list[Path], gap: float, out: Path) -> None:
+    """문장별 오디오 클립을 사이에 gap(무음)을 넣어 한 장면 오디오로 이어붙인다(필터 concat=재인코딩)."""
+    if len(segments) == 1:
+        shutil.copy(segments[0], out)
+        return
+    sil = out.with_name(f"{out.stem}_gap.wav")
+    _run([FFMPEG_BIN, "-y", "-f", "lavfi", "-t", f"{gap:.3f}",
+          "-i", "anullsrc=channel_layout=mono:sample_rate=24000", str(sil)])
+    seq: list[Path] = []
+    for i, s in enumerate(segments):
+        if i:
+            seq.append(sil)
+        seq.append(s)
+    inputs: list[str] = []
+    for p in seq:
+        inputs += ["-i", str(p)]
+    concat = "".join(f"[{i}:a]" for i in range(len(seq))) + f"concat=n={len(seq)}:v=0:a=1[a]"
+    _run([FFMPEG_BIN, "-y", *inputs, "-filter_complex", concat, "-map", "[a]", str(out)])
+
+
+def _render_subtitle_png(sentence: str, out_png: Path, portrait: bool = False) -> None:
+    """문장 자막을 투명 배경 PNG로 렌더(장면 클립 위에 타이밍 오버레이용). 가독성 위해 검정 외곽선."""
+    w = PORTRAIT_W if portrait else LANDSCAPE_W
+    h = PORTRAIT_H if portrait else LANDSCAPE_H
+    if portrait:
+        sub_font = ImageFont.truetype(FONT_PATH, 46)
+        sub_wrap, sub_y = 18, h - 320
+    else:
+        sub_font = ImageFont.truetype(FONT_PATH, 64)
+        sub_wrap, sub_y = 30, h - 240
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    s = "\n".join(textwrap.wrap(sentence, width=sub_wrap)) or " "
+    d.multiline_text((w / 2, sub_y), s, font=sub_font, fill=(255, 255, 255, 255),
+                     anchor="ma", align="center", spacing=14,
+                     stroke_width=3, stroke_fill=(0, 0, 0, 230))
     img.save(out_png)
 
 
@@ -173,6 +244,29 @@ def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
     _run(cmd)
 
 
+# 묵직한 중저음 정도(반음). 0이면 미적용(기본). env로 켤 수 있음.
+VOICE_DEEPEN_SEMITONES = float(os.environ.get("POPORY_VOICE_DEEPEN_SEMITONES", "0"))
+
+
+def _deepen_voice(audio: Path) -> Path:
+    """TTS 음성을 묵직한 중저음으로(-N반음). asetrate 피치다운은 포먼트도 내려 답답해지므로
+    머드(350Hz)컷 + 프레즌스(4kHz) 부스트로 명료도를 복원한다(B 방식). 실패하면 원본 유지."""
+    if VOICE_DEEPEN_SEMITONES <= 0:
+        return audio
+    ratio = 2 ** (-VOICE_DEEPEN_SEMITONES / 12)
+    tempo = 2 ** (VOICE_DEEPEN_SEMITONES / 12)
+    out = audio.with_name(f"{audio.stem}_deep.mp3")
+    af = (
+        f"aresample=24000,asetrate={int(24000 * ratio)},aresample=24000,atempo={tempo:.4f},"
+        "equalizer=f=350:width_type=q:w=1.2:g=-3,treble=g=4:f=4000"
+    )
+    try:
+        _run([FFMPEG_BIN, "-y", "-i", str(audio), "-af", af, str(out)])
+        return out
+    except Exception:  # noqa: BLE001 — 변형 실패시 원본 음성 유지
+        return audio
+
+
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False) -> tuple[Path, int, int]:
@@ -198,21 +292,44 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             images_total += 1
             if bg_bytes is None:
                 images_missing += 1
-        audio_bytes = synthesize(narration, voice=voice)
-        if audio_bytes:
-            audio = work / f"{i}.mp3"
-            audio.write_bytes(audio_bytes)
-        else:
-            audio = work / f"{i}.aiff"
-            _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(audio), narration])
+        # 문장별로 합성·실측해 이어붙인다. 자막을 실제 음성 구간에 정확히 맞추기 위함
+        # (글자수 비례 추정은 [pause]·속도편차로 뒤로 갈수록 어긋났다). 문장 사이엔 짧은 호흡(무음).
+        sentences = _split_sentences(narration) or [narration.strip() or " "]
+        seg_audios: list[Path] = []
+        seg_durs: list[float] = []
+        for j, sent in enumerate(sentences):
+            seg_bytes = synthesize(sent, voice=voice)
+            if seg_bytes:
+                seg = work / f"{i}_{j}.mp3"
+                seg.write_bytes(seg_bytes)
+            else:
+                seg = work / f"{i}_{j}.aiff"
+                _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(seg), sent])
+            seg = _deepen_voice(seg)  # 묵직한 중저음으로 변형(길이 보존)
+            seg_audios.append(seg)
+            seg_durs.append(_duration(seg))
+        audio = work / f"{i}.mp3"
+        _concat_audio_with_gaps(seg_audios, SENTENCE_GAP, audio)
         dur = _duration(audio)
-        png = work / f"{i}.png"
-        _render_card(caption, "", png, bg_image_bytes=bg_bytes, portrait=portrait)
+        base_png = work / f"{i}.png"
+        _render_card(caption, "", base_png, bg_image_bytes=bg_bytes, portrait=portrait)
+        # 문장별 자막을 실측 구간에 오버레이(zoompan 위, 줌과 무관하게 고정).
+        spans = _spans_from_durations(seg_durs, SENTENCE_GAP)
+        inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio)]
+        graph = f"[0:v]{_zoompan_filter(dur, portrait)}[v0]"
+        prev = "v0"
+        for k, (st, en) in enumerate(spans):
+            sub_png = work / f"sub_{i}_{k}.png"
+            _render_subtitle_png(sentences[k], sub_png, portrait=portrait)
+            inputs += ["-loop", "1", "-i", str(sub_png)]
+            out = f"v{k + 1}"
+            graph += f";[{prev}][{k + 2}:v]overlay=0:0:enable='between(t,{st:.3f},{en:.3f})'[{out}]"
+            prev = out
         clip = work / f"scene_{i}.mp4"
         _run([
-            FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), "-i", str(audio),
-            "-filter_complex", f"[0:v]{_zoompan_filter(dur, portrait)}[v]",
-            "-map", "[v]", "-map", "1:a",
+            FFMPEG_BIN, "-y", *inputs,
+            "-filter_complex", graph,
+            "-map", f"[{prev}]", "-map", "1:a",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{dur:.3f}",
             "-c:a", "aac", "-shortest", str(clip),
         ])

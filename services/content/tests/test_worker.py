@@ -1,7 +1,17 @@
 # 워커가 claim→generate→result 를 올바른 상태로 호출하는지 검증.
+import io
+
 import pytest
+from PIL import Image
 
 from popory_content import worker
+
+
+def _png(color=(10, 20, 30)) -> bytes:
+    """디코드 가능한 유효 PNG 바이트(이미지 검증 통과용)."""
+    b = io.BytesIO()
+    Image.new("RGB", (8, 8), color).save(b, format="PNG")
+    return b.getvalue()
 
 
 @pytest.fixture(autouse=True)
@@ -102,18 +112,62 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
     assert "illustration" in captured.get("image_style_kw")
 
 
-def test_safe_image_returns_none_on_error():
-    class C:
-        def post_for_bytes(self, path, *, json):
-            raise worker.PortalError("boom", exit_code=4)
-    assert worker._safe_image(C(), "prompt") is None
+def test_safe_image_returns_none_on_error(monkeypatch):
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+
+    def fake_post(url, json=None, timeout=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "prompt") is None
 
 
-def test_safe_image_returns_bytes():
-    class C:
-        def post_for_bytes(self, path, *, json):
-            return b"\x89PNG"
-    assert worker._safe_image(C(), "prompt") == b"\x89PNG"
+def test_safe_image_returns_bytes(monkeypatch):
+    png = _png()
+
+    class Resp:
+        status_code = 200
+        content = png
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(None, "prompt") == png
+
+
+def test_safe_image_corrupt_bytes_retries_then_none(monkeypatch):
+    # 연결 끊김으로 잘린 바이트(디코드 불가)는 재시도 후 None+로깅(조용한 폴백 방지).
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    class Resp:
+        status_code = 200
+        content = b"\x89PNG\r\n\x1a\n" + b"truncated-garbage"  # 잘린 PNG
+
+    def fake_post(url, json=None, timeout=None):
+        calls["n"] += 1
+        return Resp()
+
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "p", "job1") is None
+    assert calls["n"] == worker.IMAGE_MAX_ATTEMPTS  # 깨진 응답도 재시도
+
+
+def test_safe_image_corrupt_then_valid_recovers(monkeypatch):
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    png = _png((40, 50, 60))
+    calls = {"n": 0}
+
+    def fake_post(url, json=None, timeout=None):
+        calls["n"] += 1
+
+        class Resp:
+            status_code = 200
+            content = b"\x89PNG-broken" if calls["n"] == 1 else png
+
+        return Resp()
+
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "p") == png
+    assert calls["n"] == 2  # 첫 깨진 응답 → 재시도 → 복구
 
 
 def test_run_upload_once_uploads_and_reports(monkeypatch):
@@ -160,25 +214,98 @@ def test_safe_image_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(worker.time, "sleep", lambda s: None)
     calls = {"n": 0}
 
-    class C:
-        def post_for_bytes(self, path, *, json):
-            calls["n"] += 1
-            if calls["n"] < 3:
-                raise RuntimeError("boom")
-            return b"img"
+    png = _png()
 
-    assert worker._safe_image(C(), "p") == b"img"
+    class Resp:
+        status_code = 200
+        content = png
+
+    def fake_post(url, json=None, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("boom")
+        return Resp()
+
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "p") == png
     assert calls["n"] == 3
 
 
 def test_safe_image_all_fail_returns_none(monkeypatch):
     monkeypatch.setattr(worker.time, "sleep", lambda s: None)
 
-    class C:
-        def post_for_bytes(self, path, *, json):
-            raise RuntimeError("boom")
+    def fake_post(url, json=None, timeout=None):
+        raise RuntimeError("boom")
 
-    assert worker._safe_image(C(), "p") is None
+    monkeypatch.setattr(worker.requests, "post", fake_post)
+    assert worker._safe_image(None, "p") is None
+
+
+def test_safe_image_http_error_returns_none(monkeypatch):
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+
+    class Resp:
+        status_code = 500
+        text = "err"
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(None, "p") is None
+
+
+class _CFClient:
+    """post_for_bytes만 가진 가짜 PortalClient(CF flux 경로 테스트용)."""
+
+    def __init__(self, result):
+        self.result = result  # bytes 또는 raise할 Exception
+        self.calls = 0
+
+    def post_for_bytes(self, path, *, json):
+        self.calls += 1
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def test_safe_image_uses_cloudflare_first(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    local = {"n": 0}
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: local.__setitem__("n", local["n"] + 1))
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 1
+    assert local["n"] == 0  # CF 성공이면 로컬 호출 안 함
+
+
+def test_safe_image_falls_back_to_local_on_cf_quota(monkeypatch, tmp_path):
+    from popory_content.portal_client import PortalError
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    client = _CFClient(PortalError("ai-image 500: 4006: you have used up your daily free allocation of 10,000 neurons", exit_code=4))
+    png = _png((1, 2, 3))
+
+    class Resp:
+        status_code = 200
+        content = png
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(client, "p") == png   # 한도 → 로컬 폴백
+    assert worker._cf_exhausted_today() is True       # 오늘 소진 기록됨
+
+
+def test_safe_image_skips_cf_when_exhausted(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    worker._mark_cf_exhausted()                       # 오늘 소진 상태
+    png = _png()
+    client = _CFClient(png)
+
+    class Resp:
+        status_code = 200
+        content = png
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 0   # 소진이면 CF 건너뛰고 바로 로컬
 
 
 class _Mp4:

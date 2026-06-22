@@ -122,6 +122,21 @@ describe("GET /api/content/topics/:id", () => {
     expect(body.jobs).toHaveLength(2);
   });
 
+  it("하위 작업에 업로드 상태(youtube/instagram)를 포함한다", async () => {
+    const ck = await userCookie();
+    const cr = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t1", platforms: [{ platform: "youtube" }] }),
+    });
+    const { topic_id, job_ids } = await cr.json<{ topic_id: string; job_ids: string[] }>();
+    await env.DB.prepare("UPDATE content_jobs SET status='review', youtube_status='done', youtube_video_id='vid1' WHERE id=?").bind(job_ids[0]).run();
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topic_id}`, { headers: { cookie: ck } });
+    const body = await res.json<{ jobs: { youtube_status: string | null; youtube_video_id: string | null; instagram_status: string | null }[] }>();
+    expect(body.jobs[0].youtube_status).toBe("done");
+    expect(body.jobs[0].youtube_video_id).toBe("vid1");
+    expect(body.jobs[0]).toHaveProperty("instagram_status");
+  });
+
   it("타인 주제는 404", async () => {
     const ck1 = await userCookie("u1", "u1@e.com");
     const cr = await SELF.fetch("https://example.com/api/content/topics", {

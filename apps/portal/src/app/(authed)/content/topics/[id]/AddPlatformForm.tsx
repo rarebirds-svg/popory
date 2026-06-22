@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
+import { friendlyError, type FriendlyError } from "@/lib/content-errors";
 
 const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
 const CHECK_LABEL = "flex items-center gap-2 cursor-pointer text-sm text-popory-fg";
@@ -16,7 +17,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [submitting, setSubmitting] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<FriendlyError | null>(null);
 
   const present = new Set(existingPlatforms);
   const naverDisabled = present.has("naver-blog");
@@ -28,8 +29,9 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   const [styleId, setStyleId] = useState("");
   const [naverBlog, setNaverBlog] = useState(false);
   const [youtube, setYoutube] = useState(false);
-  const [youtubeShorts, setYoutubeShorts] = useState(false);
-  const [instaShorts, setInstaShorts] = useState(false);
+  const [shorts, setShorts] = useState(false);
+  const [shToYoutube, setShToYoutube] = useState(true);
+  const [shToInsta, setShToInsta] = useState(true);
   const [instaImage, setInstaImage] = useState(false);
 
   const [ytLength, setYtLength] = useState<"3"|"5"|"7"|"10">("5");
@@ -40,22 +42,23 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   const [shStyle, setShStyle] = useState<"photo"|"illust"|"watercolor"|"minimal">("photo");
   const [slideCount, setSlideCount] = useState(7);
 
-  const showShorts = youtubeShorts || instaShorts;
-  const noneSelected = !naverBlog && !youtube && !youtubeShorts && !instaShorts && !instaImage;
+  const showShorts = shorts;
+  const noneSelected = !naverBlog && !youtube && !shorts && !instaImage;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (noneSelected) { setErr("하나 이상의 유형을 선택하세요."); return; }
+    if (noneSelected) { setErr({ message: "하나 이상의 유형을 선택해 주세요.", detail: "", retryable: false }); return; }
+    if (shorts && !shToYoutube && !shToInsta) { setErr({ message: "쇼츠 업로드 대상을 하나 이상 선택해 주세요.", detail: "", retryable: false }); return; }
     setErr(null);
     setSubmitting(true);
     try {
       const platforms: Array<{ platform: string; options?: object }> = [];
       if (naverBlog) platforms.push({ platform: "naver-blog" });
       if (youtube) platforms.push({ platform: "youtube", options: { length: ytLength, voice: ytVoice, image_style: ytStyle } });
-      if (showShorts) {
+      if (shorts) {
         const targets: string[] = [];
-        if (youtubeShorts) targets.push("youtube");
-        if (instaShorts) targets.push("instagram");
+        if (shToYoutube) targets.push("youtube");
+        if (shToInsta) targets.push("instagram");
         platforms.push({ platform: "shorts", options: { length: shLength, voice: shVoice, image_style: shStyle, upload_targets: targets } });
       }
       if (instaImage) platforms.push({ platform: "instagram-image", options: { slide_count: slideCount } });
@@ -66,11 +69,11 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ platforms, style_profile_id: styleId || undefined }),
       });
-      if (!res.ok) { setErr(`오류 ${res.status}: ${(await res.text()).slice(0, 200)}`); return; }
-      setNaverBlog(false); setYoutube(false); setYoutubeShorts(false); setInstaShorts(false); setInstaImage(false);
+      if (!res.ok) { setErr(friendlyError(res.status, (await res.text()).slice(0, 200))); return; }
+      setNaverBlog(false); setYoutube(false); setShorts(false); setInstaImage(false);
       startTransition(() => router.refresh());
     } catch (e) {
-      setErr(`fetch: ${String(e).slice(0, 200)}`);
+      setErr({ message: "네트워크 연결을 확인하고 다시 시도해 주세요.", detail: String(e).slice(0, 200), retryable: true });
     } finally {
       setSubmitting(false);
     }
@@ -87,7 +90,13 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
       <p className="text-xs font-semibold text-popory-muted">유형 추가</p>
       {err && (
         <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          <pre className="whitespace-pre-wrap break-all font-mono text-xs">{err}</pre>
+          <p>{err.message}</p>
+          {err.detail && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs text-red-700/80 dark:text-red-300/80">자세히</summary>
+              <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{err.detail}</pre>
+            </details>
+          )}
         </div>
       )}
 
@@ -101,12 +110,8 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
           유튜브 동영상{youtubeDisabled && " (이미 있음)"}
         </label>
         <label className={shortsDisabled ? CHECK_DISABLED : CHECK_LABEL}>
-          <input type="checkbox" checked={youtubeShorts} disabled={shortsDisabled} onChange={(e) => setYoutubeShorts(e.target.checked)} />
-          유튜브 쇼츠{shortsDisabled && " (이미 있음)"}
-        </label>
-        <label className={shortsDisabled ? CHECK_DISABLED : CHECK_LABEL}>
-          <input type="checkbox" checked={instaShorts} disabled={shortsDisabled} onChange={(e) => setInstaShorts(e.target.checked)} />
-          인스타 쇼츠 (릴스){shortsDisabled && " (이미 있음)"}
+          <input type="checkbox" checked={shorts} disabled={shortsDisabled} onChange={(e) => setShorts(e.target.checked)} />
+          쇼츠 영상{shortsDisabled ? " (이미 있음)" : <span className="text-popory-muted"> · 유튜브·인스타 업로드</span>}
         </label>
         <label className={instaImageDisabled ? CHECK_DISABLED : CHECK_LABEL}>
           <input type="checkbox" checked={instaImage} disabled={instaImageDisabled} onChange={(e) => setInstaImage(e.target.checked)} />
@@ -142,9 +147,20 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
 
       {showShorts && (
         <div className="rounded-md border border-popory-border p-3 space-y-3">
-          <p className="text-xs font-semibold text-popory-muted">
-            쇼츠 옵션 ({[youtubeShorts && "유튜브 쇼츠", instaShorts && "인스타 쇼츠"].filter(Boolean).join(" + ")})
-          </p>
+          <p className="text-xs font-semibold text-popory-muted">쇼츠 옵션</p>
+          <div>
+            <span className="block text-xs text-popory-muted mb-1.5">업로드 대상</span>
+            <div className="flex gap-4">
+              <label className={CHECK_LABEL}>
+                <input type="checkbox" checked={shToYoutube} onChange={(e) => setShToYoutube(e.target.checked)} />
+                유튜브
+              </label>
+              <label className={CHECK_LABEL}>
+                <input type="checkbox" checked={shToInsta} onChange={(e) => setShToInsta(e.target.checked)} />
+                인스타
+              </label>
+            </div>
+          </div>
           <div className="grid grid-cols-3 gap-3">
             <label className="block">
               <span className="block text-xs text-popory-muted mb-1">길이</span>

@@ -2,6 +2,7 @@
 // 브리핑 커스텀 주제 목록 + 추가 폼 클라이언트 컴포넌트
 import { useState, useTransition, useEffect, useRef } from "react";
 import { API_BASE } from "@/lib/env";
+import { relativeTime } from "@/lib/relative-time";
 
 interface Topic {
   id: string;
@@ -18,13 +19,6 @@ interface Props {
 
 // pending 주제가 있을 때 서버 상태를 다시 읽어 완료를 감지하는 주기.
 const POLL_MS = 15000;
-
-function relativeTime(ts: number): string {
-  const diff = Math.floor(Date.now() / 1000) - ts;
-  if (diff < 3600) return "방금";
-  if (diff < 86400) return `${Math.floor(diff / 3600)}시간 전`;
-  return `${Math.floor(diff / 86400)}일 전`;
-}
 
 export function CustomTopics({ initialTopics }: Props) {
   const [topics, setTopics] = useState<Topic[]>(initialTopics);

@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
+import { friendlyError, type FriendlyError } from "@/lib/content-errors";
 
 const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
 const CHECK_LABEL = "flex items-center gap-2 cursor-pointer text-sm text-popory-fg";
@@ -14,7 +15,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [submitting, setSubmitting] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<FriendlyError | null>(null);
 
   const [topic, setTopic] = useState(initialTopic);
   const [styleId, setStyleId] = useState("");
@@ -23,18 +24,20 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
   // 플랫폼 체크박스
   const [naverBlog, setNaverBlog] = useState(false);
   const [youtube, setYoutube] = useState(false);
-  const [youtubeShorts, setYoutubeShorts] = useState(false);
-  const [instaShorts, setInstaShorts] = useState(false);
+  const [shorts, setShorts] = useState(false);
+  // 쇼츠 1개를 어디에 올릴지(업로드 대상). 기본 둘 다.
+  const [shToYoutube, setShToYoutube] = useState(true);
+  const [shToInsta, setShToInsta] = useState(true);
   const [instaImage, setInstaImage] = useState(false);
 
   // YouTube 동영상 옵션
   const [ytLength, setYtLength] = useState<"3"|"5"|"7"|"10">("5");
-  const [ytVoice, setYtVoice] = useState<"female-calm"|"female-bright"|"male">("female-calm");
+  const [ytVoice, setYtVoice] = useState<"female-calm"|"female-bright"|"male">("male");
   const [ytStyle, setYtStyle] = useState<"photo"|"illust"|"watercolor"|"minimal">("photo");
 
   // Shorts 옵션
   const [shLength, setShLength] = useState<"15"|"30"|"60">("30");
-  const [shVoice, setShVoice] = useState<"female-calm"|"female-bright"|"male">("female-calm");
+  const [shVoice, setShVoice] = useState<"female-calm"|"female-bright"|"male">("male");
   const [shStyle, setShStyle] = useState<"photo"|"illust"|"watercolor"|"minimal">("photo");
 
   // 인스타 이미지 옵션
@@ -46,12 +49,13 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
   }
   function removeSource(i: number) { setSources((s) => s.filter((_, idx) => idx !== i)); }
 
-  const showShorts = youtubeShorts || instaShorts;
-  const noneSelected = !naverBlog && !youtube && !youtubeShorts && !instaShorts && !instaImage;
+  const showShorts = shorts;
+  const noneSelected = !naverBlog && !youtube && !shorts && !instaImage;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (noneSelected) { setErr("하나 이상의 플랫폼을 선택하세요."); return; }
+    if (noneSelected) { setErr({ message: "하나 이상의 콘텐츠 유형을 선택해 주세요.", detail: "", retryable: false }); return; }
+    if (shorts && !shToYoutube && !shToInsta) { setErr({ message: "쇼츠 업로드 대상을 하나 이상 선택해 주세요.", detail: "", retryable: false }); return; }
     setErr(null);
     setSubmitting(true);
     try {
@@ -63,10 +67,10 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
       const platforms: Array<{ platform: string; options?: object }> = [];
       if (naverBlog) platforms.push({ platform: "naver-blog" });
       if (youtube) platforms.push({ platform: "youtube", options: { length: ytLength, voice: ytVoice, image_style: ytStyle } });
-      if (showShorts) {
+      if (shorts) {
         const targets: string[] = [];
-        if (youtubeShorts) targets.push("youtube");
-        if (instaShorts) targets.push("instagram");
+        if (shToYoutube) targets.push("youtube");
+        if (shToInsta) targets.push("instagram");
         platforms.push({ platform: "shorts", options: { length: shLength, voice: shVoice, image_style: shStyle, upload_targets: targets } });
       }
       if (instaImage) platforms.push({ platform: "instagram-image", options: { slide_count: slideCount } });
@@ -83,7 +87,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
         }),
       });
       if (!res.ok) {
-        setErr(`오류 ${res.status}: ${(await res.text()).slice(0, 300)}`);
+        setErr(friendlyError(res.status, (await res.text()).slice(0, 300)));
         return;
       }
       const { topic_id } = (await res.json()) as { topic_id: string };
@@ -92,7 +96,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
         router.refresh();
       });
     } catch (e) {
-      setErr(`fetch: ${String(e).slice(0, 200)}`);
+      setErr({ message: "네트워크 연결을 확인하고 다시 시도해 주세요.", detail: String(e).slice(0, 200), retryable: true });
     } finally {
       setSubmitting(false);
     }
@@ -104,7 +108,13 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
     <form onSubmit={onSubmit} className="mt-6 space-y-5">
       {err && (
         <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          <pre className="whitespace-pre-wrap break-all font-mono text-xs">{err}</pre>
+          <p>{err.message}</p>
+          {err.detail && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs text-red-700/80 dark:text-red-300/80">자세히</summary>
+              <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{err.detail}</pre>
+            </details>
+          )}
         </div>
       )}
 
@@ -126,12 +136,8 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
             유튜브 동영상
           </label>
           <label className={CHECK_LABEL}>
-            <input type="checkbox" checked={youtubeShorts} onChange={(e) => setYoutubeShorts(e.target.checked)} />
-            유튜브 쇼츠
-          </label>
-          <label className={CHECK_LABEL}>
-            <input type="checkbox" checked={instaShorts} onChange={(e) => setInstaShorts(e.target.checked)} />
-            인스타 쇼츠 (릴스)
+            <input type="checkbox" checked={shorts} onChange={(e) => setShorts(e.target.checked)} />
+            쇼츠 영상 <span className="text-popory-muted">· 유튜브·인스타 업로드</span>
           </label>
           <label className={CHECK_LABEL}>
             <input type="checkbox" checked={instaImage} onChange={(e) => setInstaImage(e.target.checked)} />
@@ -176,9 +182,20 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
 
       {showShorts && (
         <div className="rounded-md border border-popory-border p-3 space-y-3">
-          <p className="text-xs font-semibold text-popory-muted">
-            쇼츠 옵션 ({[youtubeShorts && "유튜브 쇼츠", instaShorts && "인스타 쇼츠"].filter(Boolean).join(" + ")})
-          </p>
+          <p className="text-xs font-semibold text-popory-muted">쇼츠 옵션</p>
+          <div>
+            <span className="block text-xs text-popory-muted mb-1.5">업로드 대상</span>
+            <div className="flex gap-4">
+              <label className={CHECK_LABEL}>
+                <input type="checkbox" checked={shToYoutube} onChange={(e) => setShToYoutube(e.target.checked)} />
+                유튜브
+              </label>
+              <label className={CHECK_LABEL}>
+                <input type="checkbox" checked={shToInsta} onChange={(e) => setShToInsta(e.target.checked)} />
+                인스타
+              </label>
+            </div>
+          </div>
           <div className="grid grid-cols-3 gap-3">
             <label className="block">
               <span className="block text-xs text-popory-muted mb-1">길이</span>
@@ -246,10 +263,15 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
         </div>
       </div>
 
+      <p className="text-xs text-popory-muted">
+        {youtube || shorts
+          ? "영상은 생성에 보통 2~5분 걸려요. 시작하면 목록에서 진행 상황을 볼 수 있어요."
+          : "보통 1~2분이면 완성돼요. 시작하면 목록에서 진행 상황을 볼 수 있어요."}
+      </p>
       <div className="flex gap-3">
         <button type="submit" disabled={busy || noneSelected}
           className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-          {busy ? "생성 중…" : "작업 시작"}
+          {busy ? "생성 중…" : "생성 시작"}
         </button>
         <a href="/content" className="rounded-md border border-popory-border px-4 py-2 text-sm">취소</a>
       </div>

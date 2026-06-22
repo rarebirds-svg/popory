@@ -5,6 +5,7 @@ import { TopicCreateSchema, TopicAddJobsSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
 import type { ServiceVars } from "../middleware/service_auth";
 import { deleteContentJob } from "../db/content_delete";
+import { withD1Retry } from "../db/d1_retry";
 
 function ulid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -53,7 +54,8 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
         );
       }
     }
-    await c.env.DB.batch(stmts);
+    // D1 일시적 스토리지 타임아웃(인프라 측)으로 간헐 500이 나므로 배치를 재시도로 감싼다.
+    await withD1Retry(() => c.env.DB.batch(stmts));
     // 같은 제목의 pending 추천이 있으면 registered로 동기화(부가 — 실패 무시).
     // 등록 버튼은 "제목 - 저자" 형식으로 보내므로, 토픽 원문과 마지막 ' - ' 앞
     // 제목 부분(추천은 제목만 저장)을 둘 다 매칭해 동명 pending 추천을 전환한다.
@@ -86,7 +88,9 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
       .bind(c.req.param("id")).first<{ id: string; owner_sub: string; topic: string; created_at: number }>();
     if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
     const { results: jobs } = await c.env.DB.prepare(
-      "SELECT id, platform, status, params_json, error, updated_at FROM content_jobs WHERE topic_id=? ORDER BY created_at",
+      "SELECT id, platform, status, params_json, error, updated_at, " +
+        "youtube_status, youtube_video_id, instagram_status, instagram_media_id " +
+        "FROM content_jobs WHERE topic_id=? ORDER BY created_at",
     ).bind(row.id).all();
     return c.json({ id: row.id, topic: row.topic, created_at: row.created_at, jobs });
   });
@@ -127,7 +131,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
       );
       addedJobIds.push(jobId);
     }
-    if (stmts.length > 0) await c.env.DB.batch(stmts);
+    if (stmts.length > 0) await withD1Retry(() => c.env.DB.batch(stmts));
     return c.json({ added_job_ids: addedJobIds, skipped_platforms: skippedPlatforms }, 201);
   });
 

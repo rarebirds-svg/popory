@@ -4,7 +4,7 @@ from popory_content.options import parse_options, SCENE_COUNT, VOICE, STYLE
 
 def test_defaults_when_none():
     o = parse_options(None)
-    assert o == {"length": "5", "voice": "female-calm", "image_style": "photo"}
+    assert o == {"length": "5", "voice": "male", "image_style": "photo"}
 
 
 def test_valid_merge():
@@ -14,7 +14,7 @@ def test_valid_merge():
 
 def test_invalid_falls_back():
     o = parse_options('{"length":"99","voice":"bad"}')
-    assert o["length"] == "5" and o["voice"] == "female-calm"
+    assert o["length"] == "5" and o["voice"] == "male"
 
 
 def test_bad_json():
@@ -33,7 +33,7 @@ from popory_content.options import parse_shorts_options, SHORT_SCENE_COUNT
 def test_parse_shorts_options_defaults():
     opts = parse_shorts_options(None)
     assert opts["length"] == "30"
-    assert opts["voice"] == "female-calm"
+    assert opts["voice"] == "male"
     assert opts["image_style"] == "photo"
     assert opts["upload_targets"] == []
 

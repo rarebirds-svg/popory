@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- popory 로컬 이미지 생성 서버. 상주(모델은 lazy-load·유휴 언로드). localhost:8765. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.popory.imagegen</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/daegong/projects/popory/services/imagegen/run_server.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/daegong/projects/popory/services/imagegen</string>
+    <key>StandardOutPath</key>
+    <string>/Users/daegong/projects/popory/services/imagegen/logs/launchd.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/daegong/projects/popory/services/imagegen/logs/launchd.stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>POPORY_IMAGEGEN_MODEL</key>
+        <string>realvisxl</string>
+        <key>POPORY_IMAGEGEN_IDLE_SECONDS</key>
+        <string>120</string>
+        <key>HF_HOME</key>
+        <string>/Users/daegong/projects/popory/services/imagegen/.hf</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

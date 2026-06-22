@@ -129,8 +129,13 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     if (!["youtube", "shorts", "instagram-image"].includes(row.platform)) return c.text("not regeneratable", 409);
     if (row.status !== "review" && row.status !== "failed") return c.text("not regeneratable", 409);
     const now = Math.floor(Date.now() / 1000);
-    await c.env.DB.prepare("UPDATE content_jobs SET status='queued', error=NULL, updated_at=? WHERE id=?")
-      .bind(now, row.id).run();
+    // 재생성하면 직전 업로드는 옛 영상 기준이므로 업로드 상태도 리셋한다(새 영상 재업로드 가능).
+    await c.env.DB.prepare(
+      "UPDATE content_jobs SET status='queued', error=NULL, " +
+        "youtube_status=NULL, youtube_video_id=NULL, youtube_error=NULL, " +
+        "instagram_status=NULL, instagram_media_id=NULL, instagram_error=NULL, " +
+        "updated_at=? WHERE id=?",
+    ).bind(now, row.id).run();
     return c.json({ ok: true });
   });
 

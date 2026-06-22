@@ -6,7 +6,16 @@ from pathlib import Path
 import pytest
 from PIL import Image as _Image
 
-from popory_content.video import render_video, _render_card, FONT_PATH
+from popory_content.video import (
+    render_video,
+    _render_card,
+    _split_sentences,
+    _spans_from_durations,
+    _render_subtitle_png,
+    _deepen_voice,
+    FONT_PATH,
+)
+from popory_content import video as _video
 
 _HAS_TOOLS = bool(shutil.which("ffmpeg") and shutil.which("say") and Path(FONT_PATH).exists())
 
@@ -21,6 +30,70 @@ def test_render_card_with_and_without_bg(tmp_path):
     _render_card("챕터 제목", "지금 읽는 문장입니다.", p2, bg_image_bytes=None)
     assert p1.exists() and p1.stat().st_size > 1000
     assert p2.exists() and p2.stat().st_size > 1000
+
+
+def test_render_card_corrupt_bytes_falls_back(tmp_path):
+    # 깨진 이미지 바이트가 와도 크래시하지 않고 단색 카드로 폴백한다.
+    out = tmp_path / "corrupt.png"
+    _render_card("제목", "문장", out, bg_image_bytes=b"\x89PNG-not-a-real-image")
+    assert out.exists() and out.stat().st_size > 1000
+
+
+def test_split_sentences():
+    assert _split_sentences("첫 문장이다. 둘째 문장! 셋째?") == ["첫 문장이다.", "둘째 문장!", "셋째?"]
+    assert _split_sentences("  ") == []
+    assert _split_sentences("문장 하나만") == ["문장 하나만"]
+
+
+def test_spans_from_durations_track_real_audio_lengths():
+    # 자막 타이밍은 문장별 실측 길이를 그대로 따른다(글자수 추정 아님). 문장 사이 gap만큼 띄움.
+    spans = _spans_from_durations([2.0, 3.0, 1.0], 0.5)
+    assert len(spans) == 3
+    assert spans[0][0] == 0.0
+    # 비마지막 문장은 다음 문장 시작까지(갭 포함) 자막 유지 → 깜빡임 없음
+    assert abs(spans[0][1] - 2.5) < 1e-6     # 0+2.0+0.5
+    assert abs(spans[1][0] - 2.5) < 1e-6
+    assert abs(spans[1][1] - 6.0) < 1e-6     # 2.5+3.0+0.5
+    assert abs(spans[2][0] - 6.0) < 1e-6
+    assert abs(spans[2][1] - 7.0) < 1e-6     # 마지막은 발화 끝(뒤 갭 없음)
+    # 각 문장 자막의 시작 간격은 실측 길이+gap을 정확히 반영(누적 드리프트 없음)
+    assert abs((spans[1][0] - spans[0][0]) - (2.0 + 0.5)) < 1e-6
+    assert abs((spans[2][0] - spans[1][0]) - (3.0 + 0.5)) < 1e-6
+
+
+def test_spans_from_durations_single():
+    assert _spans_from_durations([5.0], 0.5) == [(0.0, 5.0)]
+
+
+def test_deepen_voice_disabled_returns_original(tmp_path, monkeypatch):
+    monkeypatch.setattr(_video, "VOICE_DEEPEN_SEMITONES", 0.0)
+    p = tmp_path / "0.mp3"
+    p.write_bytes(b"x")
+    assert _deepen_voice(p) == p          # 0이면 변형 안 함
+
+
+def test_deepen_voice_builds_pitchdown_filter(tmp_path, monkeypatch):
+    monkeypatch.setattr(_video, "VOICE_DEEPEN_SEMITONES", 2.0)
+    cmds = []
+    monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
+    src = tmp_path / "0.mp3"
+    src.write_bytes(b"x")
+    out = _deepen_voice(src)
+    assert out.name == "0_deep.mp3"        # 새 파일로 출력
+    af = cmds[0][cmds[0].index("-af") + 1]
+    assert "asetrate" in af and "atempo" in af   # 피치 다운
+    assert "treble" in af                         # 명료도(프레즌스) 복원
+    assert "equalizer=f=350" in af                # 머드 컷
+
+
+def test_render_subtitle_png_is_transparent(tmp_path):
+    out = tmp_path / "sub.png"
+    _render_subtitle_png("자막 문장입니다.", out)
+    img = _Image.open(out)
+    assert img.mode == "RGBA"           # 투명 오버레이용
+    assert img.size == (1920, 1080)
+    # 완전 투명이 아닌 픽셀(글자)이 존재
+    assert img.getextrema()[3][1] > 0
 
 
 def test_render_card_portrait_creates_correct_size(tmp_path):
@@ -116,6 +189,7 @@ def test_render_video_counts_missing_images(monkeypatch, tmp_path):
     monkeypatch.setattr(video, "_run", lambda cmd: None)
     monkeypatch.setattr(video, "_duration", lambda path: 1.0)
     monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_render_subtitle_png", lambda *a, **k: None)
     monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm: None)
     monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
     monkeypatch.setattr(video, "_xfade_graph", lambda durs, td=0.4: ("", "v", "a"))
