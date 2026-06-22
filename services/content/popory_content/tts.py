@@ -61,6 +61,12 @@ def _normalize_for_tts(text: str) -> str:
 # (구분자가 숫자 사이일 때만 토큰에 포함되므로 문장 끝 마침표 "1976."은 정수로 인식.)
 _NUM_TOKEN = re.compile(r"\d+(?:[.:/]\d+)*")
 
+# 콤마 뒤 호흡(무음) 길이(ms). Chirp3-HD가 콤마를 너무 급히 넘어가 SSML <break>로 강제한다.
+# <break>는 실제 무음 삽입이라 과거 [pause] 마크업의 "어/으/응" 추임새 부작용이 없다.
+# POPORY_TTS_COMMA_BREAK_MS로 튜닝(0이면 비활성).
+COMMA_BREAK_MS = int(os.environ.get("POPORY_TTS_COMMA_BREAK_MS", "350"))
+_COMMA = re.compile(r",\s*")
+
 
 def _wrap_cardinal(m: "re.Match[str]") -> str:
     tok = m.group()
@@ -89,6 +95,9 @@ def _to_ssml(text: str) -> str:
     Chirp3-HD가 16을 자리별 "일육"이 아니라 "십육"으로 읽게 한다."""
     esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     esc = _NUM_TOKEN.sub(_wrap_cardinal, esc)
+    if COMMA_BREAK_MS > 0:
+        # 콤마는 보존하고 그 뒤에 무음을 넣어 한 박자 호흡하게 한다.
+        esc = _COMMA.sub(f',<break time="{COMMA_BREAK_MS}ms"/> ', esc)
     return f"<speak>{esc}</speak>"
 
 

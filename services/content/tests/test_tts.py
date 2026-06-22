@@ -215,6 +215,22 @@ def test_to_ssml_wraps_date_components():
     assert '<say-as interpret-as="cardinal">21</say-as>일' in out
 
 
+def test_to_ssml_inserts_break_after_comma():
+    from popory_content.tts import _to_ssml
+    # 콤마 뒤 호흡(<break>) 강제 — Chirp3-HD가 콤마를 급히 넘어가는 문제 보정
+    out = _to_ssml("사과, 배, 감을 샀다.")
+    assert out.count("<break") == 2
+    assert '<break time="350ms"/>' in out
+    assert "사과,<break" in out  # 콤마는 보존하고 그 뒤에 무음 삽입
+
+
+def test_to_ssml_break_and_cardinal_coexist():
+    from popory_content.tts import _to_ssml
+    out = _to_ssml("16년, 그리고 17년.")
+    assert '<say-as interpret-as="cardinal">16</say-as>년,<break time="350ms"/>' in out
+    assert '<say-as interpret-as="cardinal">17</say-as>년.' in out
+
+
 def test_to_ssml_escapes_xml():
     from popory_content.tts import _to_ssml
     out = _to_ssml("5 < 10 & 자유")
