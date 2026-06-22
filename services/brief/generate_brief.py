@@ -103,13 +103,16 @@ def main() -> None:
 
             combined = result.stdout + result.stderr
             is_limit = limit_detect.is_limit_message(combined)
-            print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit})", file=sys.stderr)
+            is_overload = limit_detect.is_overload_message(combined)
+            print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit}, overload={is_overload})", file=sys.stderr)
             print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
             print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
 
-            if is_limit and attempt < len(BACKOFF_SECONDS):
+            # 한도(5시간 윈도우)와 일시 과부하(529) 모두 백오프 재시도로 흡수한다.
+            if (is_limit or is_overload) and attempt < len(BACKOFF_SECONDS):
                 wait = BACKOFF_SECONDS[attempt]
-                print(f"--- usage limit 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
+                reason = "usage limit" if is_limit else "API 과부하(529)"
+                print(f"--- {reason} 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
                 time.sleep(wait)
                 attempt += 1
                 continue

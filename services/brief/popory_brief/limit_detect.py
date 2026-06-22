@@ -18,6 +18,13 @@ LIMIT_MARKERS = (
     "resets ",
 )
 
+# claude CLI가 Anthropic 서버 일시 과부하(API 529 Overloaded)로 끝날 때의 메시지 조각.
+# 실패(비정상 종료) 출력에만 적용되므로 본문에 섞인 숫자 오탐 걱정은 없다.
+OVERLOAD_MARKERS = (
+    "overloaded",
+    "overload_error",
+)
+
 # 인-프로세스 백오프 소진 후 한도 리셋 시각을 못 구할 때 쓰는 폴백(롤링 윈도우 상한).
 FALLBACK_RESET_SECONDS = 5 * 60 * 60
 
@@ -26,6 +33,12 @@ def is_limit_message(text: str) -> bool:
     """claude CLI 출력이 사용량 한도 때문인지 판정한다."""
     t = text.lower()
     return any(m in t for m in LIMIT_MARKERS)
+
+
+def is_overload_message(text: str) -> bool:
+    """claude CLI 출력이 일시적 서버 과부하(529) 때문인지 판정한다."""
+    t = text.lower()
+    return any(m in t for m in OVERLOAD_MARKERS)
 
 
 def parse_reset_epoch(text: str, now: datetime.datetime) -> int | None:

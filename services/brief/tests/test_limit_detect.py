@@ -26,6 +26,22 @@ def test_non_limit_message_is_false():
     assert limit_detect.is_limit_message("tag <body_markdown> not found") is False
 
 
+# 2026-06-22 실제 실패 메시지 (회귀 방지)
+OVERLOAD_MSG = "API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment."
+
+
+def test_detects_overload_message():
+    assert limit_detect.is_overload_message(OVERLOAD_MSG) is True
+    assert limit_detect.is_overload_message("Error: overloaded_error") is True
+
+
+def test_overload_is_not_limit_and_vice_versa():
+    # 과부하와 한도는 서로 다른 신호 — 섞이지 않는다.
+    assert limit_detect.is_limit_message(OVERLOAD_MSG) is False
+    assert limit_detect.is_overload_message(REAL_MSG) is False
+    assert limit_detect.is_overload_message("error: connection refused") is False
+
+
 def test_parse_reset_epoch_am():
     # 실패 시각 08:48 KST → 같은 날 11:10 KST 리셋
     now = datetime.datetime(2026, 6, 13, 8, 48, tzinfo=KST)
