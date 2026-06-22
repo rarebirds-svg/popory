@@ -19,9 +19,15 @@ test-results
 services/*/.venv/
 services/*/secrets/
 services/*/logs/
-services/*/__pycache__/
+__pycache__/
 services/*/.pytest_cache/
 services/*/*.egg-info/
+
+# imagegen 로컬 모델 캐시(HuggingFace, 수십 GB — 절대 커밋 금지)
+services/imagegen/.hf/
+
+# 루트 생성물 스크래치(영상 등)
+/content/
 
 # OAuth client credentials JSON 등 자격증명 다운로드본 (절대 커밋 금지).
 google_*.json
