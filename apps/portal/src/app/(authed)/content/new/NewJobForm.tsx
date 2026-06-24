@@ -25,9 +25,10 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
   const [naverBlog, setNaverBlog] = useState(true);
   const [youtube, setYoutube] = useState(true);
   const [shorts, setShorts] = useState(true);
-  // 쇼츠 1개를 어디에 올릴지(업로드 대상). 기본 둘 다.
+  // 쇼츠 1개를 어디에 올릴지(업로드 대상). 기본 전부.
   const [shToYoutube, setShToYoutube] = useState(true);
   const [shToInsta, setShToInsta] = useState(true);
+  const [shToFacebook, setShToFacebook] = useState(true);
   const [instaImage, setInstaImage] = useState(false);
 
   // YouTube 동영상 옵션
@@ -55,7 +56,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (noneSelected) { setErr({ message: "하나 이상의 콘텐츠 유형을 선택해 주세요.", detail: "", retryable: false }); return; }
-    if (shorts && !shToYoutube && !shToInsta) { setErr({ message: "쇼츠 업로드 대상을 하나 이상 선택해 주세요.", detail: "", retryable: false }); return; }
+    if (shorts && !shToYoutube && !shToInsta && !shToFacebook) { setErr({ message: "쇼츠 업로드 대상을 하나 이상 선택해 주세요.", detail: "", retryable: false }); return; }
     setErr(null);
     setSubmitting(true);
     try {
@@ -71,6 +72,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
         const targets: string[] = [];
         if (shToYoutube) targets.push("youtube");
         if (shToInsta) targets.push("instagram");
+        if (shToFacebook) targets.push("facebook");
         platforms.push({ platform: "shorts", options: { length: shLength, voice: shVoice, image_style: shStyle, upload_targets: targets } });
       }
       if (instaImage) platforms.push({ platform: "instagram-image", options: { slide_count: slideCount } });
@@ -193,6 +195,10 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
               <label className={CHECK_LABEL}>
                 <input type="checkbox" checked={shToInsta} onChange={(e) => setShToInsta(e.target.checked)} />
                 인스타
+              </label>
+              <label className={CHECK_LABEL}>
+                <input type="checkbox" checked={shToFacebook} onChange={(e) => setShToFacebook(e.target.checked)} />
+                페이스북
               </label>
             </div>
           </div>

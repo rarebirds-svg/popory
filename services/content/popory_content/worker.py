@@ -22,6 +22,7 @@ from popory_content.instagram_image_prompt import build_carousel_system_prompt, 
 from popory_content.instagram_image_contract import parse_carousel
 from popory_content.instagram_image_render import render_carousel
 from popory_content.instagram_upload import upload_reels, upload_carousel, InstagramUploadError
+from popory_content.facebook_upload import upload_reels as fb_upload_reels
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
@@ -316,6 +317,29 @@ def run_instagram_upload_once(client) -> bool:
     return True
 
 
+def run_facebook_upload_once(client) -> bool:
+    """Facebook 릴스 업로드 요청 1건 처리. 처리했으면 True."""
+    data = client.post("/api/content/facebook/claim-upload", json=None)
+    if not data:
+        return False
+    job_id = data["job_id"]
+    page_id = data["page_id"]
+    access_token = data["access_token"]
+    caption = data.get("caption", "")
+    try:
+        video_url = _issue_media_token(client, f"content/video/{job_id}.mp4")
+        video_id = fb_upload_reels(page_id, access_token, video_url, caption)
+        client.patch(f"/api/content/jobs/{job_id}/facebook-result", json={"status": "done", "video_id": video_id})
+        append_log(LOGS_DIR, {"worker": "content", "status": "fb_uploaded", "job": job_id, "video": video_id})
+    except Exception as e:  # noqa: BLE001
+        try:
+            client.patch(f"/api/content/jobs/{job_id}/facebook-result", json={"status": "failed", "error": str(e)[:500]})
+        except Exception:  # noqa: BLE001
+            pass
+        append_log(LOGS_DIR, {"worker": "content", "status": "fb_upload_failed", "job": job_id, "error": str(e)[:300]})
+    return True
+
+
 def run_custom_brief_once(client) -> bool:
     """온디맨드 커스텀 주제 브리핑 생성. 대기 항목 없으면 False 반환."""
     import subprocess
@@ -366,6 +390,8 @@ def main() -> None:
                 processed = run_upload_once(client)
             if not processed:
                 processed = run_instagram_upload_once(client)
+            if not processed:
+                processed = run_facebook_upload_once(client)
             if not processed:
                 processed = run_custom_brief_once(client)
         except PortalError as e:
