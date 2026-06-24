@@ -346,3 +346,34 @@ def test_youtube_few_images_failed_reports_review(monkeypatch):
     result = [p for p in client.patched if p[0].endswith("/result")][-1]
     assert result[1]["status"] == "review"
     assert result[1]["meta"]["images_missing"] == 1
+
+
+def test_run_cycle_attempts_upload_even_when_generating(monkeypatch):
+    """생성이 처리돼도 같은 사이클에서 업로드/IG claim 을 시도해야 한다(starvation 제거)."""
+    calls = []
+    monkeypatch.setattr(worker, "run_once", lambda c: (calls.append("gen") or True))
+    monkeypatch.setattr(worker, "run_upload_once", lambda c: (calls.append("up") or False))
+    monkeypatch.setattr(worker, "run_instagram_upload_once", lambda c: (calls.append("ig") or False))
+    monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: (calls.append("brief") or False))
+    assert worker.run_cycle(object()) is True
+    assert calls == ["gen", "up", "ig"]   # 생성 처리돼도 업로드·IG 시도, 저순위 브리핑은 건너뜀
+
+
+def test_run_cycle_brief_only_when_all_idle(monkeypatch):
+    """다른 큐가 모두 비었을 때만 저순위 커스텀 브리핑을 시도한다."""
+    calls = []
+    monkeypatch.setattr(worker, "run_once", lambda c: (calls.append("gen") or False))
+    monkeypatch.setattr(worker, "run_upload_once", lambda c: (calls.append("up") or False))
+    monkeypatch.setattr(worker, "run_instagram_upload_once", lambda c: (calls.append("ig") or False))
+    monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: (calls.append("brief") or True))
+    assert worker.run_cycle(object()) is True
+    assert calls == ["gen", "up", "ig", "brief"]
+
+
+def test_run_cycle_idle_returns_false(monkeypatch):
+    """모든 큐가 비면 False(메인 루프가 sleep)."""
+    monkeypatch.setattr(worker, "run_once", lambda c: False)
+    monkeypatch.setattr(worker, "run_upload_once", lambda c: False)
+    monkeypatch.setattr(worker, "run_instagram_upload_once", lambda c: False)
+    monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: False)
+    assert worker.run_cycle(object()) is False

@@ -352,6 +352,22 @@ def run_custom_brief_once(client) -> bool:
     return True
 
 
+def run_cycle(client) -> bool:
+    """한 폴 사이클. 생성·유튜브 업로드·IG 업로드를 매번 각각 1회 시도한다.
+    예전엔 생성 큐가 빌 때만 업로드를 claim 해서, 생성 백로그가 있으면 업로드가
+    영구히 굶주렸다(준비중 정체). 이제 사이클마다 업로드 claim 을 시도하므로
+    생성 1건이 도는 동안만 대기하고 그 직후 업로드가 처리된다(무한 starvation 제거).
+    저순위 커스텀 브리핑은 다른 큐가 모두 비었을 때만 시도한다. 하나라도 처리하면 True.
+    """
+    did_gen = run_once(client)
+    did_upload = run_upload_once(client)
+    did_ig = run_instagram_upload_once(client)
+    did_brief = False
+    if not (did_gen or did_upload or did_ig):
+        did_brief = run_custom_brief_once(client)
+    return did_gen or did_upload or did_ig or did_brief
+
+
 def main() -> None:
     client = _build_client()
     append_log(LOGS_DIR, {"worker": "content", "status": "start"})
@@ -361,13 +377,7 @@ def main() -> None:
             if time.monotonic() - last_hb >= HEARTBEAT_INTERVAL_SECONDS:
                 report_heartbeat(client)
                 last_hb = time.monotonic()
-            processed = run_once(client)
-            if not processed:
-                processed = run_upload_once(client)
-            if not processed:
-                processed = run_instagram_upload_once(client)
-            if not processed:
-                processed = run_custom_brief_once(client)
+            processed = run_cycle(client)
         except PortalError as e:
             append_log(LOGS_DIR, {"worker": "content", "status": "portal_error", "error": str(e)[:300]})
             processed = False
