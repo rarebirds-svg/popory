@@ -134,6 +134,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
       "UPDATE content_jobs SET status='queued', error=NULL, " +
         "youtube_status=NULL, youtube_video_id=NULL, youtube_error=NULL, " +
         "instagram_status=NULL, instagram_media_id=NULL, instagram_error=NULL, " +
+        "facebook_status=NULL, facebook_video_id=NULL, facebook_error=NULL, " +
         "updated_at=? WHERE id=?",
     ).bind(now, row.id).run();
     return c.json({ ok: true });

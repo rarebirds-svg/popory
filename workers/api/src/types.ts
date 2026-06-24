@@ -15,4 +15,5 @@ export interface Env {
   INSTAGRAM_CLIENT_ID: string;
   INSTAGRAM_CLIENT_SECRET: string;
   INSTAGRAM_TOKEN_KEY: string;
+  FACEBOOK_TOKEN_KEY: string;
 }

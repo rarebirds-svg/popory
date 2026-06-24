@@ -12,6 +12,7 @@ import { RegenerateButton } from "./RegenerateButton";
 import { YoutubeUpload } from "./YoutubeUpload";
 import { CarouselPreview } from "./CarouselPreview";
 import { InstagramUpload } from "./InstagramUpload";
+import { FacebookUpload } from "./FacebookUpload";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -33,6 +34,9 @@ interface JobDetail {
   instagram_status: string | null;
   instagram_media_id: string | null;
   instagram_error: string | null;
+  facebook_status: string | null;
+  facebook_video_id: string | null;
+  facebook_error: string | null;
   sources: Array<{ id: string; kind: string; url: string | null; title: string | null; note: string | null }>;
 }
 
@@ -64,6 +68,15 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
       cache: "no-store",
     });
     if (cs.ok) igConnected = ((await cs.json()) as { connected: boolean }).connected;
+  }
+
+  let fbConnected = false;
+  if (job.platform === "shorts") {
+    const cs = await fetch(`${API_BASE}/api/content/facebook/status`, {
+      headers: { cookie },
+      cache: "no-store",
+    });
+    if (cs.ok) fbConnected = ((await cs.json()) as { connected: boolean }).connected;
   }
 
   let uploadTargets: string[] = [];
@@ -138,6 +151,15 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                 initialStatus={job.instagram_status}
                 initialMediaId={job.instagram_media_id}
                 initialError={job.instagram_error}
+              />
+            )}
+            {job.platform === "shorts" && uploadTargets.includes("facebook") && (
+              <FacebookUpload
+                jobId={job.id}
+                connected={fbConnected}
+                initialStatus={job.facebook_status}
+                initialVideoId={job.facebook_video_id}
+                initialError={job.facebook_error}
               />
             )}
           </div>
