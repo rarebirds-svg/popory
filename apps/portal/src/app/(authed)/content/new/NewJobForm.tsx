@@ -18,25 +18,25 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
   const [err, setErr] = useState<FriendlyError | null>(null);
 
   const [topic, setTopic] = useState(initialTopic);
-  const [styleId, setStyleId] = useState("");
+  const [styleId, setStyleId] = useState(() => profiles.find((p) => p.name === "대공")?.id ?? "");
   const [sources, setSources] = useState<SourceInput[]>([]);
 
   // 플랫폼 체크박스
-  const [naverBlog, setNaverBlog] = useState(false);
-  const [youtube, setYoutube] = useState(false);
-  const [shorts, setShorts] = useState(false);
+  const [naverBlog, setNaverBlog] = useState(true);
+  const [youtube, setYoutube] = useState(true);
+  const [shorts, setShorts] = useState(true);
   // 쇼츠 1개를 어디에 올릴지(업로드 대상). 기본 둘 다.
   const [shToYoutube, setShToYoutube] = useState(true);
   const [shToInsta, setShToInsta] = useState(true);
   const [instaImage, setInstaImage] = useState(false);
 
   // YouTube 동영상 옵션
-  const [ytLength, setYtLength] = useState<"3"|"5"|"7"|"10">("5");
+  const [ytLength, setYtLength] = useState<"3"|"5"|"7"|"10">("10");
   const [ytVoice, setYtVoice] = useState<"female-calm"|"female-bright"|"male">("male");
   const [ytStyle, setYtStyle] = useState<"photo"|"illust"|"watercolor"|"minimal">("photo");
 
   // Shorts 옵션
-  const [shLength, setShLength] = useState<"15"|"30"|"60">("30");
+  const [shLength, setShLength] = useState<"15"|"30"|"60">("60");
   const [shVoice, setShVoice] = useState<"female-calm"|"female-bright"|"male">("male");
   const [shStyle, setShStyle] = useState<"photo"|"illust"|"watercolor"|"minimal">("photo");
 
