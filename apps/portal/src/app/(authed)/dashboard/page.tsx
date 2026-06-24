@@ -10,7 +10,7 @@ const AREAS: AreaCard[] = [
   { key: "brief", label: "뉴스 브리핑", href: () => "/p/brief" },
   { key: "content", label: "컨텐츠 관리", href: () => "/content" },
   { key: "finance", label: "금융 자산", href: (b) => `${b}/go/finance` },
-  { key: "baduk", label: "바둑", href: () => "https://www.inkbaduk.com", external: true },
+  { key: "baduk", label: "잉크바둑", href: () => "https://www.inkbaduk.com", external: true },
 ];
 
 export default async function Dashboard() {
@@ -36,7 +36,7 @@ export default async function Dashboard() {
             >
               <div className="h-full rounded-xl border border-popory-border bg-popory-card p-5 transition group-hover:border-popory-accent">
                 <h2 className="text-base font-bold text-popory-fg">{a.label}</h2>
-                <p className="mt-1 text-sm text-popory-muted">{a.external ? "외부 사이트" : "바로 진입"}</p>
+                <p className="mt-1 text-sm text-popory-muted">{a.external ? "외부사이트" : "바로 진입"}</p>
               </div>
             </a>
           ))}

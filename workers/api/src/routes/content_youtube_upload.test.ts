@@ -106,3 +106,33 @@ describe("claim-upload / result 인증", () => {
     expect(row?.youtube_video_id).toBe("vid123");
   });
 });
+
+describe("claim-upload 리스 회수(stuck 자동복구)", () => {
+  async function insertUploading(id: string, updatedAt: number) {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id, owner_sub, topic, platform, status, youtube_status, created_at, updated_at) VALUES (?, 'u1','t','youtube','review','uploading',1,?)",
+    ).bind(id, updatedAt).run();
+  }
+
+  it("리스 초과로 정체된 uploading 은 requested 로 회수되어 재처리된다", async () => {
+    await insertUploading("j_stale", 1); // 1970 → 리스 한참 초과
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/youtube/claim-upload", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    // 연결이 없으므로 회수→claim→'연결 없음' 실패로 귀결. uploading 에서 벗어난 것 자체가 회수 증거.
+    expect(res.status).toBe(204);
+    const row = await env.DB.prepare("SELECT youtube_status, youtube_error FROM content_jobs WHERE id='j_stale'").first<{ youtube_status: string; youtube_error: string }>();
+    expect(row?.youtube_status).toBe("failed");
+    expect(row?.youtube_error).toBe("연결 없음");
+  });
+
+  it("리스 이내의 uploading 은 회수하지 않는다", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    await insertUploading("j_fresh", now); // 방금 claim → 리스 이내
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/youtube/claim-upload", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(204);
+    const row = await env.DB.prepare("SELECT youtube_status FROM content_jobs WHERE id='j_fresh'").first<{ youtube_status: string }>();
+    expect(row?.youtube_status).toBe("uploading"); // 그대로 유지
+  });
+});
