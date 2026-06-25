@@ -13,7 +13,9 @@ from PIL import Image
 from popory_content.generate import generate, GenerateError
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
 from popory_content.video import make_video, VideoError
-from popory_content.youtube_upload import upload
+from popory_content.subtitles import to_srt
+from popory_content.translate import translate_lines
+from popory_content.youtube_upload import upload, upload_caption, UploadError
 from popory_content.options import parse_options, parse_shorts_options, SCENE_COUNT, SHORT_SCENE_COUNT, VOICE, STYLE
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
@@ -26,6 +28,7 @@ from popory_content.facebook_upload import upload_reels as fb_upload_reels
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
+SUB_LANGS = ("ko", "en", "zh", "ja")
 
 
 def _generate_carousel(*, topic: str, sources: list, style_samples: list, job_id: str, slide_count: int):
@@ -60,6 +63,7 @@ def run_once(client) -> bool:
                 voice=VOICE[opts["voice"]],
             )
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
+            _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
             _finalize_video(client, job_id, script, meta, img_missing, img_total)
         elif platform == "shorts":
@@ -75,6 +79,7 @@ def run_once(client) -> bool:
                 user_msg_builder=build_shorts_user_message,
             )
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
+            _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
             _finalize_video(client, job_id, script, meta, img_missing, img_total)
         elif platform == "instagram-image":
@@ -241,6 +246,43 @@ def _finalize_video(client, job_id, script, meta, img_missing, img_total):
         _report(client, job_id, {"status": "review", "draft": script, "meta": meta}, "review")
 
 
+def _store_subtitles(client, job_id: str, cues: list) -> None:
+    """KO cue를 EN/ZH/JA로 번역해 4개 .srt를 R2에 저장. 실패는 경고만(영상 정상)."""
+    if not cues:
+        return
+    ko_lines = [text for _, _, text in cues]
+    by_lang: dict[str, list[str]] = {"ko": ko_lines}
+    try:
+        tr = translate_lines(ko_lines, job_id=job_id)
+    except Exception as e:  # noqa: BLE001
+        tr = None
+        append_log(LOGS_DIR, {"worker": "content", "status": "subs_translate_failed", "job": job_id, "error": str(e)[:200]})
+    if tr:
+        by_lang.update(tr)
+    for lang, lines in by_lang.items():
+        srt = to_srt([(st, en, lines[i]) for i, (st, en, _) in enumerate(cues)])
+        try:
+            client.put_binary(f"/api/content/jobs/{job_id}/subtitle/{lang}",
+                              data=srt.encode("utf-8"), content_type="text/plain; charset=utf-8")
+        except Exception as e:  # noqa: BLE001
+            append_log(LOGS_DIR, {"worker": "content", "status": "subs_store_failed", "job": job_id, "lang": lang, "error": str(e)[:200]})
+
+
+def _upload_captions(client, access_token: str, job_id: str, video_id: str) -> None:
+    """저장된 .srt를 유튜브 caption 트랙으로 업로드. lang별 실패는 경고만(영상 정상)."""
+    for lang in SUB_LANGS:
+        try:
+            srt = client.get_bytes(f"/api/content/jobs/{job_id}/subtitle/{lang}")
+        except Exception:  # noqa: BLE001 — 없으면 건너뜀
+            continue
+        if not srt:
+            continue
+        try:
+            upload_caption(access_token, video_id, lang, f"popory {lang}", srt)
+        except Exception as e:  # noqa: BLE001
+            append_log(LOGS_DIR, {"worker": "content", "status": "caption_failed", "job": job_id, "lang": lang, "error": str(e)[:200]})
+
+
 def _issue_media_token(client, r2_key: str) -> str:
     """R2 키에 대한 임시 공개 URL 발급."""
     data = client.post("/api/content/media-token", json={"r2_key": r2_key})
@@ -272,6 +314,7 @@ def run_upload_once(client) -> bool:
     try:
         mp4 = client.get_bytes(f"/api/content/jobs/{job_id}/video")
         video_id = upload(data["access_token"], mp4, data.get("title", "popory 영상"), data.get("description", ""), data.get("tags", []), privacy=data.get("privacy", "public"))
+        _upload_captions(client, data["access_token"], job_id, video_id)
         client.patch(f"/api/content/jobs/{job_id}/youtube-result", json={"status": "done", "video_id": video_id})
         append_log(LOGS_DIR, {"worker": "content", "status": "uploaded", "job": job_id, "video": video_id})
     except Exception as e:  # noqa: BLE001 — 업로드 실패는 result 에 기록하고 계속
