@@ -1,7 +1,9 @@
 # YouTube Data API resumable 업로드(access_token + MP4 바이트 → video id). 영상은 비공개.
+import json
 import requests
 
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
+CAPTION_URL = "https://www.googleapis.com/upload/youtube/v3/captions?part=snippet&uploadType=multipart"
 
 
 class UploadError(Exception):
@@ -32,3 +34,27 @@ def upload(access_token: str, mp4_bytes: bytes, title: str, description: str, ta
     if not vid:
         raise UploadError("video id 없음")
     return vid
+
+
+def upload_caption(access_token: str, video_id: str, language: str, name: str, srt_bytes: bytes) -> None:
+    """captions.insert(multipart/related)로 자막 트랙 1개 업로드. 실패 시 UploadError."""
+    meta = {"snippet": {"videoId": video_id, "language": language, "name": name, "isDraft": False}}
+    boundary = "popory_caption_boundary"
+    body = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        f"{json.dumps(meta)}\r\n"
+        f"--{boundary}\r\n"
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode("utf-8") + srt_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    resp = requests.post(
+        CAPTION_URL,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": f"multipart/related; boundary={boundary}",
+        },
+        data=body,
+        timeout=60,
+    )
+    if resp.status_code not in (200, 201):
+        raise UploadError(f"caption {resp.status_code}: {resp.text[:200]}")
