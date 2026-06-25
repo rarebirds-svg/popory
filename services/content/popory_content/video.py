@@ -12,6 +12,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from popory_content.generate import run_claude_cli
+from popory_content.subtitles import scene_offsets, to_srt, Cue
 from popory_content.tts import synthesize
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
 from popory_content.video_contract import parse_video
@@ -121,6 +122,7 @@ def _split_sentences(text: str) -> list[str]:
 
 # 문장별 TTS 클립 사이에 넣는 짧은 호흡(무음) 길이(초). 자막 타이밍이 이 값을 그대로 반영한다.
 SENTENCE_GAP = 0.35
+XFADE_TD = 0.4  # 장면 크로스페이드 전이 길이(초). _xfade_graph·자막 오프셋이 공유.
 
 
 def _spans_from_durations(durs: list[float], gap: float = SENTENCE_GAP) -> list[tuple[float, float]]:
@@ -195,7 +197,7 @@ def _zoompan_filter(dur: float, portrait: bool = False) -> str:
     )
 
 
-def _xfade_graph(durations: list[float], td: float = 0.4) -> tuple[str, str, str]:
+def _xfade_graph(durations: list[float], td: float = XFADE_TD) -> tuple[str, str, str]:
     """클립 길이 배열로 xfade/acrossfade filter_complex 그래프를 만든다.
     반환: (filter_complex 문자열, 최종 비디오 라벨, 최종 오디오 라벨)."""
     if len(durations) <= 1:
@@ -269,13 +271,14 @@ def _deepen_voice(audio: Path) -> Path:
 
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
-                 portrait: bool = False) -> tuple[Path, int, int]:
+                 portrait: bool = False) -> tuple[Path, int, int, list[Cue]]:
     """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → xfade 합산 후 loudnorm 마스터 MP4."""
     if not Path(FONT_PATH).exists():
         raise VideoError(f"한국어 폰트 없음: {FONT_PATH}")
     work = TMP / f"video_{job_id}"
     work.mkdir(parents=True, exist_ok=True)
     clips: list[Path] = []
+    scene_local_cues: list[list[Cue]] = []
     images_missing = 0
     images_total = 0
     for i, scene in enumerate(scenes):
@@ -315,6 +318,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         _render_card(caption, "", base_png, bg_image_bytes=bg_bytes, portrait=portrait)
         # 문장별 자막을 실측 구간에 오버레이(zoompan 위, 줌과 무관하게 고정).
         spans = _spans_from_durations(seg_durs, SENTENCE_GAP)
+        scene_local_cues.append([(st, en, sentences[k]) for k, (st, en) in enumerate(spans)])
         inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio)]
         graph = f"[0:v]{_zoompan_filter(dur, portrait)}[v0]"
         prev = "v0"
@@ -335,12 +339,12 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         ])
         clips.append(clip)
 
+    clip_durations = [_duration(c) for c in clips]
     joined = work / "joined.mp4"
     if len(clips) == 1:
         shutil.copy(clips[0], joined)
     else:
-        durations = [_duration(c) for c in clips]
-        graph, vlabel, alabel = _xfade_graph(durations)
+        graph, vlabel, alabel = _xfade_graph(clip_durations)
         cmd = [FFMPEG_BIN, "-y"]
         for c in clips:
             cmd += ["-i", str(c)]
@@ -352,7 +356,12 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         _run(cmd)
     out = work / "out.mp4"
     _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id))
-    return out, images_missing, images_total
+    offsets = scene_offsets(clip_durations, XFADE_TD)
+    cues: list[Cue] = []
+    for off, local in zip(offsets, scene_local_cues):
+        for st, en, text in local:
+            cues.append((off + st, off + en, text))
+    return out, images_missing, images_total, cues
 
 
 def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
@@ -360,9 +369,9 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
                image_style_kw: str = "photorealistic, cinematic",
                voice: str = "ko-KR-Chirp3-HD-Aoede",
                portrait: bool = False,
-               system_prompt_builder=None, user_msg_builder=None) -> tuple[Path, list[dict[str, Any]], dict[str, Any], int, int]:
+               system_prompt_builder=None, user_msg_builder=None) -> tuple[Path, list[dict[str, Any]], dict[str, Any], int, int, list[Cue]]:
     scenes, meta = generate_scenes(topic=topic, sources=sources, style_samples=style_samples,
                                    job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw,
                                    system_prompt_builder=system_prompt_builder, user_msg_builder=user_msg_builder)
-    mp4, img_missing, img_total = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice, portrait=portrait)
-    return mp4, scenes, meta, img_missing, img_total
+    mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice, portrait=portrait)
+    return mp4, scenes, meta, img_missing, img_total, cues

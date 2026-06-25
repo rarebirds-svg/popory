@@ -86,7 +86,7 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
 
     def fake_make_video(**kw):
         captured.update(kw)
-        return (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"}, 0, 1)
+        return (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"}, 0, 1, [])
 
     monkeypatch.setattr(worker, "make_video", fake_make_video)
 
@@ -315,7 +315,7 @@ class _Mp4:
 
 def test_youtube_most_images_failed_reports_failed(monkeypatch):
     monkeypatch.setattr(worker, "make_video",
-                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 5, 6))
+                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 5, 6, []))
     client = FakeClient({"job": {"id": "j1", "topic": "t", "platform": "youtube",
                                  "params_json": '{"length":"5","voice":"male","image_style":"photo"}'},
                          "sources": [], "style_samples": []})
@@ -327,7 +327,7 @@ def test_youtube_most_images_failed_reports_failed(monkeypatch):
 
 def test_youtube_half_images_failed_reports_failed(monkeypatch):
     monkeypatch.setattr(worker, "make_video",
-                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 3, 6))
+                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 3, 6, []))
     client = FakeClient({"job": {"id": "j3", "topic": "t", "platform": "youtube",
                                  "params_json": '{"length":"5","voice":"male","image_style":"photo"}'},
                          "sources": [], "style_samples": []})
@@ -338,7 +338,7 @@ def test_youtube_half_images_failed_reports_failed(monkeypatch):
 
 def test_youtube_few_images_failed_reports_review(monkeypatch):
     monkeypatch.setattr(worker, "make_video",
-                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 1, 6))
+                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 1, 6, []))
     client = FakeClient({"job": {"id": "j2", "topic": "t", "platform": "youtube",
                                  "params_json": '{"length":"5","voice":"male","image_style":"photo"}'},
                          "sources": [], "style_samples": []})

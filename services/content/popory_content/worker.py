@@ -52,7 +52,7 @@ def run_once(client) -> bool:
     try:
         if platform == "youtube":
             opts = parse_options(job.get("params_json"))
-            mp4, scenes, meta, img_missing, img_total = make_video(
+            mp4, scenes, meta, img_missing, img_total, cues = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
                 image_fetcher=lambda p: _safe_image(client, p, job_id),
                 scene_count=SCENE_COUNT[opts["length"]],
@@ -64,7 +64,7 @@ def run_once(client) -> bool:
             _finalize_video(client, job_id, script, meta, img_missing, img_total)
         elif platform == "shorts":
             opts = parse_shorts_options(job.get("params_json"))
-            mp4, scenes, meta, img_missing, img_total = make_video(
+            mp4, scenes, meta, img_missing, img_total, cues = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
                 image_fetcher=lambda p: _safe_image(client, p, job_id),
                 scene_count=SHORT_SCENE_COUNT[opts["length"]],
