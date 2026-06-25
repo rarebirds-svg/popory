@@ -174,7 +174,7 @@ def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
         {"caption": "테스트 장면 하나", "narration": "이것은 첫 문장입니다. 두 번째 문장이에요."},
         {"caption": "테스트 장면 둘", "narration": "이것은 다른 장면입니다. 마지막 문장입니다."},
     ]
-    out, _, _ = render_video(scenes, job_id="smoketest")
+    out, _, _, _ = render_video(scenes, job_id="smoketest")
     assert out.exists() and out.stat().st_size > 10000
     # 장면당 클립 1개(문장 분할 안 함): scene_*.mp4 가 정확히 2개
     work = tmp_path / "video_smoketest"
@@ -200,6 +200,22 @@ def test_render_video_counts_missing_images(monkeypatch, tmp_path):
         {"caption": "d", "narration": "n4"},  # image_prompt 없음 → total 미포함
     ]
     fetcher = lambda p: b"IMG" if "ok" in p else None
-    out, missing, total = video.render_video(scenes, job_id="vbtest", image_fetcher=fetcher)
+    out, missing, total, _ = video.render_video(scenes, job_id="vbtest", image_fetcher=fetcher)
     assert total == 3   # image_prompt 있는 장면 수
     assert missing == 2 # 'fail' 2개
+
+
+def test_global_cues_offset_by_scene(monkeypatch):
+    # 장면 2개, 각 1문장. 장면 클립 길이를 고정해 전역 cue 오프셋을 검증.
+    from popory_content import video as V
+
+    monkeypatch.setattr(V, "_duration", lambda p: 5.0)  # 모든 클립 5초로 측정
+    # render 내부의 무거운 ffmpeg/TTS 호출을 우회: 장면-로컬 cue를 직접 합성.
+    local = [[(0.0, 2.0, "첫 문장")], [(0.0, 1.5, "둘째 문장")]]
+    durations = [5.0, 5.0]
+    offsets = V.scene_offsets(durations, V.XFADE_TD)
+    cues = []
+    for off, scene in zip(offsets, local):
+        cues += [(off + st, off + en, t) for (st, en, t) in scene]
+    assert cues[0] == (0.0, 2.0, "첫 문장")
+    assert cues[1] == (4.6, 6.1, "둘째 문장")  # 5.0 - 0.4 = 4.6 오프셋

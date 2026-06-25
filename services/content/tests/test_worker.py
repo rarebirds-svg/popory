@@ -86,7 +86,7 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
 
     def fake_make_video(**kw):
         captured.update(kw)
-        return (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"}, 0, 1)
+        return (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"}, 0, 1, [])
 
     monkeypatch.setattr(worker, "make_video", fake_make_video)
 
@@ -315,7 +315,7 @@ class _Mp4:
 
 def test_youtube_most_images_failed_reports_failed(monkeypatch):
     monkeypatch.setattr(worker, "make_video",
-                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 5, 6))
+                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 5, 6, []))
     client = FakeClient({"job": {"id": "j1", "topic": "t", "platform": "youtube",
                                  "params_json": '{"length":"5","voice":"male","image_style":"photo"}'},
                          "sources": [], "style_samples": []})
@@ -327,7 +327,7 @@ def test_youtube_most_images_failed_reports_failed(monkeypatch):
 
 def test_youtube_half_images_failed_reports_failed(monkeypatch):
     monkeypatch.setattr(worker, "make_video",
-                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 3, 6))
+                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 3, 6, []))
     client = FakeClient({"job": {"id": "j3", "topic": "t", "platform": "youtube",
                                  "params_json": '{"length":"5","voice":"male","image_style":"photo"}'},
                          "sources": [], "style_samples": []})
@@ -338,7 +338,7 @@ def test_youtube_half_images_failed_reports_failed(monkeypatch):
 
 def test_youtube_few_images_failed_reports_review(monkeypatch):
     monkeypatch.setattr(worker, "make_video",
-                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 1, 6))
+                        lambda **kw: (_Mp4(), [{"caption": "c", "narration": "n"}], {"title": "t"}, 1, 6, []))
     client = FakeClient({"job": {"id": "j2", "topic": "t", "platform": "youtube",
                                  "params_json": '{"length":"5","voice":"male","image_style":"photo"}'},
                          "sources": [], "style_samples": []})
@@ -380,3 +380,55 @@ def test_run_cycle_idle_returns_false(monkeypatch):
     monkeypatch.setattr(worker, "run_facebook_upload_once", lambda c: False)
     monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: False)
     assert worker.run_cycle(object()) is False
+
+
+class SubClient:
+    """put_binary/get_bytes를 기록·스텁하는 자막용 페이크."""
+    def __init__(self, srt_by_lang=None):
+        self.put = []  # (path, data)
+        self._srt = srt_by_lang or {}
+
+    def put_binary(self, path, *, data, content_type):
+        self.put.append((path, data))
+        return {"ok": True}
+
+    def get_bytes(self, path):
+        for lang, b in self._srt.items():
+            if path.endswith(f"/subtitle/{lang}"):
+                return b
+        raise RuntimeError("404")
+
+
+def test_store_subtitles_translates_and_stores_four(monkeypatch):
+    monkeypatch.setattr(worker, "translate_lines",
+                        lambda lines, **kw: {"en": ["A", "B"], "zh": ["甲", "乙"], "ja": ["あ", "い"]})
+    client = SubClient()
+    cues = [(0.0, 1.0, "가"), (1.0, 2.0, "나")]
+    worker._store_subtitles(client, "j1", cues)
+    langs = {p.rsplit("/", 1)[1] for p, _ in client.put}
+    assert langs == {"ko", "en", "zh", "ja"}
+    en = next(d for p, d in client.put if p.endswith("/subtitle/en"))
+    assert b"00:00:00,000 --> 00:00:01,000" in en and b"A" in en
+
+
+def test_store_subtitles_translation_failure_keeps_ko(monkeypatch):
+    monkeypatch.setattr(worker, "translate_lines", lambda lines, **kw: None)
+    client = SubClient()
+    worker._store_subtitles(client, "j1", [(0.0, 1.0, "가")])
+    langs = {p.rsplit("/", 1)[1] for p, _ in client.put}
+    assert langs == {"ko"}
+
+
+def test_upload_captions_uploads_present_langs(monkeypatch):
+    sent = []
+    monkeypatch.setattr(worker, "upload_caption",
+                        lambda tok, vid, lang, name, b: sent.append((lang, vid)))
+    client = SubClient(srt_by_lang={"en": b"1\n00:00:00,000 --> 00:00:01,000\nhi\n"})
+    worker._upload_captions(client, "tok", "j1", "vid9")
+    assert sent == [("en", "vid9")]
+
+
+def test_store_subtitles_empty_cues_noop():
+    client = SubClient()
+    worker._store_subtitles(client, "j1", [])
+    assert client.put == []
