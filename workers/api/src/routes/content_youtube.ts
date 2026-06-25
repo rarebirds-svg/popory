@@ -5,7 +5,7 @@ import { requireAuth, type AppVars } from "../middleware/session";
 import type { ServiceVars } from "../middleware/service_auth";
 import { encrypt } from "../lib/secretbox";
 
-const SCOPE = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly";
+const SCOPE = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly";
 const STATE_TTL = 600;
 type Vars = AppVars & ServiceVars;
 
