@@ -51,16 +51,67 @@ export function statusDot(status: string): string {
   return STATUS_DOT[status as JobStatus] ?? "bg-gray-300";
 }
 
-// 여러 작업의 진행을 한 칩으로 요약 — 실패>진행>검토>완료>시작전 우선순위.
-export function rollup(jobs: { status: string }[]): { label: string; tone: Tone } | null {
+// 톤 → 상태 점 색(목록 칩) — 생성·업로드 합산 라벨이 쓰는 점 색.
+export const TONE_DOT: Record<Tone, string> = {
+  muted: "bg-gray-300",
+  yellow: "bg-yellow-400",
+  blue: "bg-blue-400 animate-pulse",
+  purple: "bg-purple-400",
+  green: "bg-green-500",
+  red: "bg-red-500",
+};
+
+// 작업의 업로드 대상 상태. 목록·요약에서 생성 상태와 합산한다.
+export interface JobView {
+  platform: string;
+  status: string;
+  youtube_status?: string | null;
+  instagram_status?: string | null;
+  facebook_status?: string | null;
+}
+
+// 작업의 업로드 대상 상태를 한 단계로 합친다. 업로드 시작 전이면 null(생성 상태로 표시).
+export function uploadStage(j: JobView): "done" | "uploading" | "failed" | null {
+  const rel =
+    j.platform === "instagram-image" ? [j.instagram_status]
+    : j.platform === "youtube" ? [j.youtube_status]
+    : j.platform === "shorts" ? [j.youtube_status, j.instagram_status, j.facebook_status]
+    : [];
+  const vals = rel.filter((s): s is string => !!s);
+  if (vals.length === 0) return null;
+  if (vals.includes("failed")) return "failed";
+  if (vals.some((s) => s === "requested" || s === "uploading")) return "uploading";
+  if (vals.every((s) => s === "done")) return "done";
+  return null;
+}
+
+// 목록 칩 하나의 라벨·톤·점 색 — 생성 상태와 업로드 상태를 합쳐 결정. 업로드 완료면 '업로드 완료'.
+export function jobChip(j: JobView): { label: string; tone: Tone; dot: string } {
+  const up = uploadStage(j);
+  let label: string;
+  let tone: Tone;
+  if (up === "done") { label = "업로드 완료"; tone = "green"; }
+  else if (up === "uploading") { label = "업로드 중…"; tone = "blue"; }
+  else if (up === "failed") { label = "업로드 실패"; tone = "red"; }
+  else { label = statusLabel(j.status); tone = STATUS_TONE[j.status as JobStatus] ?? "muted"; }
+  return { label, tone, dot: TONE_DOT[tone] };
+}
+
+// 여러 작업의 진행을 한 칩으로 요약 — 실패>생성중>업로드중>검토>완료>시작전 우선순위.
+export function rollup(jobs: JobView[]): { label: string; tone: Tone } | null {
   if (jobs.length === 0) return null;
-  const n = (s: string) => jobs.filter((j) => j.status === s).length;
-  const failed = n("failed");
-  const active = n("queued") + n("running");
-  const review = n("review");
-  const done = n("done");
+  let failed = 0, generating = 0, uploading = 0, review = 0, done = 0;
+  for (const j of jobs) {
+    const up = uploadStage(j);
+    if (j.status === "failed" || up === "failed") failed++;
+    else if (j.status === "queued" || j.status === "running") generating++;
+    else if (up === "uploading") uploading++;
+    else if (up === "done" || j.status === "done") done++;
+    else if (j.status === "review") review++;
+  }
   if (failed) return { label: `실패 ${failed}`, tone: "red" };
-  if (active) return { label: `생성 중 ${active}`, tone: "blue" };
+  if (generating) return { label: `생성 중 ${generating}`, tone: "blue" };
+  if (uploading) return { label: `업로드 중 ${uploading}`, tone: "blue" };
   if (review) return { label: `검토 ${review}`, tone: "purple" };
   if (done && done === jobs.length) return { label: "전체 완료", tone: "green" };
   if (done) return { label: `완료 ${done}/${jobs.length}`, tone: "green" };

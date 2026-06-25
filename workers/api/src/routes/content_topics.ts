@@ -74,8 +74,8 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     ).bind(u.sub).all<{ id: string; topic: string; created_at: number }>();
     const enriched = await Promise.all(topics.map(async (t) => {
       const { results: jobs } = await c.env.DB.prepare(
-        "SELECT id, platform, status FROM content_jobs WHERE topic_id=? ORDER BY created_at",
-      ).bind(t.id).all<{ id: string; platform: string; status: string }>();
+        "SELECT id, platform, status, youtube_status, instagram_status, facebook_status FROM content_jobs WHERE topic_id=? ORDER BY created_at",
+      ).bind(t.id).all<{ id: string; platform: string; status: string; youtube_status: string | null; instagram_status: string | null; facebook_status: string | null }>();
       return { ...t, jobs };
     }));
     return c.json({ topics: enriched });

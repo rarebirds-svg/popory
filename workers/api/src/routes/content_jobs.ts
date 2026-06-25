@@ -54,7 +54,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
     const { results } = await c.env.DB.prepare(
-      `SELECT id, topic, platform, status, created_at, updated_at FROM content_jobs
+      `SELECT id, topic, platform, status, youtube_status, instagram_status, facebook_status, created_at, updated_at FROM content_jobs
        WHERE owner_sub=? AND topic_id IS NULL ORDER BY created_at DESC LIMIT 100`,
     ).bind(u.sub).all();
     return c.json({ jobs: results });

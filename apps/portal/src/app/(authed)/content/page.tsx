@@ -8,15 +8,15 @@ import { API_BASE } from "@/lib/env";
 import { RecommendationActions } from "./RecommendationActions";
 import { BulkAddRecommendations } from "./BulkAddRecommendations";
 import { DeleteButton } from "./DeleteButton";
-import { TONE_CLASS, statusLabel, statusDot, rollup } from "@/lib/content-status";
+import { TONE_CLASS, jobChip, rollup } from "@/lib/content-status";
 import { relativeTime } from "@/lib/relative-time";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
-interface JobSlot { id: string; platform: string; status: string; }
+interface JobSlot { id: string; platform: string; status: string; youtube_status: string | null; instagram_status: string | null; facebook_status: string | null; }
 interface TopicRow { id: string; topic: string; created_at: number; jobs: JobSlot[]; }
-interface LegacyJob { id: string; topic: string; platform: string; status: string; created_at: number; }
+interface LegacyJob { id: string; topic: string; platform: string; status: string; created_at: number; youtube_status: string | null; instagram_status: string | null; facebook_status: string | null; }
 interface Recommendation { id: string; title: string; author: string | null; recommender: string; note: string | null; }
 
 const PLATFORM_SHORT: Record<string, string> = {
@@ -99,16 +99,19 @@ export default async function ContentPage() {
                       )}
                     </div>
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {t.jobs.map((j) => (
-                        <span
-                          key={j.id}
-                          className="flex items-center gap-1 rounded-full border border-popory-border px-2 py-0.5 text-xs text-popory-muted"
-                        >
-                          <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(j.status)}`} />
-                          {PLATFORM_SHORT[j.platform] ?? j.platform}
-                          <span className="text-popory-fg2">· {statusLabel(j.status)}</span>
-                        </span>
-                      ))}
+                      {t.jobs.map((j) => {
+                        const chip = jobChip(j);
+                        return (
+                          <span
+                            key={j.id}
+                            className="flex items-center gap-1 rounded-full border border-popory-border px-2 py-0.5 text-xs text-popory-muted"
+                          >
+                            <span className={`inline-block h-1.5 w-1.5 rounded-full ${chip.dot}`} />
+                            {PLATFORM_SHORT[j.platform] ?? j.platform}
+                            <span className="text-popory-fg2">· {chip.label}</span>
+                          </span>
+                        );
+                      })}
                     </div>
                   </Link>
                   <DeleteButton path={`/api/content/topics/${t.id}`}
@@ -123,20 +126,23 @@ export default async function ContentPage() {
           <details className="mt-8">
             <summary className="cursor-pointer text-xs text-popory-muted">이전 작업 ({legacyJobs.length}개)</summary>
             <ul className="mt-2 divide-y divide-popory-border">
-              {legacyJobs.map((j) => (
-                <li key={j.id} className="flex items-center gap-3 py-3">
-                  <Link href={`/content/${j.id}`} className="flex min-w-0 flex-1 items-center gap-3 hover:opacity-80">
-                    <span className="flex-1 truncate text-sm text-popory-fg">{j.topic}</span>
-                    <span className="shrink-0 text-xs text-popory-muted">{relativeTime(j.created_at)}</span>
-                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(j.status)}`} />
-                    <span className="shrink-0 text-xs text-popory-muted">
-                      {PLATFORM_SHORT[j.platform] ?? j.platform} · {statusLabel(j.status)}
-                    </span>
-                  </Link>
-                  <DeleteButton path={`/api/content/jobs/${j.id}`}
-                    confirmText={`"${j.topic}" 콘텐츠를 삭제할까요? 되돌릴 수 없습니다.`} />
-                </li>
-              ))}
+              {legacyJobs.map((j) => {
+                const chip = jobChip(j);
+                return (
+                  <li key={j.id} className="flex items-center gap-3 py-3">
+                    <Link href={`/content/${j.id}`} className="flex min-w-0 flex-1 items-center gap-3 hover:opacity-80">
+                      <span className="flex-1 truncate text-sm text-popory-fg">{j.topic}</span>
+                      <span className="shrink-0 text-xs text-popory-muted">{relativeTime(j.created_at)}</span>
+                      <span className={`inline-block h-1.5 w-1.5 rounded-full ${chip.dot}`} />
+                      <span className="shrink-0 text-xs text-popory-muted">
+                        {PLATFORM_SHORT[j.platform] ?? j.platform} · {chip.label}
+                      </span>
+                    </Link>
+                    <DeleteButton path={`/api/content/jobs/${j.id}`}
+                      confirmText={`"${j.topic}" 콘텐츠를 삭제할까요? 되돌릴 수 없습니다.`} />
+                  </li>
+                );
+              })}
             </ul>
           </details>
         )}
