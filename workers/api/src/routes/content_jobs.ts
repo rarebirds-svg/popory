@@ -231,6 +231,32 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     return new Response(obj.body, { headers: { "content-type": "video/mp4" } });
   });
 
+  const SUB_LANGS = new Set(["ko", "en", "zh", "ja"]);
+
+  app.put("/api/content/jobs/:id/subtitle/:lang", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const id = c.req.param("id");
+    const lang = c.req.param("lang");
+    if (!SUB_LANGS.has(lang)) return c.text("bad lang", 400);
+    const row = await c.env.DB.prepare("SELECT id FROM content_jobs WHERE id=?").bind(id).first<{ id: string }>();
+    if (!row) return c.text("not found", 404);
+    const body = await c.req.arrayBuffer();
+    await c.env.R2.put(`content/subs/${id}/${lang}.srt`, body, { httpMetadata: { contentType: "text/plain; charset=utf-8" } });
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/content/jobs/:id/subtitle/:lang", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const id = c.req.param("id");
+    const lang = c.req.param("lang");
+    if (!SUB_LANGS.has(lang)) return c.text("bad lang", 400);
+    const obj = await c.env.R2.get(`content/subs/${id}/${lang}.srt`);
+    if (!obj) return c.text("not found", 404);
+    return new Response(obj.body, { headers: { "content-type": "text/plain; charset=utf-8" } });
+  });
+
   app.put("/api/content/jobs/:id/carousel", requireService, async (c) => {
     const svc = c.get("service")!;
     if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);

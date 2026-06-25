@@ -416,6 +416,41 @@ describe("POST /api/content/jobs/:id/regenerate", () => {
   });
 });
 
+describe("자막 저장·조회", () => {
+  it("워커가 .srt를 저장하고 다시 읽는다", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platform: "youtube" }),
+    });
+    const { id } = await create.json<{ id: string }>();
+    const token = await workerToken();
+    const put = await SELF.fetch(`https://example.com/api/content/jobs/${id}/subtitle/en`, {
+      method: "PUT", headers: { authorization: `Bearer ${token}` }, body: "1\n00:00:00,000 --> 00:00:01,000\nhi\n",
+    });
+    expect(put.status).toBe(200);
+    const get = await SELF.fetch(`https://example.com/api/content/jobs/${id}/subtitle/en`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(get.status).toBe(200);
+    expect(await get.text()).toContain("00:00:00,000");
+  });
+
+  it("허용 안 된 언어는 400", async () => {
+    const ck = await userCookie();
+    const create = await SELF.fetch("https://example.com/api/content/jobs", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platform: "youtube" }),
+    });
+    const { id } = await create.json<{ id: string }>();
+    const token = await workerToken();
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/subtitle/fr`, {
+      method: "PUT", headers: { authorization: `Bearer ${token}` }, body: "x",
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("DELETE /api/content/jobs/:id", () => {
   it("본인 작업과 소스를 함께 삭제한다", async () => {
     const ck = await userCookie();
