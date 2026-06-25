@@ -15,7 +15,7 @@ from popory_content.video_prompt import build_shorts_system_prompt, build_shorts
 from popory_content.video import make_video, VideoError
 from popory_content.subtitles import to_srt
 from popory_content.translate import translate_lines
-from popory_content.youtube_upload import upload, upload_caption, UploadError
+from popory_content.youtube_upload import upload, upload_caption
 from popory_content.options import parse_options, parse_shorts_options, SCENE_COUNT, SHORT_SCENE_COUNT, VOICE, STYLE
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError

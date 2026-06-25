@@ -12,7 +12,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from popory_content.generate import run_claude_cli
-from popory_content.subtitles import scene_offsets, to_srt, Cue
+from popory_content.subtitles import scene_offsets, Cue
 from popory_content.tts import synthesize
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
 from popory_content.video_contract import parse_video
