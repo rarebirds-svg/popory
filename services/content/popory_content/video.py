@@ -114,6 +114,19 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
     img.save(out_png)
 
 
+def _render_headline_png(title: str, out_png: Path, portrait: bool = False) -> None:
+    """헤드라인 캡션을 투명 PNG로 렌더(zoompan 위에 좌상단 고정 오버레이용 — 줌에 끌려다니지 않게)."""
+    w = PORTRAIT_W if portrait else LANDSCAPE_W
+    h = PORTRAIT_H if portrait else LANDSCAPE_H
+    title_font = ImageFont.truetype(FONT_PATH, 48 if portrait else 56)
+    title_wrap = 16 if portrait else 22
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    t = "\n".join(textwrap.wrap(title, width=title_wrap)) or " "
+    d.multiline_text((80, 70), t, font=title_font, fill=HEAD_COLOR, anchor="la", align="left", spacing=10)
+    img.save(out_png)
+
+
 def _split_sentences(text: str) -> list[str]:
     """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음)."""
     parts = re.split(r"(?<=[.?!])\s*", text.strip())
@@ -315,19 +328,24 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         _concat_audio_with_gaps(seg_audios, SENTENCE_GAP, audio)
         dur = _duration(audio)
         base_png = work / f"{i}.png"
-        _render_card(caption, "", base_png, bg_image_bytes=bg_bytes, portrait=portrait)
-        # 문장별 자막을 실측 구간에 오버레이(zoompan 위, 줌과 무관하게 고정).
+        _render_card("", "", base_png, bg_image_bytes=bg_bytes, portrait=portrait)
+        head_png = work / f"head_{i}.png"
+        _render_headline_png(caption, head_png, portrait=portrait)
+        # 헤드라인·문장 자막을 zoompan 위에 오버레이(줌과 무관하게 고정).
         spans = _spans_from_durations(seg_durs, SENTENCE_GAP)
         scene_local_cues.append([(st, en, sentences[k]) for k, (st, en) in enumerate(spans)])
-        inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio)]
+        # 입력: 0=배경, 1=오디오, 2=헤드라인, 3+=문장 자막.
+        inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio), "-loop", "1", "-i", str(head_png)]
         graph = f"[0:v]{_zoompan_filter(dur, portrait)}[v0]"
-        prev = "v0"
+        # 헤드라인은 장면 내내 좌상단 고정(줌에 끌려다니지 않음).
+        graph += ";[v0][2:v]overlay=0:0[vh]"
+        prev = "vh"
         for k, (st, en) in enumerate(spans):
             sub_png = work / f"sub_{i}_{k}.png"
             _render_subtitle_png(sentences[k], sub_png, portrait=portrait)
             inputs += ["-loop", "1", "-i", str(sub_png)]
             out = f"v{k + 1}"
-            graph += f";[{prev}][{k + 2}:v]overlay=0:0:enable='between(t,{st:.3f},{en:.3f})'[{out}]"
+            graph += f";[{prev}][{k + 3}:v]overlay=0:0:enable='between(t,{st:.3f},{en:.3f})'[{out}]"
             prev = out
         clip = work / f"scene_{i}.mp4"
         _run([

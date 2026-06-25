@@ -189,6 +189,7 @@ def test_render_video_counts_missing_images(monkeypatch, tmp_path):
     monkeypatch.setattr(video, "_run", lambda cmd: None)
     monkeypatch.setattr(video, "_duration", lambda path: 1.0)
     monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_render_headline_png", lambda *a, **k: None)
     monkeypatch.setattr(video, "_render_subtitle_png", lambda *a, **k: None)
     monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm: None)
     monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
