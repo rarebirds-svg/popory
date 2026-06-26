@@ -64,7 +64,7 @@ _NUM_TOKEN = re.compile(r"\d+(?:[.:/]\d+)*")
 # 콤마 뒤 호흡(무음) 길이(ms). Chirp3-HD가 콤마를 너무 급히 넘어가 SSML <break>로 강제한다.
 # <break>는 실제 무음 삽입이라 과거 [pause] 마크업의 "어/으/응" 추임새 부작용이 없다.
 # POPORY_TTS_COMMA_BREAK_MS로 튜닝(0이면 비활성).
-COMMA_BREAK_MS = int(os.environ.get("POPORY_TTS_COMMA_BREAK_MS", "350"))
+COMMA_BREAK_MS = int(os.environ.get("POPORY_TTS_COMMA_BREAK_MS", "175"))
 _COMMA = re.compile(r",\s*")
 
 
@@ -111,7 +111,7 @@ def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
             json={
                 "input": {"ssml": _to_ssml(_prep_text(text))},
                 "voice": {"languageCode": LANGUAGE, "name": voice},
-                "audioConfig": {"audioEncoding": "MP3", "speakingRate": 0.96},
+                "audioConfig": {"audioEncoding": "MP3", "speakingRate": 1.06},
             },
             timeout=30,
         )

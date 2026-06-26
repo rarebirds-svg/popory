@@ -220,14 +220,14 @@ def test_to_ssml_inserts_break_after_comma():
     # 콤마 뒤 호흡(<break>) 강제 — Chirp3-HD가 콤마를 급히 넘어가는 문제 보정
     out = _to_ssml("사과, 배, 감을 샀다.")
     assert out.count("<break") == 2
-    assert '<break time="350ms"/>' in out
+    assert '<break time="175ms"/>' in out
     assert "사과,<break" in out  # 콤마는 보존하고 그 뒤에 무음 삽입
 
 
 def test_to_ssml_break_and_cardinal_coexist():
     from popory_content.tts import _to_ssml
     out = _to_ssml("16년, 그리고 17년.")
-    assert '<say-as interpret-as="cardinal">16</say-as>년,<break time="350ms"/>' in out
+    assert '<say-as interpret-as="cardinal">16</say-as>년,<break time="175ms"/>' in out
     assert '<say-as interpret-as="cardinal">17</say-as>년.' in out
 
 
@@ -252,5 +252,5 @@ def test_synthesize_uses_ssml_and_rate(monkeypatch):
     assert ssml and ssml.startswith("<speak>")
     assert '<say-as interpret-as="cardinal">16</say-as>' in ssml  # 숫자 카디널 강제
     assert "markup" not in payload["input"]
-    assert payload["audioConfig"]["speakingRate"] == 0.96
+    assert payload["audioConfig"]["speakingRate"] == 1.06
     assert payload["voice"]["name"] == "ko-KR-Chirp3-HD-Aoede"
