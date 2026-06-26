@@ -36,27 +36,32 @@ class GenerateError(Exception):
 
 
 def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], T],
-                   job_id: str = "adhoc", model: str = DEFAULT_MODEL) -> T:
-    """claude CLI 호출 → parse(stdout). 타임아웃·비제로종료·파싱실패에 1회 재시도."""
+                   job_id: str = "adhoc", model: str = DEFAULT_MODEL,
+                   timeout_seconds: int | None = None, max_attempts: int | None = None,
+                   allowed_tools: tuple[str, ...] = ("WebSearch", "WebFetch")) -> T:
+    """claude CLI 호출 → parse(stdout). 타임아웃·비제로종료·파싱실패에 재시도.
+    경량 호출(번역 등)은 timeout_seconds·max_attempts·allowed_tools를 줄여 워커를 오래 막지 않게 한다.
+    None이면 모듈 기본값(TIMEOUT_SECONDS·MAX_ATTEMPTS)을 호출 시점에 읽는다(런타임 변경 반영)."""
+    timeout_seconds = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    max_attempts = MAX_ATTEMPTS if max_attempts is None else max_attempts
     if not Path(CLAUDE_BIN).exists():
         raise GenerateError(f"claude CLI not found at {CLAUDE_BIN}")
     sys_path = Path(f"/tmp/content_system_{job_id}.txt")
     sys_path.write_text(system_prompt, encoding="utf-8")
-    cmd = [
-        CLAUDE_BIN, "--print", "--model", model,
-        "--allowed-tools", "WebSearch", "WebFetch",
-        "--system-prompt-file", str(sys_path), "--output-format", "text",
-    ]
+    cmd = [CLAUDE_BIN, "--print", "--model", model]
+    if allowed_tools:
+        cmd += ["--allowed-tools", *allowed_tools]
+    cmd += ["--system-prompt-file", str(sys_path), "--output-format", "text"]
     try:
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            last = attempt == MAX_ATTEMPTS
+        for attempt in range(1, max_attempts + 1):
+            last = attempt == max_attempts
             try:
-                result = subprocess.run(cmd, input=user_msg, capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
+                result = subprocess.run(cmd, input=user_msg, capture_output=True, text=True, timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
                 if not last:
-                    wait = _retry_backoff(attempt); _log_retry(attempt, wait, f"timeout {TIMEOUT_SECONDS}s")
+                    wait = _retry_backoff(attempt); _log_retry(attempt, wait, f"timeout {timeout_seconds}s")
                     time.sleep(wait); continue
-                raise GenerateError(f"claude CLI timeout after {TIMEOUT_SECONDS}s (시도 {attempt})")
+                raise GenerateError(f"claude CLI timeout after {timeout_seconds}s (시도 {attempt})")
             if result.returncode != 0:
                 tail = ((result.stderr or "")[-300:] + " || stdout: " + (result.stdout or "")[-600:]).strip()
                 if not last:

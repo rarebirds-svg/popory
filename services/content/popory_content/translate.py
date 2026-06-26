@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import json
 import re
+from functools import partial
 from typing import Callable
 
 from popory_content.generate import run_claude_cli, GenerateError
 
 LANGS = ("en", "zh", "ja")
+
+# 자막 번역은 실패해도 무방한 부가 단계 — 본문 생성용 무거운 설정(20분·4회·도구) 대신
+# 짧은 타임아웃·단일 시도·도구 비활성으로 워커를 오래 막지 않게 한다.
+_TRANSLATE_RUNNER = partial(run_claude_cli, timeout_seconds=120, max_attempts=1, allowed_tools=())
 
 _SYSTEM = (
     "당신은 자막 번역가입니다. 한국어 문장 목록을 받아 각 언어로 번역합니다. "
@@ -36,7 +41,7 @@ def _build_parse(n: int, langs) -> Callable[[str], dict[str, list[str]]]:
 
 
 def translate_lines(ko_lines: list[str], langs=LANGS, *, job_id: str = "adhoc",
-                    runner=run_claude_cli) -> dict[str, list[str]] | None:
+                    runner=_TRANSLATE_RUNNER) -> dict[str, list[str]] | None:
     """한국어 문장 배열 → {lang: 번역 배열}. 1:1 정렬을 보장 못 하면 None."""
     if not ko_lines:
         return {lang: [] for lang in langs}
