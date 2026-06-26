@@ -1,7 +1,15 @@
 # 워커 하트비트 페이로드·리셋일 로직·실패 내성 단위 테스트.
 import datetime
 
+import pytest
+
 from popory_content import worker
+
+
+@pytest.fixture(autouse=True)
+def _isolate_logs(tmp_path, monkeypatch):
+    """테스트의 heartbeat 실패 로깅이 실제 services/content/logs/ 를 오염시키지 않도록 격리."""
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path / "logs")
 
 
 def test_heartbeat_payload_keys(monkeypatch):
