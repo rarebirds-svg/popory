@@ -66,6 +66,8 @@ _NUM_TOKEN = re.compile(r"\d+(?:[.:/]\d+)*")
 # POPORY_TTS_COMMA_BREAK_MS로 튜닝(0이면 비활성).
 COMMA_BREAK_MS = int(os.environ.get("POPORY_TTS_COMMA_BREAK_MS", "175"))
 _COMMA = re.compile(r",\s*")
+# 콤마 직전 나열 항목(공백·콤마 아닌 연속 글자) + 콤마 + 뒤 공백.
+_COMMA_ITEM = re.compile(r"([^\s,]*),[ \t]*")
 
 
 _SINO_DIGITS = "영일이삼사오육칠팔구"
@@ -144,9 +146,17 @@ def _to_ssml(text: str) -> str:
     esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     esc = _NUM_TOKEN.sub(_read_number, esc)
     if COMMA_BREAK_MS > 0:
-        # 콤마는 보존하고 그 뒤에 무음을 넣어 한 박자 호흡하게 한다.
-        esc = _COMMA.sub(f',<break time="{COMMA_BREAK_MS}ms"/> ', esc)
+        esc = _COMMA_ITEM.sub(_comma_break, esc)
     return f"<speak>{esc}</speak>"
+
+
+def _comma_break(m: "re.Match[str]") -> str:
+    """콤마 뒤에 무음을 넣어 한 박자 호흡. 단, 한 글자 나열 항목(밥, 꽃, 산…)에는
+    break를 넣지 않는다 — 고립된 단음절에 강제 무음이 붙으면 받침이 뭉개진다."""
+    prev = m.group(1)
+    if len(prev) <= 1:
+        return f"{prev}, "
+    return f'{prev},<break time="{COMMA_BREAK_MS}ms"/> '
 
 
 def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:

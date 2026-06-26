@@ -235,13 +235,28 @@ def test_to_ssml_converts_date_components():
     assert "이십일일" in out
 
 
-def test_to_ssml_inserts_break_after_comma():
+def test_to_ssml_inserts_break_after_multisyllable_comma():
     from popory_content.tts import _to_ssml
-    # 콤마 뒤 호흡(<break>) 강제 — Chirp3-HD가 콤마를 급히 넘어가는 문제 보정
-    out = _to_ssml("사과, 배, 감을 샀다.")
+    # 다음절 나열 항목 뒤엔 호흡(<break>) — Chirp3-HD가 콤마를 급히 넘어가는 문제 보정
+    out = _to_ssml("사과, 바나나, 감을 샀다.")
     assert out.count("<break") == 2
-    assert '<break time="175ms"/>' in out
     assert "사과,<break" in out  # 콤마는 보존하고 그 뒤에 무음 삽입
+
+
+def test_to_ssml_skips_break_for_single_syllable_list():
+    from popory_content.tts import _to_ssml
+    # 한 글자 나열(밥, 꽃, 산…)엔 break를 넣지 않는다 — 고립 단음절 받침이 뭉개짐
+    out = _to_ssml("밥, 꽃, 산, 강, 땀.")
+    assert "<break" not in out
+    assert out == "<speak>밥, 꽃, 산, 강, 땀.</speak>"
+
+
+def test_to_ssml_break_only_after_multisyllable_in_mixed_list():
+    from popory_content.tts import _to_ssml
+    # 섞인 나열: 단음절 뒤엔 없음, 다음절 뒤엔 break
+    out = _to_ssml("밥, 사과, 산.")
+    assert "밥, 사과,<break" in out
+    assert out.count("<break") == 1
 
 
 def test_to_ssml_break_and_number_coexist():
