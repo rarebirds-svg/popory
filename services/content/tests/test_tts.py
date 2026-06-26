@@ -171,48 +171,68 @@ def test_prep_text_applies_normalization():
     assert " - " not in out
 
 
-def test_to_ssml_wraps_integer_cardinal():
+def test_sino_korean_readings():
+    from popory_content.tts import _sino_korean
+    assert _sino_korean(0) == "영"
+    assert _sino_korean(1) == "일"
+    assert _sino_korean(16) == "십육"
+    assert _sino_korean(100) == "백"
+    assert _sino_korean(1700) == "천칠백"
+    assert _sino_korean(1976) == "천구백칠십육"
+    assert _sino_korean(2024) == "이천이십사"
+    assert _sino_korean(10000) == "만"          # '일만' → '만'
+    assert _sino_korean(21700) == "이만천칠백"
+
+
+def test_to_ssml_converts_integer_to_hangul():
     from popory_content.tts import _to_ssml
-    # 정수는 카디널(한자어 수사)로 강제 — 16을 "일육"이 아니라 "십육"으로 읽게
+    # 정수를 한자어 수사 평문으로 — 16을 "십육"으로
     out = _to_ssml("16년 전 이야기")
-    assert out == '<speak><say-as interpret-as="cardinal">16</say-as>년 전 이야기</speak>'
+    assert out == "<speak>십육년 전 이야기</speak>"
 
 
-def test_to_ssml_wraps_thousands():
+def test_to_ssml_number_glued_to_hangul_has_no_break():
+    from popory_content.tts import _to_ssml
+    # 숫자+한글이 붙으면 say-as 경계 없이 매끄럽게 — "일차 이차 삼차"
+    out = _to_ssml("1차 2차 3차")
+    assert out == "<speak>일차 이차 삼차</speak>"
+    assert "say-as" not in out and "<break" not in out
+
+
+def test_to_ssml_converts_thousands():
     from popory_content.tts import _to_ssml
     out = _to_ssml("회원이 1700명 늘었다.")
-    assert '<say-as interpret-as="cardinal">1700</say-as>명' in out
+    assert "천칠백명" in out
 
 
-def test_to_ssml_wraps_sentence_final_integer():
+def test_to_ssml_converts_sentence_final_integer():
     from popory_content.tts import _to_ssml
-    # 문장 끝 마침표가 붙은 정수도 카디널로 감싼다(소수점과 구분)
+    # 문장 끝 마침표가 붙은 정수도 변환(소수점과 구분)
     out = _to_ssml("그는 1976.")
-    assert '<say-as interpret-as="cardinal">1976</say-as>.' in out
+    assert "천구백칠십육." in out
 
 
 def test_to_ssml_skips_decimal():
     from popory_content.tts import _to_ssml
-    # 소수는 say-as로 감싸면 깨지므로 모델에 맡긴다(삼점오)
+    # 소수는 변환하지 않고 모델에 맡긴다(삼점오)
     out = _to_ssml("3.5% 상승")
-    assert "say-as" not in out
     assert out == "<speak>3.5% 상승</speak>"
 
 
 def test_to_ssml_skips_time_and_date():
     from popory_content.tts import _to_ssml
-    # 시간(3:00)·날짜(2024/06/21) 형식은 숫자 가드로 건드리지 않는다
-    assert "say-as" not in _to_ssml("오후 3:00에 만난다.")
-    assert "say-as" not in _to_ssml("2024/06/21 발표")
+    # 시간(3:00)·날짜(2024/06/21) 형식은 숫자 가드로 건드리지 않고 원문 유지
+    assert "3:00" in _to_ssml("오후 3:00에 만난다.")
+    assert "2024/06/21" in _to_ssml("2024/06/21 발표")
 
 
-def test_to_ssml_wraps_date_components():
+def test_to_ssml_converts_date_components():
     from popory_content.tts import _to_ssml
-    # 한국식 날짜는 숫자가 단위로 분리돼 각각 카디널로 정상 처리
+    # 한국식 날짜는 숫자가 단위로 분리돼 각각 변환
     out = _to_ssml("2024년 6월 21일")
-    assert '<say-as interpret-as="cardinal">2024</say-as>년' in out
-    assert '<say-as interpret-as="cardinal">6</say-as>월' in out
-    assert '<say-as interpret-as="cardinal">21</say-as>일' in out
+    assert "이천이십사년" in out
+    assert "육월" in out
+    assert "이십일일" in out
 
 
 def test_to_ssml_inserts_break_after_comma():
@@ -224,19 +244,18 @@ def test_to_ssml_inserts_break_after_comma():
     assert "사과,<break" in out  # 콤마는 보존하고 그 뒤에 무음 삽입
 
 
-def test_to_ssml_break_and_cardinal_coexist():
+def test_to_ssml_break_and_number_coexist():
     from popory_content.tts import _to_ssml
     out = _to_ssml("16년, 그리고 17년.")
-    assert '<say-as interpret-as="cardinal">16</say-as>년,<break time="175ms"/>' in out
-    assert '<say-as interpret-as="cardinal">17</say-as>년.' in out
+    assert '십육년,<break time="175ms"/>' in out
+    assert "십칠년." in out
 
 
 def test_to_ssml_escapes_xml():
     from popory_content.tts import _to_ssml
     out = _to_ssml("5 < 10 & 자유")
     assert "&lt;" in out and "&amp;" in out
-    assert '<say-as interpret-as="cardinal">5</say-as>' in out
-    assert '<say-as interpret-as="cardinal">10</say-as>' in out
+    assert "오 " in out and "십 " in out
 
 
 @responses.activate
@@ -250,7 +269,7 @@ def test_synthesize_uses_ssml_and_rate(monkeypatch):
     payload = _json.loads(body if isinstance(body, str) else body.decode())
     ssml = payload["input"].get("ssml")  # markup 아니라 ssml 사용
     assert ssml and ssml.startswith("<speak>")
-    assert '<say-as interpret-as="cardinal">16</say-as>' in ssml  # 숫자 카디널 강제
+    assert "십육" in ssml  # 숫자를 한자어 수사 평문으로 변환
     assert "markup" not in payload["input"]
     assert payload["audioConfig"]["speakingRate"] == 1.06
     assert payload["voice"]["name"] == "ko-KR-Chirp3-HD-Aoede"

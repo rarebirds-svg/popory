@@ -68,11 +68,59 @@ COMMA_BREAK_MS = int(os.environ.get("POPORY_TTS_COMMA_BREAK_MS", "175"))
 _COMMA = re.compile(r",\s*")
 
 
-def _wrap_cardinal(m: "re.Match[str]") -> str:
+_SINO_DIGITS = "영일이삼사오육칠팔구"
+_SINO_SMALL = ["", "십", "백", "천"]      # 4자리 그룹 내 자리 단위
+_SINO_BIG = ["", "만", "억", "조", "경"]   # 4자리 그룹 단위
+
+
+def _sino_4(n: int) -> str:
+    """0~9999 → 한자어 수사. 십·백·천 앞의 '일'은 생략(일십→십)."""
+    out = []
+    for pos in range(3, -1, -1):
+        d = (n // (10 ** pos)) % 10
+        if d == 0:
+            continue
+        if d == 1 and pos >= 1:
+            out.append(_SINO_SMALL[pos])
+        else:
+            out.append(_SINO_DIGITS[d] + _SINO_SMALL[pos])
+    return "".join(out)
+
+
+def _sino_korean(n: int) -> str:
+    """비음수 정수 → 한자어 수사 평문(16→십육, 1700→천칠백). 0은 '영'."""
+    if n == 0:
+        return "영"
+    groups = []
+    i = 0
+    while n > 0:
+        groups.append((n % 10000, i))
+        n //= 10000
+        i += 1
+    parts = []
+    for val, gi in reversed(groups):
+        if val == 0:
+            continue
+        chunk = _sino_4(val)
+        if val == 1 and gi == 1:      # '일만'은 '만'으로 줄인다(억·조 이상은 일 유지)
+            chunk = ""
+        parts.append(chunk + _SINO_BIG[gi])
+    return "".join(parts)
+
+
+def _read_number(m: "re.Match[str]") -> str:
+    """숫자 토큰을 한자어 수사 평문으로 치환. say-as 경계가 없어 뒤 글자와 끊기지 않는다.
+    소수·시간·날짜(. : /)와 변환기 범위 밖은 원문 유지(모델 정규화에 맡김)."""
     tok = m.group()
     if any(c in tok for c in ".:/"):
-        return tok  # 소수·시간·날짜 — 모델 정규화에 맡김
-    return f'<say-as interpret-as="cardinal">{tok}</say-as>'
+        return tok
+    try:
+        n = int(tok)
+    except ValueError:
+        return tok
+    if n >= 10 ** 20:                 # 경 그룹 초과 → 변환 생략
+        return tok
+    return _sino_korean(n)
 
 
 def _prep_text(text: str) -> str:
@@ -90,11 +138,11 @@ def _prep_text(text: str) -> str:
 
 
 def _to_ssml(text: str) -> str:
-    """정리된 텍스트를 SSML로 감싼다. XML 이스케이프 후 순수 정수만
-    <say-as interpret-as="cardinal">로 감싸 카디널(한자어 수사)을 강제한다 —
-    Chirp3-HD가 16을 자리별 "일육"이 아니라 "십육"으로 읽게 한다."""
+    """정리된 텍스트를 SSML로 감싼다. XML 이스케이프 후 순수 정수를 한자어 수사 평문으로
+    바꾼다(16→십육). say-as 태그를 쓰지 않아 "1차"가 "일 (끊김) 차"로 갈라지지 않고
+    "일차"로 매끄럽게 이어진다."""
     esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    esc = _NUM_TOKEN.sub(_wrap_cardinal, esc)
+    esc = _NUM_TOKEN.sub(_read_number, esc)
     if COMMA_BREAK_MS > 0:
         # 콤마는 보존하고 그 뒤에 무음을 넣어 한 박자 호흡하게 한다.
         esc = _COMMA.sub(f',<break time="{COMMA_BREAK_MS}ms"/> ', esc)
