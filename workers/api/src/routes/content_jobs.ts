@@ -13,6 +13,10 @@ function ulid(): string {
 }
 
 const WORKER_AREA = "content-worker";
+// running 리스: 이 시간 넘게 갱신 안 된 running 잡은 워커 중단/재시작으로 고아가 된 것으로 보고
+// claim 시 queued 로 회수한다. 단일 워커라 claim 시점엔 렌더 중이 아니지만, 최장 렌더(16장면 ~60분)를
+// 넘는 90분으로 잡아 정상 진행 중인 잡을 오인 회수하지 않게 한다.
+const RUNNING_LEASE_SECONDS = 90 * 60;
 
 type Vars = AppVars & ServiceVars;
 
@@ -154,6 +158,10 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const svc = c.get("service")!;
     if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
     const now = Math.floor(Date.now() / 1000);
+    // stuck 자동복구: 리스 초과로 running 에 정체된 잡(워커 중단/재시작 추정)을 queued 로 회수.
+    await c.env.DB.prepare(
+      "UPDATE content_jobs SET status='queued' WHERE status='running' AND updated_at < ?",
+    ).bind(now - RUNNING_LEASE_SECONDS).run();
     const candidate = await c.env.DB.prepare(
       "SELECT id FROM content_jobs WHERE status='queued' ORDER BY created_at LIMIT 1",
     ).first<{ id: string }>();

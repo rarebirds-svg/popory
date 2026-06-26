@@ -196,6 +196,33 @@ describe("POST /api/content/jobs/claim", () => {
     const res = await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST" });
     expect(res.status).toBe(401);
   });
+
+  it("리스 초과한 running 고아를 queued 로 회수해 다시 claim 한다", async () => {
+    await userCookie();  // u1 사용자 보장
+    const stale = Math.floor(Date.now() / 1000) - 100 * 60;  // 100분 전(리스 90분 초과)
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id, owner_sub, topic, platform, status, created_at, updated_at) VALUES ('orphan1','u1','t','youtube','running',?,?)",
+    ).bind(stale, stale).run();
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    const body = await res.json<{ job: { id: string; status: string } }>();
+    expect(body.job.id).toBe("orphan1");
+    expect(body.job.status).toBe("running");  // 회수→queued→재claim
+  });
+
+  it("리스 내 running 은 회수하지 않는다", async () => {
+    await userCookie();
+    const recent = Math.floor(Date.now() / 1000) - 5 * 60;  // 5분 전(리스 내)
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id, owner_sub, topic, platform, status, created_at, updated_at) VALUES ('fresh1','u1','t','youtube','running',?,?)",
+    ).bind(recent, recent).run();
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(204);  // 회수 안 됨, queued 없음
+    const row = await env.DB.prepare("SELECT status FROM content_jobs WHERE id='fresh1'").first<{ status: string }>();
+    expect(row?.status).toBe("running");
+  });
 });
 
 describe("PATCH /api/content/jobs/:id/result", () => {
