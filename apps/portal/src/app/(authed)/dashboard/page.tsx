@@ -4,13 +4,13 @@ import { Header, Kicker } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
 
-type AreaCard = { key: string; label: string; href: (apiBase: string) => string; external?: boolean };
+type AreaCard = { key: string; label: string; desc: string; href: (apiBase: string) => string; external?: boolean };
 
 const AREAS: AreaCard[] = [
-  { key: "brief", label: "뉴스 브리핑", href: () => "/p/brief" },
-  { key: "content", label: "컨텐츠 관리", href: () => "/content" },
-  { key: "finance", label: "금융 자산", href: (b) => `${b}/go/finance` },
-  { key: "baduk", label: "잉크바둑", href: () => "https://www.inkbaduk.com", external: true },
+  { key: "brief", label: "뉴스 브리핑", desc: "매일 아침 부동산·법률·시장 등 분야별 뉴스를 요약해 받아봅니다.", href: () => "/p/brief" },
+  { key: "content", label: "컨텐츠 관리", desc: "책·영화 등 카테고리별로 블로그·영상·쇼츠를 만들고 채널에 올립니다.", href: () => "/content" },
+  { key: "finance", label: "금융 자산", desc: "가족의 금융 자산 현황을 한곳에서 확인합니다.", href: (b) => `${b}/go/finance` },
+  { key: "baduk", label: "잉크바둑", desc: "바둑 기보와 학습을 즐기는 잉크바둑 서비스.", href: () => "https://www.inkbaduk.com", external: true },
 ];
 
 export default async function Dashboard() {
@@ -36,7 +36,7 @@ export default async function Dashboard() {
             >
               <div className="h-full rounded-xl border border-popory-border bg-popory-card p-5 transition group-hover:border-popory-accent">
                 <h2 className="text-base font-bold text-popory-fg">{a.label}</h2>
-                <p className="mt-1 text-sm text-popory-muted">{a.external ? "외부사이트" : "바로 진입"}</p>
+                <p className="mt-1 text-sm leading-relaxed text-popory-muted">{a.desc}</p>
               </div>
             </a>
           ))}
