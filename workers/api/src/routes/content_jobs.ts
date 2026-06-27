@@ -1,7 +1,7 @@
 // 컨텐츠 작업 큐 라우트 — 사용자 생성·조회·편집 + 로컬 워커 claim·result.
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { ContentJobCreateSchema, ContentJobEditSchema, ContentJobResultSchema } from "@popory/types";
+import { ContentJobCreateSchema, ContentJobEditSchema, ContentJobResultSchema, JobServiceCreateSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
 import { requireService, type ServiceVars } from "../middleware/service_auth";
 import { verifyAreaToken } from "@popory/auth";
@@ -50,6 +50,25 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
         `INSERT INTO content_sources (id, job_id, kind, url, title, note, added_by, created_at)
          VALUES (?, ?, 'manual', ?, ?, ?, ?, ?)`,
       ).bind(ulid(), id, s.url ?? null, s.title ?? null, s.note ?? null, u.sub, now).run();
+    }
+    return c.json({ id }, 201);
+  });
+
+  app.post("/api/content/jobs/service-create", requireService, async (c) => {
+    const parsed = JobServiceCreateSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.text("bad request", 400);
+    const { owner_sub, topic, platform, options, recommendation_id } = parsed.data;
+    const id = ulid();
+    const now = Math.floor(Date.now() / 1000);
+    const paramsJson = options ? JSON.stringify(options) : null;
+    await c.env.DB.prepare(
+      `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?, ?)`,
+    ).bind(id, owner_sub, topic, platform, paramsJson, now, now).run();
+    if (recommendation_id) {
+      await c.env.DB.prepare(
+        "UPDATE content_recommendations SET status='used', updated_at=? WHERE id=? AND owner_sub=?",
+      ).bind(now, recommendation_id, owner_sub).run();
     }
     return c.json({ id }, 201);
   });

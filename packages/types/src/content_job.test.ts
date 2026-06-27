@@ -1,6 +1,6 @@
 // content_job 스키마의 zod 검증 동작.
 import { describe, it, expect } from "vitest";
-import { ContentJobCreateSchema, ContentJobResultSchema, StyleProfileCreateSchema } from "./content_job";
+import { ContentJobCreateSchema, ContentJobResultSchema, StyleProfileCreateSchema, JobServiceCreateSchema } from "./content_job";
 
 describe("ContentJobCreateSchema", () => {
   it("topic만으로 platform 기본값 적용", () => {
@@ -48,5 +48,18 @@ describe("StyleProfileCreateSchema", () => {
   });
   it("샘플 0개 거부", () => {
     expect(StyleProfileCreateSchema.safeParse({ name: "n", samples: [] }).success).toBe(false);
+  });
+});
+
+describe("JobServiceCreateSchema", () => {
+  it("owner_sub+topic+platform 필수", () => {
+    const v = JobServiceCreateSchema.parse({ owner_sub: "u1", topic: "t", platform: "youtube" });
+    expect(v.platform).toBe("youtube");
+  });
+  it("platform은 youtube/shorts만", () => {
+    expect(JobServiceCreateSchema.safeParse({ owner_sub: "u1", topic: "t", platform: "naver-blog" }).success).toBe(false);
+  });
+  it("owner_sub 없으면 실패", () => {
+    expect(JobServiceCreateSchema.safeParse({ topic: "t", platform: "youtube" }).success).toBe(false);
   });
 });
