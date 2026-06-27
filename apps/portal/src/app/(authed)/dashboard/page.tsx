@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { Header, Kicker } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
+import { TodayLabel } from "./TodayLabel";
 
 type AreaCard = { key: string; label: string; desc: string; href: (apiBase: string) => string; external?: boolean };
 
@@ -16,13 +17,12 @@ const AREAS: AreaCard[] = [
 export default async function Dashboard() {
   const user = await getCurrentUser();
   if (!user) redirect("/");
-  const todayLabel = new Intl.DateTimeFormat("ko-KR", { dateStyle: "full" }).format(new Date());
 
   return (
     <div>
       <Header email={user.email} role={user.role} apiBase={API_BASE} />
       <main className="mx-auto max-w-5xl px-4 py-10">
-        <Kicker>{todayLabel}</Kicker>
+        <Kicker><TodayLabel /></Kicker>
         <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">오늘의 popory</h1>
         <p className="mt-2 text-sm text-popory-muted">가족이 함께 보는 브리핑과 서비스를 한곳에서.</p>
         <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
