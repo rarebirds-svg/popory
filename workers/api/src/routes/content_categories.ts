@@ -29,7 +29,22 @@ export function mountContentCategories(app: Hono<{ Bindings: Env; Variables: Var
               (SELECT COUNT(*) FROM content_jobs j WHERE j.category_id=c.id AND j.status IN ('queued','running')) AS running_count
        FROM content_categories c WHERE c.owner_sub=? ORDER BY c.sort_order, c.created_at`,
     ).bind(u.sub).all();
-    return c.json({ categories: results });
+    // 카테고리에 자체 채널 바인딩(C)이 없으면 계정 단위 연결(youtube/instagram_connections)로 폴백.
+    // 현재는 채널이 계정당 하나라 모든 카테고리가 그 채널에 게시된다.
+    const [yt, ig] = await Promise.all([
+      c.env.DB.prepare("SELECT channel_id, channel_title FROM youtube_connections WHERE sub=?").bind(u.sub).first<{ channel_id: string | null; channel_title: string | null }>(),
+      c.env.DB.prepare("SELECT username FROM instagram_connections WHERE sub=?").bind(u.sub).first<{ username: string | null }>(),
+    ]);
+    const categories = results.map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        ...row,
+        youtube_channel_id: row.youtube_channel_id ?? yt?.channel_id ?? null,
+        youtube_channel_title: row.youtube_channel_title ?? yt?.channel_title ?? null,
+        instagram_username: row.instagram_username ?? ig?.username ?? null,
+      };
+    });
+    return c.json({ categories });
   });
 
   app.post("/api/content/categories", async (c) => {
