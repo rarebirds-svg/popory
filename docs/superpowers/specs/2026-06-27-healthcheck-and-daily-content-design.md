@@ -135,7 +135,7 @@ content-worker (기존, 상주)   ── ③ claim → 생성 → review 회신
 ### 한도·부하 고려
 
 - 매일 영상 1 + 쇼츠 1 = claude CLI 대본 2회 + 영상 조립 2회. 워커 단일 스레드라 직렬 처리(수십 분 가능).
-- **18:00 윈도우 겹침 주의.** 평일 18:00 에 기존 `com.popory.brief-naver-stock-pm`(저녁 브리핑)이 claude CLI 를 쓴다. 콘텐츠 자동 생성도 같은 Claude Max 5시간 롤링 윈도우를 공유하므로 동시 실행 시 한도 경합 가능. 기존 generate.py 한도 재시도/백오프로 흡수하되, 경합이 잦으면 content-daily 를 18:30 등으로 스태거하는 것을 후속 옵션으로 둔다.
+- **18:00 윈도우.** 기존에 18:00 을 쓰던 평일 저녁 브리핑(`com.popory.brief-naver-stock-pm`)은 사용자가 해당 카테고리를 삭제할 예정이라 18:00 시간대는 비게 된다. Claude Max 윈도우 경합 우려 없음.
 - Claude Max 한도에 걸리면 기존 generate.py 재시도/실패 처리에 위임. 실패는 파트 1 점검이 잡는다.
 - recommend 대기열 고갈 시 자동 생성이 멈추는데, 주간 recommend 가 매주 10~15건 보충하므로 평시엔 마르지 않는다. 고갈은 점검에서 warn.
 
