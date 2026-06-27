@@ -10,7 +10,7 @@ from popory_healthcheck.telegram import send_telegram, TelegramError
 
 KST = timezone(timedelta(hours=9))
 PORTAL = "https://poporyfamily.com"
-API = "https://api.poporyfamily.com"
+API = "https://api.poporyfamily.com/health"
 BRIEF = "https://poporyfamily.com/p/brief-realestate/"
 WORKER_LOG_DIR = "/Users/daegong/projects/popory/services/content/logs"
 STATE_FILE = str(Path(__file__).resolve().parent.parent / "state" / "last.json")
