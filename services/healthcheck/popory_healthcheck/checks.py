@@ -1,6 +1,5 @@
 # popory 상태 점검 함수 모음 — 각자 (status, message) 반환, 예외는 fail로 환원.
 import os
-import re
 import subprocess
 import time
 

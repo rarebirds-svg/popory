@@ -74,3 +74,29 @@ def test_content_routine_warn_when_skipped():
 def test_content_routine_warn_when_absent():
     status, _ = checks.check_content_routine('{"cli": "worker", "status": "ok"}')
     assert status == "warn"
+
+
+@responses.activate
+def test_brief_published_ok_when_dotted_date():
+    # 점형 날짜(YYYY.MM.DD) 형식이 페이지에 있을 때 ok 반환 확인.
+    responses.add(responses.GET, "https://x.test/p/brief-realestate/", body="<li>2026.06.27 부동산</li>", status=200)
+    status, _ = checks.check_brief_published("https://x.test/p/brief-realestate/", "2026-06-27")
+    assert status == "ok"
+
+
+@responses.activate
+def test_http_warn_when_slow():
+    # warn_ms=-1 로 설정해 실측 ms가 반드시 초과하도록 유도 — 느림 분기 확인.
+    responses.add(responses.GET, "https://x.test/", status=200)
+    status, _ = checks.check_http("포털", "https://x.test/", warn_ms=-1)
+    assert status == "warn"
+
+
+def test_log_freshness_warn_when_stale(tmp_path):
+    import os, time
+    p = tmp_path / "stale.log"
+    p.write_text("old")
+    old = time.time() - 100000
+    os.utime(str(p), (old, old))
+    status, _ = checks.check_log_freshness(str(p), 600)
+    assert status == "warn"
