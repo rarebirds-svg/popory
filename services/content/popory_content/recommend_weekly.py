@@ -54,6 +54,20 @@ def _parse(output: str) -> list[dict]:
     return items
 
 
+def build_user_msg(known_titles: list[str]) -> str:
+    """기존 제목 목록을 받아 '겹치지 마라' 지시를 담은 user 메시지를 만든다."""
+    base = "투자·자기계발·인문 교양 분야의 새로운 책 또는 주제 후보를 제안하라."
+    if not known_titles:
+        return base
+    listed = ", ".join(known_titles)
+    return (
+        base
+        + " 다음은 이미 다뤘거나 추천 대기 중인 제목이다. 이 목록과 제목·저자·내용이"
+        + " 겹치거나 표기만 다른 같은 책은 절대 제안하지 마라:\n"
+        + listed
+    )
+
+
 def run() -> int:
     try:
         client = _client()
@@ -67,9 +81,14 @@ def run() -> int:
         append_log(LOGS_DIR, {"cli": "recommend_weekly", "status": "no_owner"})
         return 0
 
-    # 기존 목록은 서버가 중복 skip 하므로 빈 user_msg로도 안전. 품질을 위해
-    # owner 컨텍스트를 줄 수 있으나 서비스용 공개 GET이 없으므로 MVP는 일반 지시만.
-    user_msg = "이미 다룬 책은 투자·자기계발·인문 교양 분야가 많다. 새로운 후보를 제안하라."
+    # 기존 제목을 프롬프트에 주입해 claude가 변형 제안 자체를 피하게 한다(서버 정규화
+    # dedup은 마지막 방어선). 조회 실패해도 생성은 진행한다.
+    try:
+        known = client.get(f"/api/content/recommendations/known-titles?owner_sub={owner_sub}").get("titles", [])
+    except PortalError as e:
+        append_log(LOGS_DIR, {"cli": "recommend_weekly", "status": "known_fetch_fail", "error": str(e)})
+        known = []
+    user_msg = build_user_msg(known)
     try:
         items = run_claude_cli(system_prompt=SYSTEM_PROMPT, user_msg=user_msg, parse=_parse, job_id="recommend")
     except GenerateError as e:

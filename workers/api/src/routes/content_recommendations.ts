@@ -29,19 +29,23 @@ function parseLine(line: string): RecommendationItem | null {
   return author ? { title, author } : { title };
 }
 
-// owner의 기존 토픽 제목 + 기존 추천 제목 집합. 중복 판정용.
+// 제목 정규화 키. 저자 제거 → 괄호내용 제거 → NFKC·소문자 → 공백·문장부호 제거.
+// "부의 추월 차선"·"부의 추월차선(MJ 드마코)" 같은 표기 변형을 같은 키로 묶어 근접중복을 잡는다.
+function normTitle(raw: string): string {
+  const parsed = parseLine(raw);
+  const t = parsed ? parsed.title : raw.trim();
+  return t.replace(/\([^)]*\)/g, "").normalize("NFKC").toLowerCase().replace(/[\s\-_:·,.'"!?~]/g, "");
+}
+
+// owner의 기존 토픽·추천 제목의 정규화 키 집합. 중복 판정용.
 async function existingTitles(db: Env["DB"], ownerSub: string): Promise<Set<string>> {
   const [topics, recs] = await Promise.all([
     db.prepare("SELECT topic FROM content_jobs WHERE owner_sub=? UNION SELECT topic FROM content_topics WHERE owner_sub=?").bind(ownerSub, ownerSub).all<{ topic: string }>(),
     db.prepare("SELECT title FROM content_recommendations WHERE owner_sub=?").bind(ownerSub).all<{ title: string }>(),
   ]);
   const set = new Set<string>();
-  // 토픽 문자열은 "제목 - 저자" 형태일 수 있어 추천 제목과 같은 방식으로 정규화한다.
-  for (const r of topics.results) {
-    const parsed = parseLine(r.topic);
-    if (parsed) set.add(parsed.title);
-  }
-  for (const r of recs.results) set.add(r.title.trim());
+  for (const r of topics.results) set.add(normTitle(r.topic));
+  for (const r of recs.results) set.add(normTitle(r.title));
   return set;
 }
 
@@ -52,10 +56,11 @@ async function insertItems(db: Env["DB"], ownerSub: string, items: Recommendatio
   const fresh: RecommendationItem[] = [];
   const skippedTitles: string[] = [];
   for (const it of items) {
-    const key = it.title.trim();
-    if (!key || seen.has(key)) { skippedTitles.push(it.title); continue; }
+    const raw = it.title.trim();
+    const key = normTitle(it.title);
+    if (!raw || !key || seen.has(key)) { skippedTitles.push(it.title); continue; }
     seen.add(key);
-    fresh.push({ ...it, title: key });
+    fresh.push({ ...it, title: raw });
   }
   if (fresh.length > 0) {
     await db.batch(fresh.map((it) =>
@@ -129,6 +134,28 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
        FROM content_recommendations WHERE owner_sub=? AND status='pending' ORDER BY created_at ASC LIMIT ?`,
     ).bind(ownerSub, limit).all();
     return c.json({ recommendations: results });
+  });
+
+  // 추천 생성기(recommend_weekly)가 프롬프트에 주입할 "이미 다룬/대기 중" 제목 목록.
+  // 작업·주제·기존 추천(전 상태)을 합쳐 정규화 키로 중복 제거한 표시용 제목을 반환.
+  app.get("/api/content/recommendations/known-titles", requireService, async (c) => {
+    const ownerSub = c.req.query("owner_sub");
+    if (!ownerSub) return c.text("owner_sub required", 400);
+    const rows = await c.env.DB.prepare(
+      `SELECT topic AS t FROM content_jobs WHERE owner_sub=?
+       UNION SELECT topic FROM content_topics WHERE owner_sub=?
+       UNION SELECT title FROM content_recommendations WHERE owner_sub=?`,
+    ).bind(ownerSub, ownerSub, ownerSub).all<{ t: string }>();
+    const seen = new Set<string>();
+    const titles: string[] = [];
+    for (const r of rows.results) {
+      const key = normTitle(r.t);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const parsed = parseLine(r.t);
+      titles.push(parsed ? parsed.title : r.t.trim());
+    }
+    return c.json({ titles });
   });
 
   app.patch("/api/content/recommendations/:id", async (c) => {
