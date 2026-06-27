@@ -42,6 +42,11 @@ POLL_INTERVAL_SECONDS = 20
 TOKEN_TTL_SECONDS = 300
 
 
+def _is_claude_auth_failure(err: str) -> bool:
+    """claude CLI 인증 만료 신호('Not logged in'). 상주 데몬 키체인 갱신 실패 시 발생."""
+    return "Not logged in" in err or "Please run /login" in err
+
+
 def run_once(client) -> bool:
     """큐에서 한 건 처리. 처리했으면 True, 큐가 비었으면 False."""
     data = client.post("/api/content/jobs/claim", json=None)
@@ -106,7 +111,15 @@ def run_once(client) -> bool:
             draft, meta = generate(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
             _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
     except Exception as e:  # noqa: BLE001 — 생성 실패는 failed 로 회신
-        _report(client, job_id, {"status": "failed", "error": str(e)[:2000]}, "failed")
+        msg = str(e)
+        _report(client, job_id, {"status": "failed", "error": msg[:2000]}, "failed")
+        if _is_claude_auth_failure(msg):
+            # 상주 데몬이 오래 떠 있으면 claude OAuth 토큰 갱신(키체인 재기록)에 실패해
+            # 'Not logged in' 이 난다. 프로세스를 종료하면 launchd KeepAlive 가 새
+            # 프로세스로 재기동해 키체인 접근이 복구된다(자가 치유). 잡은 이미 failed
+            # 회신했으므로 재시도하면 새 워커가 처리한다.
+            append_log(LOGS_DIR, {"worker": "content", "status": "auth_failure_exit", "job": job_id})
+            sys.exit(1)
     return True
 
 

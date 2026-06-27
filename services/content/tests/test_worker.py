@@ -67,6 +67,28 @@ def test_failure_posts_failed(monkeypatch):
     assert "ng" in body["error"]
 
 
+def test_is_claude_auth_failure():
+    assert worker._is_claude_auth_failure("claude CLI exit 1: || stdout: Not logged in · Please run /login") is True
+    assert worker._is_claude_auth_failure("Please run /login") is True
+    assert worker._is_claude_auth_failure("claude CLI timeout after 1200s") is False
+    assert worker._is_claude_auth_failure("ng") is False
+
+
+def test_auth_failure_reports_failed_then_exits(monkeypatch):
+    """claude 인증 실패면 failed 회신 후 sys.exit(1) — launchd KeepAlive 재기동 유도."""
+    def boom(**kw):
+        raise worker.GenerateError("claude CLI exit 1 (시도 4): || stdout: Not logged in · Please run /login")
+    monkeypatch.setattr(worker, "generate", boom)
+    client = FakeClient({"job": {"id": "j3", "topic": "t"}, "sources": [], "style_samples": []})
+    with pytest.raises(SystemExit) as exc:
+        worker.run_once(client)
+    assert exc.value.code == 1
+    # 종료 전에 failed 회신은 반드시 이뤄져야 한다(잡이 running 으로 묶이지 않게).
+    path, body = client.patched[0]
+    assert path == "/api/content/jobs/j3/result"
+    assert body["status"] == "failed"
+
+
 class RaisingPatchClient(FakeClient):
     def patch(self, path, *, json):
         raise worker.PortalError("boom", exit_code=5)
