@@ -1,6 +1,7 @@
 // YouTube 연결 라우트 — connect 리다이렉트·status·disconnect·인증.
 import { env, SELF } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
+import { bindCategoryYoutube } from "./content_youtube";
 import { ensureActiveKey } from "../db/signing_keys";
 import { signSession } from "@popory/auth";
 
@@ -62,6 +63,28 @@ describe("카테고리별 youtube connect/disconnect", () => {
     const cat = await env.DB.prepare("SELECT youtube_channel_title FROM content_categories WHERE id='c1'").first<{ youtube_channel_title: string | null }>();
     expect(cat?.youtube_channel_title).toBeNull();
     const tok = await env.DB.prepare("SELECT category_id FROM category_youtube_tokens WHERE category_id='c1'").first();
+    expect(tok).toBeNull();
+  });
+});
+
+describe("bindCategoryYoutube", () => {
+  it("소유 카테고리면 채널 컬럼+토큰 기록 후 true", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    const ok = await bindCategoryYoutube(env.DB, { sub: "u1", categoryId: "c1", channelId: "UCx", channelTitle: "포포리 책방", encToken: "enc", now: 100 });
+    expect(ok).toBe(true);
+    const cat = await env.DB.prepare("SELECT youtube_channel_id, youtube_channel_title FROM content_categories WHERE id='c1'").first<{ youtube_channel_id: string; youtube_channel_title: string }>();
+    expect(cat?.youtube_channel_title).toBe("포포리 책방");
+    expect(cat?.youtube_channel_id).toBe("UCx");
+    const tok = await env.DB.prepare("SELECT refresh_token FROM category_youtube_tokens WHERE category_id='c1'").first<{ refresh_token: string }>();
+    expect(tok?.refresh_token).toBe("enc");
+  });
+  it("타인 카테고리면 false + 미기록", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('other','other@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c2','other','x','x',0,1,1)").run();
+    const ok = await bindCategoryYoutube(env.DB, { sub: "u1", categoryId: "c2", channelId: "UCx", channelTitle: "t", encToken: "enc", now: 100 });
+    expect(ok).toBe(false);
+    const tok = await env.DB.prepare("SELECT category_id FROM category_youtube_tokens WHERE category_id='c2'").first();
     expect(tok).toBeNull();
   });
 });
