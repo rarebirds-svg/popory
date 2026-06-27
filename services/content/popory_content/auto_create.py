@@ -53,6 +53,7 @@ def run() -> int:
         return 0
 
     created = []
+    errors = 0
     for platform, rec in assignments:
         try:
             out = client.post("/api/content/jobs/service-create", json={
@@ -63,8 +64,10 @@ def run() -> int:
             })
             created.append({"platform": platform, "topic": rec["title"], "job_id": out.get("id")})
         except PortalError as e:
+            errors += 1
             append_log(LOGS_DIR, {"cli": "auto_create", "status": "create_fail", "platform": platform, "topic": rec["title"], "error": str(e)})
-    append_log(LOGS_DIR, {"cli": "auto_create", "status": "ok", "created": created})
+    final_status = "partial" if errors else "ok"
+    append_log(LOGS_DIR, {"cli": "auto_create", "status": final_status, "created": created})
     return 0
 
 
