@@ -56,8 +56,9 @@ describe("JobServiceCreateSchema", () => {
     const v = JobServiceCreateSchema.parse({ owner_sub: "u1", topic: "t", platform: "youtube" });
     expect(v.platform).toBe("youtube");
   });
-  it("platform은 youtube/shorts만", () => {
-    expect(JobServiceCreateSchema.safeParse({ owner_sub: "u1", topic: "t", platform: "naver-blog" }).success).toBe(false);
+  it("platform은 youtube/shorts/naver-blog 허용, 그 외 거부", () => {
+    expect(JobServiceCreateSchema.safeParse({ owner_sub: "u1", topic: "t", platform: "naver-blog" }).success).toBe(true);
+    expect(JobServiceCreateSchema.safeParse({ owner_sub: "u1", topic: "t", platform: "tiktok" }).success).toBe(false);
   });
   it("owner_sub 없으면 실패", () => {
     expect(JobServiceCreateSchema.safeParse({ topic: "t", platform: "youtube" }).success).toBe(false);

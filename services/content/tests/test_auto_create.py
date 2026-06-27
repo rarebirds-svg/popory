@@ -10,16 +10,17 @@ from popory_content.portal_client import PortalError
 # select_assignments 단위 테스트
 # ---------------------------------------------------------------------------
 
-def test_two_recs_youtube_then_shorts():
+def test_two_recs_youtube_shorts_blog():
     recs = [{"id": "a", "title": "오래된것"}, {"id": "b", "title": "새것"}]
     out = select_assignments(recs)
-    assert out == [("youtube", recs[0]), ("shorts", recs[1])]
+    # 블로그는 영상(recs[0])과 같은 주제 재활용.
+    assert out == [("youtube", recs[0]), ("shorts", recs[1]), ("naver-blog", recs[0])]
 
 
-def test_one_rec_same_topic_both():
+def test_one_rec_same_topic_all_three():
     recs = [{"id": "a", "title": "하나"}]
     out = select_assignments(recs)
-    assert out == [("youtube", recs[0]), ("shorts", recs[0])]
+    assert out == [("youtube", recs[0]), ("shorts", recs[0]), ("naver-blog", recs[0])]
 
 
 def test_empty_returns_empty():
@@ -80,7 +81,7 @@ def test_run_partial_failure_status_partial(tmp_path, monkeypatch):
 
 
 def test_run_all_success_status_ok(tmp_path, monkeypatch):
-    """두 POST 모두 성공하면 최종 요약 status 가 'ok' 이고 created 에 2건이어야 한다."""
+    """세 POST(영상·쇼츠·블로그) 모두 성공하면 최종 요약 status 가 'ok' 이고 created 에 3건이어야 한다."""
     monkeypatch.setenv("POPORY_RECOMMEND_OWNER", "user-sub-test")
     monkeypatch.setattr(auto_create, "LOGS_DIR", tmp_path)
     monkeypatch.setattr(auto_create, "_client", lambda: _FakeClient())
@@ -91,4 +92,6 @@ def test_run_all_success_status_ok(tmp_path, monkeypatch):
     records = _read_logs(tmp_path)
     summary = records[-1]
     assert summary["status"] == "ok"
-    assert len(summary["created"]) == 2
+    assert len(summary["created"]) == 3
+    platforms = {c["platform"] for c in summary["created"]}
+    assert platforms == {"youtube", "shorts", "naver-blog"}
