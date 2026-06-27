@@ -45,14 +45,16 @@ def gather() -> list[tuple[str, str, str]]:
 
 def _load_prev() -> dict | None:
     try:
-        return json.load(open(STATE_FILE, encoding="utf-8"))
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
     except (OSError, ValueError):
         return None
 
 
 def _save_state(results) -> None:
     Path(STATE_FILE).parent.mkdir(parents=True, exist_ok=True)
-    json.dump(report.state_signature(results), open(STATE_FILE, "w", encoding="utf-8"), ensure_ascii=False)
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(report.state_signature(results), f, ensure_ascii=False)
 
 
 def run(mode: str) -> int:
@@ -68,6 +70,7 @@ def run(mode: str) -> int:
         except TelegramError as e:
             print(f"telegram send failed: {e}", file=sys.stderr)
             return 1
+    # 발송 성공 시에만 상태 저장 — 발송 실패(return 1)면 상태 미갱신으로 다음 실행이 재시도.
     _save_state(results)
     return 0
 
