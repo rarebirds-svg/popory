@@ -9,21 +9,48 @@ const SCOPE = "https://www.googleapis.com/auth/youtube.upload https://www.google
 const STATE_TTL = 600;
 type Vars = AppVars & ServiceVars;
 
+export function youtubeAuthUrl(env: Env, state: string): string {
+  const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  url.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
+  url.searchParams.set("redirect_uri", `${env.PUBLIC_BASE_URL}/api/content/youtube/callback`);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", SCOPE);
+  url.searchParams.set("access_type", "offline");
+  url.searchParams.set("prompt", "consent");
+  url.searchParams.set("state", state);
+  return url.toString();
+}
+
 export function mountContentYoutube(app: Hono<{ Bindings: Env; Variables: Vars }>) {
   app.get("/api/content/youtube/connect", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
     const state = crypto.randomUUID();
     await c.env.KV.put(`oauth:youtube:state:${state}`, u.sub, { expirationTtl: STATE_TTL });
-    const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
-    url.searchParams.set("redirect_uri", `${c.env.PUBLIC_BASE_URL}/api/content/youtube/callback`);
-    url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", SCOPE);
-    url.searchParams.set("access_type", "offline");
-    url.searchParams.set("prompt", "consent");
-    url.searchParams.set("state", state);
-    return c.redirect(url.toString(), 302);
+    return c.redirect(youtubeAuthUrl(c.env, state), 302);
+  });
+
+  app.get("/api/content/categories/:id/youtube/connect", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const id = c.req.param("id");
+    const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE id=? AND owner_sub=?").bind(id, u.sub).first();
+    if (!cat) return c.text("not found", 404);
+    const state = crypto.randomUUID();
+    await c.env.KV.put(`oauth:youtube:state:${state}`, JSON.stringify({ sub: u.sub, category_id: id }), { expirationTtl: STATE_TTL });
+    return c.redirect(youtubeAuthUrl(c.env, state), 302);
+  });
+
+  app.delete("/api/content/categories/:id/youtube", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const id = c.req.param("id");
+    const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE id=? AND owner_sub=?").bind(id, u.sub).first();
+    if (!cat) return c.text("not found", 404);
+    const now = Math.floor(Date.now() / 1000);
+    await c.env.DB.prepare("UPDATE content_categories SET youtube_channel_id=NULL, youtube_channel_title=NULL, updated_at=? WHERE id=? AND owner_sub=?").bind(now, id, u.sub).run();
+    await c.env.DB.prepare("DELETE FROM category_youtube_tokens WHERE category_id=?").bind(id).run();
+    return c.body(null, 204);
   });
 
   app.get("/api/content/youtube/callback", async (c) => {
