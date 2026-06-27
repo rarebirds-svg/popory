@@ -20,17 +20,34 @@ def _today() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d")
 
 
-def _worker_log_text() -> str:
-    p = Path(WORKER_LOG_DIR) / f"{_today()}.log"
+def _yesterday() -> str:
+    return (datetime.now(KST) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _log_path(date_str: str) -> Path:
+    return Path(WORKER_LOG_DIR) / f"{date_str}.log"
+
+
+def _read_log(date_str: str) -> str:
     try:
-        return p.read_text(encoding="utf-8")
+        return _log_path(date_str).read_text(encoding="utf-8")
     except OSError:
         return ""
 
 
+def _recent_log_path() -> str:
+    today = _log_path(_today())
+    if today.exists():
+        return str(today)
+    yday = _log_path(_yesterday())
+    if yday.exists():
+        return str(yday)
+    return str(today)
+
+
 def gather() -> list[tuple[str, str, str]]:
-    log_text = _worker_log_text()
-    log_path = str(Path(WORKER_LOG_DIR) / f"{_today()}.log")
+    log_text = _read_log(_yesterday()) + "\n" + _read_log(_today())
+    log_path = _recent_log_path()
     out = []
     out.append(("포털", *checks.check_http("포털", PORTAL)))
     out.append(("API", *checks.check_http("API", API)))
