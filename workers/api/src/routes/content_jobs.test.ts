@@ -19,6 +19,7 @@ async function userCookie(sub = "u1", email = "u1@e.com") {
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_sources");
   await env.DB.exec("DELETE FROM content_jobs");
+  await env.DB.exec("DELETE FROM content_recommendations");
   await env.DB.exec("DELETE FROM style_profiles");
 });
 
@@ -158,6 +159,11 @@ async function workerToken(area = "content-worker") {
     claims: { sub: "service:content-worker", email: "worker@svc", area, aud: "popory-portal" },
     ttlSeconds: 600,
   });
+}
+
+async function serviceToken() {
+  const k = await ensureActiveKey(env.DB);
+  return signAreaToken({ privateJwk: k.privateJwk, kid: k.kid, claims: { sub: "services-content", email: "svc@e.com", area: "content-recommend", aud: "popory-portal" } });
 }
 
 describe("POST /api/content/jobs/claim", () => {
@@ -509,6 +515,43 @@ describe("DELETE /api/content/jobs/:id", () => {
 
   it("미인증 요청 401", async () => {
     const res = await SELF.fetch("https://example.com/api/content/jobs/anything", { method: "DELETE" });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /api/content/jobs/service-create", () => {
+  it("서비스 토큰으로 잡 생성 + 추천 used 표시", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id, owner_sub, title, recommender, status, created_at, updated_at) VALUES ('rec1','u1','전세사기','시스템','pending',100,100)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/jobs/service-create", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "전세사기", platform: "youtube", recommendation_id: "rec1" }),
+    });
+    expect(res.status).toBe(201);
+    const job = await env.DB.prepare("SELECT owner_sub, platform, status FROM content_jobs WHERE topic=?").bind("전세사기").first<{ owner_sub: string; platform: string; status: string }>();
+    expect(job?.owner_sub).toBe("u1");
+    expect(job?.platform).toBe("youtube");
+    expect(job?.status).toBe("queued");
+    const rec = await env.DB.prepare("SELECT status FROM content_recommendations WHERE id='rec1'").first<{ status: string }>();
+    expect(rec?.status).toBe("used");
+  });
+
+  it("recommendation_id 없이도 생성", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/jobs/service-create", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "걷기운동", platform: "shorts" }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("서비스 토큰 없으면 401", async () => {
+    const res = await SELF.fetch("https://e.com/api/content/jobs/service-create", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "t", platform: "youtube" }),
+    });
     expect(res.status).toBe(401);
   });
 });

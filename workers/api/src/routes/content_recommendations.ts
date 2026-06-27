@@ -119,6 +119,18 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
     return c.json(out);
   });
 
+  app.get("/api/content/recommendations/service", requireService, async (c) => {
+    const ownerSub = c.req.query("owner_sub");
+    if (!ownerSub) return c.text("owner_sub required", 400);
+    const limitRaw = Number(c.req.query("limit") ?? "50");
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(1, Math.floor(limitRaw)), 200) : 50;
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, title, author, recommender, status, note, created_at, updated_at
+       FROM content_recommendations WHERE owner_sub=? AND status='pending' ORDER BY created_at ASC LIMIT ?`,
+    ).bind(ownerSub, limit).all();
+    return c.json({ recommendations: results });
+  });
+
   app.patch("/api/content/recommendations/:id", async (c) => {
     const denied = requireAuth(c); if (denied) return denied;
     const u = c.get("user")!;
