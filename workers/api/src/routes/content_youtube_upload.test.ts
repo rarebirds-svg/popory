@@ -24,7 +24,6 @@ async function serviceToken() { return workerToken(); }
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_jobs");
-  await env.DB.exec("DELETE FROM youtube_connections");
   await env.DB.exec("DELETE FROM content_categories");
   await env.DB.exec("DELETE FROM category_youtube_tokens");
 });
@@ -179,5 +178,6 @@ describe("claim-upload 카테고리 토큰 없음 처리", () => {
     expect(res.status).toBe(204);
     const row = await env.DB.prepare("SELECT youtube_status, youtube_error FROM content_jobs WHERE id='jc'").first<{ youtube_status: string; youtube_error: string }>();
     expect(row?.youtube_status).toBe("failed");
+    expect(row?.youtube_error).toBe("카테고리 유튜브 미연결");
   });
 });
