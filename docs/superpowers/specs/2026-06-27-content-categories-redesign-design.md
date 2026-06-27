@@ -59,7 +59,7 @@ CREATE INDEX idx_content_rec_cat    ON content_recommendations(category_id, stat
 
 **백필.** 마이그레이션 적용 후 운영 스크립트로 owner별 "책 리뷰" 카테고리를 시드하고 기존 topics·jobs·recommendations의 `category_id`를 그 카테고리로 채운다(코드가 아닌 운영 단계, 본문 §배포 참조). 시드 slug=`book-review`, name=`책 리뷰`, icon=`📚`.
 
-`category_id`가 NULL인 콘텐츠(백필 누락·과거 데이터)는 홈의 "미분류"에 묶어 노출한다(유실 방지).
+`category_id` NULL 콘텐츠는 백필로 해소되고, 모든 신규 생성 경로가 category_id를 세팅하므로 "미분류" 카드는 렌더하지 않는다(의도적으로 제거됨).
 
 ## Backend 엔드포인트
 
@@ -99,7 +99,7 @@ CREATE INDEX idx_content_rec_cat    ON content_recommendations(category_id, stat
 ## 에러·엣지
 
 - 카테고리 0개(첫 진입): 홈이 "책 리뷰" 시드를 안내하거나 자동 생성 후 표시. 백필이 시드를 만들므로 정상 운영에선 최소 1개 존재.
-- category_id NULL 콘텐츠: 홈 "미분류" 카드로 노출, 클릭 시 category_id IS NULL 목록.
+- category_id NULL 콘텐츠: 백필과 신규 생성 경로 category_id 상속으로 발생하지 않아 "미분류" 카드는 렌더하지 않는다.
 - 카테고리 삭제는 빈 경우만(409 가드) — 콘텐츠 유실 방지.
 - 페이지네이션: has_more=false면 "더 보기" 숨김. 검색 중 결과 0건이면 안내문.
 

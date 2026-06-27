@@ -65,6 +65,7 @@ def run() -> int:
                 "topic": rec["title"],
                 "platform": platform,
                 "recommendation_id": rec["id"],
+                "category_slug": "book-review",
             })
             created.append({"platform": platform, "topic": rec["title"], "job_id": out.get("id")})
         except PortalError as e:

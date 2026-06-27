@@ -21,6 +21,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_jobs");
   await env.DB.exec("DELETE FROM content_topics");
   await env.DB.exec("DELETE FROM content_recommendations");
+  await env.DB.exec("DELETE FROM content_categories");
 });
 
 describe("POST /api/content/topics", () => {
@@ -267,6 +268,76 @@ describe("POST /api/content/topics/:id/jobs", () => {
     expect(out.skipped_platforms).toContain("youtube");
     const { results } = await env.DB.prepare("SELECT platform FROM content_jobs WHERE topic_id=? AND platform='youtube'").bind(topicId).all();
     expect(results).toHaveLength(1);
+  });
+});
+
+describe("POST /api/content/topics — category_id 상속", () => {
+  it("자식 잡이 토픽의 category_id를 상속한다", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('cat1','u1','책','book-review',0,1,1)").run();
+    const res = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "category 상속 테스트", category_id: "cat1", platforms: [{ platform: "naver-blog" }, { platform: "youtube" }] }),
+    });
+    expect(res.status).toBe(201);
+    const { topic_id, job_ids } = await res.json<{ topic_id: string; job_ids: string[] }>();
+    expect(job_ids).toHaveLength(2);
+    for (const jid of job_ids) {
+      const job = await env.DB.prepare("SELECT category_id FROM content_jobs WHERE id=?").bind(jid).first<{ category_id: string | null }>();
+      expect(job?.category_id).toBe("cat1");
+    }
+    // running_count 반영 확인: 자식 잡을 queued로 전환 후 카테고리 목록의 running_count가 >= 1
+    await env.DB.prepare("UPDATE content_jobs SET status='queued' WHERE topic_id=?").bind(topic_id).run();
+    const list = await (await SELF.fetch("https://example.com/api/content/categories", { headers: { cookie: ck } })).json<{ categories: { id: string; running_count: number }[] }>();
+    const cat = list.categories.find((c) => c.id === "cat1");
+    expect(cat?.running_count).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("POST /api/content/topics/:id/jobs — category_id 상속", () => {
+  it("플랫폼 추가 시 토픽의 category_id를 자식 잡에 상속한다", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('cat2','u1','영화','movie',0,1,1)").run();
+    const cr = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "플랫폼추가 category_id 테스트", category_id: "cat2", platforms: [{ platform: "naver-blog" }] }),
+    });
+    const { topic_id } = await cr.json<{ topic_id: string }>();
+    const addRes = await SELF.fetch(`https://example.com/api/content/topics/${topic_id}/jobs`, {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ platforms: [{ platform: "youtube" }] }),
+    });
+    expect(addRes.status).toBe(201);
+    const { added_job_ids } = await addRes.json<{ added_job_ids: string[] }>();
+    expect(added_job_ids).toHaveLength(1);
+    const job = await env.DB.prepare("SELECT category_id FROM content_jobs WHERE id=?").bind(added_job_ids[0]).first<{ category_id: string | null }>();
+    expect(job?.category_id).toBe("cat2");
+  });
+});
+
+describe("GET /api/content/topics 카테고리·검색·페이지네이션", () => {
+  it("category_id로 필터하고 has_more 반환", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    for (let i = 0; i < 3; i++) {
+      await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id) VALUES (?,?,?,?,?)").bind(`t${i}`, "u1", `주제${i}`, 100 + i, "c1").run();
+    }
+    await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id) VALUES ('o1','u1','다른카테','9',NULL)").run();
+    const res = await SELF.fetch("https://e.com/api/content/topics?category_id=c1&limit=2&offset=0", { headers: { cookie: ck } });
+    const body = await res.json<{ topics: { id: string }[]; has_more: boolean }>();
+    expect(body.topics.length).toBe(2);
+    expect(body.has_more).toBe(true);
+  });
+
+  it("q로 topic 검색", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id) VALUES ('t1','u1','원씽',1,'c1')").run();
+    await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id) VALUES ('t2','u1','사피엔스',2,'c1')").run();
+    const res = await SELF.fetch("https://e.com/api/content/topics?category_id=c1&q=" + encodeURIComponent("원씽"), { headers: { cookie: ck } });
+    const body = await res.json<{ topics: { topic: string }[] }>();
+    expect(body.topics.length).toBe(1);
+    expect(body.topics[0].topic).toBe("원씽");
   });
 });
 

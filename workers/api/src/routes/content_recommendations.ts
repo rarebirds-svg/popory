@@ -49,8 +49,8 @@ async function existingTitles(db: Env["DB"], ownerSub: string): Promise<Set<stri
   return set;
 }
 
-// 중복 제거 후 batch INSERT. recommender 라벨을 인자로 받는다.
-async function insertItems(db: Env["DB"], ownerSub: string, items: RecommendationItem[], recommender: string) {
+// 중복 제거 후 batch INSERT. recommender 라벨과 category_id를 인자로 받는다.
+async function insertItems(db: Env["DB"], ownerSub: string, items: RecommendationItem[], recommender: string, categoryId: string | null = null) {
   const seen = await existingTitles(db, ownerSub);
   const now = Math.floor(Date.now() / 1000);
   const fresh: RecommendationItem[] = [];
@@ -65,9 +65,9 @@ async function insertItems(db: Env["DB"], ownerSub: string, items: Recommendatio
   if (fresh.length > 0) {
     await db.batch(fresh.map((it) =>
       db.prepare(
-        `INSERT INTO content_recommendations (id, owner_sub, title, author, recommender, status, note, created_at, updated_at)
-         VALUES (?,?,?,?,?,'pending',?,?,?)`,
-      ).bind(ulid(), ownerSub, it.title, it.author ?? null, recommender, it.note ?? null, now, now),
+        `INSERT INTO content_recommendations (id, owner_sub, title, author, recommender, status, note, created_at, updated_at, category_id)
+         VALUES (?,?,?,?,?,'pending',?,?,?,?)`,
+      ).bind(ulid(), ownerSub, it.title, it.author ?? null, recommender, it.note ?? null, now, now, categoryId),
     ));
   }
   return { added: fresh.length, skipped: skippedTitles.length, skipped_titles: skippedTitles };
@@ -77,10 +77,13 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
   app.get("/api/content/recommendations", async (c) => {
     const denied = requireAuth(c); if (denied) return denied;
     const u = c.get("user")!;
+    const categoryId = c.req.query("category_id");
+    const where: string[] = ["owner_sub=?", "status='pending'"]; const vals: string[] = [u.sub];
+    if (categoryId) { where.push("category_id=?"); vals.push(categoryId); }
     const { results } = await c.env.DB.prepare(
       `SELECT id, title, author, recommender, status, note, created_at, updated_at
-       FROM content_recommendations WHERE owner_sub=? AND status='pending' ORDER BY created_at DESC`,
-    ).bind(u.sub).all();
+       FROM content_recommendations WHERE ${where.join(" AND ")} ORDER BY created_at DESC`,
+    ).bind(...vals).all();
     return c.json({ recommendations: results });
   });
 
@@ -104,6 +107,12 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
   app.post("/api/content/recommendations/bulk", async (c) => {
     const denied = requireAuth(c); if (denied) return denied;
     const u = c.get("user")!;
+    let bulkCategoryId: string | null = null;
+    const qCat = c.req.query("category_id");
+    if (qCat) {
+      const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE id=? AND owner_sub=?").bind(qCat, u.sub).first<{ id: string }>();
+      bulkCategoryId = cat?.id ?? null;
+    }
     const parsed = RecommendationBulkSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text("bad request", 400);
     let items: RecommendationItem[];
@@ -113,14 +122,22 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
       items = parsed.data.items;
     }
     if (items.length === 0) return c.json({ added: 0, skipped: 0, skipped_titles: [] });
-    const out = await insertItems(c.env.DB, u.sub, items, "대공");
+    const out = await insertItems(c.env.DB, u.sub, items, "대공", bulkCategoryId);
     return c.json(out);
   });
 
   app.post("/api/content/recommendations/service-bulk", requireService, async (c) => {
     const parsed = RecommendationServiceBulkSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text("bad request", 400);
-    const out = await insertItems(c.env.DB, parsed.data.owner_sub, parsed.data.items, "시스템");
+    const { owner_sub, items } = parsed.data;
+    let categoryId: string | null = null;
+    if (parsed.data.category_slug) {
+      const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE owner_sub=? AND slug=?")
+        .bind(owner_sub, parsed.data.category_slug).first<{ id: string }>();
+      categoryId = cat?.id ?? null;
+      if (!categoryId) console.warn(`category_slug not found: ${parsed.data.category_slug} owner=${owner_sub}`);
+    }
+    const out = await insertItems(c.env.DB, owner_sub, items, "시스템", categoryId);
     return c.json(out);
   });
 

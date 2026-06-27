@@ -21,6 +21,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_jobs");
   await env.DB.exec("DELETE FROM content_recommendations");
   await env.DB.exec("DELETE FROM style_profiles");
+  await env.DB.exec("DELETE FROM content_categories");
 });
 
 describe("POST /api/content/jobs", () => {
@@ -68,6 +69,22 @@ describe("GET /api/content/jobs", () => {
     const res = await SELF.fetch("https://example.com/api/content/jobs", { headers: { cookie: b } });
     const { jobs } = await res.json<{ jobs: unknown[] }>();
     expect(jobs.length).toBe(0);
+  });
+});
+
+describe("GET /api/content/jobs 카테고리·검색·페이지네이션", () => {
+  it("category_id로 필터하고 has_more 반환", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    for (let i = 0; i < 3; i++) {
+      await env.DB.prepare(
+        "INSERT INTO content_jobs (id,owner_sub,topic,platform,status,created_at,updated_at,category_id) VALUES (?,?,'주제','naver-blog','queued',?,?,?)",
+      ).bind(`j${i}`, "u1", 100 + i, 100 + i, "c1").run();
+    }
+    const res = await SELF.fetch("https://example.com/api/content/jobs?category_id=c1&limit=2&offset=0", { headers: { cookie: ck } });
+    const body = await res.json<{ jobs: { id: string }[]; has_more: boolean }>();
+    expect(body.jobs.length).toBe(2);
+    expect(body.has_more).toBe(true);
   });
 });
 
@@ -553,5 +570,18 @@ describe("POST /api/content/jobs/service-create", () => {
       body: JSON.stringify({ owner_sub: "u1", topic: "t", platform: "youtube" }),
     });
     expect(res.status).toBe(401);
+  });
+
+  it("category_slug를 category_id로 해석해 저장", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/jobs/service-create", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "원씽", platform: "youtube", category_slug: "book-review" }),
+    });
+    expect(res.status).toBe(201);
+    const job = await env.DB.prepare("SELECT category_id FROM content_jobs WHERE topic='원씽'").first<{ category_id: string }>();
+    expect(job?.category_id).toBe("c1");
   });
 });

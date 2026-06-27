@@ -21,6 +21,7 @@ export const ContentJobCreateSchema = z.object({
   style_profile_id: z.string().max(64).optional(),
   sources: z.array(ContentSourceInputSchema).max(20).optional(),
   options: ContentJobOptionsSchema.optional(),
+  category_id: z.string().max(64).optional(),
 });
 export type ContentJobCreate = z.infer<typeof ContentJobCreateSchema>;
 
@@ -30,6 +31,7 @@ export const JobServiceCreateSchema = z.object({
   platform: z.enum(["youtube", "shorts", "naver-blog"]),
   options: ContentJobOptionsSchema.optional(),
   recommendation_id: z.string().max(64).optional(),
+  category_slug: z.string().max(80).optional(),
 });
 export type JobServiceCreate = z.infer<typeof JobServiceCreateSchema>;
 
@@ -70,6 +72,7 @@ export const TopicCreateSchema = z.object({
   style_profile_id: z.string().max(64).optional(),
   sources: z.array(ContentSourceInputSchema).max(20).optional(),
   platforms: z.array(TopicPlatformSchema).min(1).max(5),
+  category_id: z.string().max(64).optional(),
 });
 export type TopicCreate = z.infer<typeof TopicCreateSchema>;
 export type TopicPlatform = z.infer<typeof TopicPlatformSchema>;

@@ -20,6 +20,7 @@ export type RecommendationBulk = z.infer<typeof RecommendationBulkSchema>;
 export const RecommendationServiceBulkSchema = z.object({
   owner_sub: z.string().min(1).max(64),
   items: z.array(RecommendationItemSchema).min(1).max(200),
+  category_slug: z.string().max(80).optional(),
 });
 export type RecommendationServiceBulk = z.infer<typeof RecommendationServiceBulkSchema>;
 

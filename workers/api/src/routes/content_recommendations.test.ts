@@ -20,6 +20,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_recommendations");
   await env.DB.exec("DELETE FROM content_jobs");
   await env.DB.exec("DELETE FROM content_topics");
+  await env.DB.exec("DELETE FROM content_categories");
 });
 
 describe("POST /api/content/recommendations", () => {
@@ -71,6 +72,20 @@ describe("GET /api/content/recommendations", () => {
 });
 
 describe("POST /api/content/recommendations/bulk", () => {
+  it("category_id 쿼리 파람이 있으면 해당 카테고리로 저장", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/bulk?category_id=c1", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ items: [{ title: "사피엔스" }] }),
+    });
+    expect(res.status).toBe(200);
+    const out = await res.json<{ added: number }>() ;
+    expect(out.added).toBe(1);
+    const row = await env.DB.prepare("SELECT category_id FROM content_recommendations WHERE title='사피엔스'").first<{ category_id: string }>();
+    expect(row?.category_id).toBe("c1");
+  });
+
   it("text 줄 파싱 — 마지막 ' - '로 제목/저자 분리, 기존 토픽·추천과 중복 skip", async () => {
     const ck = await userCookie();
     // 기존 토픽 1건 — 중복 대상
@@ -116,6 +131,19 @@ describe("POST /api/content/recommendations/service-bulk", () => {
       body: JSON.stringify({ owner_sub: "u1", items: [{ title: "x" }] }),
     });
     expect(res.status).toBe(401);
+  });
+
+  it("category_slug를 category_id로 해석해 저장", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/service-bulk", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", items: [{ title: "사피엔스" }], category_slug: "book-review" }),
+    });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT category_id FROM content_recommendations WHERE title='사피엔스'").first<{ category_id: string }>();
+    expect(row?.category_id).toBe("c1");
   });
 
   it("표기 변형(띄어쓰기·저자·괄호)은 정규화로 중복 skip", async () => {
@@ -197,6 +225,20 @@ describe("GET /api/content/recommendations/service", () => {
   it("서비스 토큰 없으면 401", async () => {
     const res = await SELF.fetch("https://e.com/api/content/recommendations/service?owner_sub=u1");
     expect(res.status).toBe(401);
+  });
+});
+
+describe("GET /api/content/recommendations?category_id=", () => {
+  it("카테고리로 pending 필터", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c2','u1','영화','movie',1,1,1)").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id,owner_sub,title,recommender,status,created_at,updated_at,category_id) VALUES ('a','u1','책것','시스템','pending',1,1,'c1')").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id,owner_sub,title,recommender,status,created_at,updated_at,category_id) VALUES ('b','u1','영화것','시스템','pending',2,2,'c2')").run();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations?category_id=c1", { headers: { cookie: ck } });
+    const body = await res.json<{ recommendations: { title: string }[] }>();
+    expect(body.recommendations.length).toBe(1);
+    expect(body.recommendations[0].title).toBe("책것");
   });
 });
 

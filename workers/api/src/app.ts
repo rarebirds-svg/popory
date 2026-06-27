@@ -15,6 +15,7 @@ import { mountJwks } from "./routes/jwks";
 import { mountGo } from "./routes/go";
 import { mountPublished } from "./routes/published";
 import { mountContentTopics } from "./routes/content_topics";
+import { mountContentCategories } from "./routes/content_categories";
 import { mountContentRecommendations } from "./routes/content_recommendations";
 import { mountContentJobs } from "./routes/content_jobs";
 import { mountContentStyleProfiles } from "./routes/content_style_profiles";
@@ -60,6 +61,7 @@ export function createApp() {
   mountGo(app);
   mountPublished(app);
   mountContentTopics(app);
+  mountContentCategories(app);
   mountContentRecommendations(app);
   mountContentMediaToken(app);
   mountContentInstagram(app);
