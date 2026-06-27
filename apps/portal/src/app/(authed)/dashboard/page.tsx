@@ -8,8 +8,8 @@ type AreaCard = { key: string; label: string; desc: string; href: (apiBase: stri
 
 const AREAS: AreaCard[] = [
   { key: "brief", label: "뉴스 브리핑", desc: "부동산, 공정거래, 컴플라이언스, AI Tech까지. 핵심만 빠르게 정리한 분야별 뉴스 브리핑.", href: () => "/p/brief" },
-  { key: "content", label: "컨텐츠 Factory", desc: "책·영화 등 카테고리별로 블로그·영상·쇼츠를 만들고 채널에 올립니다.", href: () => "/content" },
-  { key: "finance", label: "자산 관리 (예정)", desc: "우리 가족의 금융·부동산 자산 포트폴리오를 관리합니다.", href: (b) => `${b}/go/finance` },
+  { key: "content", label: "콘텐츠 스튜디오", desc: "책과 영화를 비롯한 다양한 주제를 블로그, 영상, 쇼츠로 제작·발행.", href: () => "/content" },
+  { key: "finance", label: "자산 포트폴리오 (준비 중)", desc: "우리 가족의 금융·부동산 자산을 한곳에서 관리하는 포트폴리오 서비스.", href: (b) => `${b}/go/finance` },
   { key: "baduk", label: "잉크바둑", desc: "바둑 기보와 학습을 즐기는 잉크바둑 서비스.", href: () => "https://www.inkbaduk.com", external: true },
 ];
 

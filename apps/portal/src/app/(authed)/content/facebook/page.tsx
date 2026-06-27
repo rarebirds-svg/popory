@@ -30,7 +30,7 @@ export default async function FacebookPage({
     <div>
       <Header email={user.email} role={user.role} apiBase={API_BASE} />
       <main className="mx-auto max-w-2xl px-4 py-10">
-        <Kicker>컨텐츠 Factory</Kicker>
+        <Kicker>콘텐츠 스튜디오</Kicker>
         <h1 className="mt-3 font-serif text-2xl font-semibold tracking-tight text-popory-fg">
           Facebook 페이지 연결
         </h1>
