@@ -117,6 +117,59 @@ describe("POST /api/content/recommendations/service-bulk", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  it("표기 변형(띄어쓰기·저자·괄호)은 정규화로 중복 skip", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id, owner_sub, title, recommender, status, created_at, updated_at) VALUES ('e1','u1','부의 추월 차선','시스템','pending',1,1)").run();
+    // 기존 작업(저자 포함 토픽)과도 대조되는지
+    await env.DB.prepare("INSERT INTO content_jobs (id, owner_sub, topic, platform, status, created_at, updated_at) VALUES ('j1','u1','원씽 - 게리 켈러','naver-blog','queued',1,1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/service-bulk", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", items: [
+        { title: "부의 추월차선(MJ 드마코)" },  // 기존 추천의 변형 → skip
+        { title: "원씽" },                      // 기존 작업의 변형 → skip
+        { title: "사피엔스" },                  // 신규 → 추가
+      ] }),
+    });
+    expect(res.status).toBe(200);
+    const out = await res.json<{ added: number; skipped: number }>();
+    expect(out.added).toBe(1);
+    expect(out.skipped).toBe(2);
+    const fresh = await env.DB.prepare("SELECT title FROM content_recommendations WHERE owner_sub='u1' AND title='사피엔스'").first();
+    expect(fresh).not.toBeNull();
+  });
+});
+
+describe("GET /api/content/recommendations/known-titles", () => {
+  it("작업·주제·추천 제목을 정규화 중복제거해 반환", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_jobs (id, owner_sub, topic, platform, status, created_at, updated_at) VALUES ('j1','u1','원씽 - 게리 켈러','naver-blog','queued',1,1)").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id, owner_sub, title, recommender, status, created_at, updated_at) VALUES ('r1','u1','사피엔스','시스템','pending',1,1)").run();
+    // 원씽 변형 추천 — known-titles에서 작업과 같은 키라 중복 제거되어야 함
+    await env.DB.prepare("INSERT INTO content_recommendations (id, owner_sub, title, recommender, status, created_at, updated_at) VALUES ('r2','u1','원씽(The One Thing)','시스템','dismissed',1,1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/known-titles?owner_sub=u1", {
+      headers: { authorization: `Bearer ${tok}` },
+    });
+    expect(res.status).toBe(200);
+    const { titles } = await res.json<{ titles: string[] }>();
+    // 정규화 키 기준 distinct: 원씽 계열 1 + 사피엔스 1 = 2
+    expect(titles.length).toBe(2);
+    expect(titles.some((t) => t.includes("원씽"))).toBe(true);
+    expect(titles).toContain("사피엔스");
+  });
+
+  it("owner_sub 누락 400", async () => {
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/known-titles", { headers: { authorization: `Bearer ${tok}` } });
+    expect(res.status).toBe(400);
+  });
+
+  it("서비스 토큰 없으면 401", async () => {
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/known-titles?owner_sub=u1");
+    expect(res.status).toBe(401);
+  });
 });
 
 describe("GET /api/content/recommendations/service", () => {
