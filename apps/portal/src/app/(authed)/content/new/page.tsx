@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
 interface StyleProfile { id: string; name: string; }
+interface Category { id: string; name: string; }
 
 async function fetchProfiles(cookie: string): Promise<StyleProfile[]> {
   const res = await fetch(`${API_BASE}/api/content/style-profiles`, { headers: { cookie }, cache: "no-store" });
@@ -18,12 +19,19 @@ async function fetchProfiles(cookie: string): Promise<StyleProfile[]> {
   return profiles;
 }
 
-export default async function NewJobPage({ searchParams }: { searchParams: Promise<{ topic?: string }> }) {
+async function fetchCategories(cookie: string): Promise<Category[]> {
+  const res = await fetch(`${API_BASE}/api/content/categories`, { headers: { cookie }, cache: "no-store" });
+  if (!res.ok) return [];
+  const { categories } = (await res.json()) as { categories: Category[] };
+  return categories.map((c) => ({ id: c.id, name: c.name }));
+}
+
+export default async function NewJobPage({ searchParams }: { searchParams: Promise<{ topic?: string; category?: string }> }) {
   const user = await getCurrentUser();
   if (!user) redirect("/");
   const cookie = (await headers()).get("cookie") ?? "";
-  const profiles = await fetchProfiles(cookie);
-  const { topic } = await searchParams;
+  const [profiles, categories] = await Promise.all([fetchProfiles(cookie), fetchCategories(cookie)]);
+  const { topic, category } = await searchParams;
 
   return (
     <div>
@@ -31,7 +39,7 @@ export default async function NewJobPage({ searchParams }: { searchParams: Promi
       <main className="mx-auto max-w-2xl px-4 py-10">
         <Kicker>새 콘텐츠</Kicker>
         <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-popory-fg">컨텐츠 만들기</h1>
-        <NewJobForm profiles={profiles} initialTopic={topic ?? ""} />
+        <NewJobForm profiles={profiles} initialTopic={topic ?? ""} categories={categories} defaultCategoryId={category} />
       </main>
     </div>
   );

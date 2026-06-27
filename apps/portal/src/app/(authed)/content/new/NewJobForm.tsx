@@ -11,13 +11,14 @@ const CHECK_LABEL = "flex items-center gap-2 cursor-pointer text-sm text-popory-
 interface StyleProfile { id: string; name: string; }
 interface SourceInput { id: string; url: string; note: string; }
 
-export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StyleProfile[]; initialTopic?: string }) {
+export function NewJobForm({ profiles, initialTopic = "", categories, defaultCategoryId }: { profiles: StyleProfile[]; initialTopic?: string; categories: { id: string; name: string }[]; defaultCategoryId?: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<FriendlyError | null>(null);
 
   const [topic, setTopic] = useState(initialTopic);
+  const [categoryId, setCategoryId] = useState(defaultCategoryId ?? categories[0]?.id ?? "");
   const [styleId, setStyleId] = useState(() => profiles.find((p) => p.name === "대공")?.id ?? "");
   const [sources, setSources] = useState<SourceInput[]>([]);
 
@@ -84,6 +85,7 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
         body: JSON.stringify({
           topic,
           platforms,
+          category_id: categoryId || undefined,
           style_profile_id: styleId || undefined,
           sources: cleanSources.length ? cleanSources : undefined,
         }),
@@ -118,6 +120,15 @@ export function NewJobForm({ profiles, initialTopic = "" }: { profiles: StylePro
             </details>
           )}
         </div>
+      )}
+
+      {categories.length > 0 && (
+        <label className="block">
+          <span className="block text-xs font-semibold text-popory-muted mb-1">카테고리</span>
+          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={INPUT}>
+            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </label>
       )}
 
       <label className="block">
