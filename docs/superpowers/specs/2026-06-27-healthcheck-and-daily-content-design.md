@@ -94,7 +94,7 @@ backend 변경 0을 유지하기 위해, 점검은 **공개 HTTP 프로브 + 로
 ```
 주간 recommend (기존, 매주 토)  →  content_recommendations(status=pending)
                                         │
-auto_create.py (매일 04:00)  ── ① 서비스 GET 으로 pending 주제 2건 선택
+auto_create.py (매일 18:00)  ── ① 서비스 GET 으로 pending 주제 선택(기준은 아래)
                              ── ② 서비스 POST 으로 잡 2건 생성(youtube, shorts)
                                   + 사용한 recommendation 을 used 로 표시
                                         │
@@ -102,6 +102,15 @@ content-worker (기존, 상주)   ── ③ claim → 생성 → review 회신
                                         │
 포털 /content 목록            ── ④ 사람이 확인 → 업로드 버튼(수동, 기존 그대로)
 ```
+
+### 주제 선택 기준
+
+`content_recommendations` 의 `status='pending'` 행에서 고른다(`dismissed`·`used` 제외). 같은 owner 범위 내.
+
+1. **순서. 오래된 것 먼저(created_at ASC, FIFO).** 추천된 순서대로 대기열을 비워, 어떤 주제도 굶지 않고 결국 한 번은 콘텐츠가 된다. 결정적(랜덤 없음)이라 재현·디버깅이 쉽다. (대안인 "최신 먼저"는 자기계발·교양 주제 특성상 시의성 이득이 작아 채택하지 않음.)
+2. **개수·배정.** 가장 오래된 pending 2건을 가져와 `[0]→youtube`, `[1]→shorts` 에 배정. pending 이 1건뿐이면 같은 주제로 두 플랫폼 모두 생성, 0건이면 그날 skip(로그 `skipped:empty`, 점검이 warn).
+3. **중복 방지.** 잡 생성과 같은 처리에서 해당 recommendation 을 `status='used'` 로 갱신. 따라서 다음 날 재선택되지 않고, youtube·shorts 가 같은 추천을 두 번 집지 않는다.
+4. **실패 시 처리.** 생성된 잡이 이후 실패해도 그 추천은 `used` 로 남는다(대기열에서 빠짐). 손실은 점검 warn + 포털 수동 재시도로 복구한다(자동 재선택은 범위 밖).
 
 ### Backend 추가 (서비스 엔드포인트 2개)
 
@@ -118,14 +127,15 @@ content-worker (기존, 상주)   ── ③ claim → 생성 → review 회신
 
 - `popory_content/auto_create.py`. 흐름. ① 서비스 JWT 로 `recommendations/service` 에서 pending 주제 조회 → ② youtube·shorts 각 1건에 주제 배정(대기열이 1건뿐이면 같은 주제로 두 플랫폼, 0건이면 그날 skip + 로그에 `skipped:empty`) → ③ `jobs/service-create` 로 잡 2건 생성(options 는 기존 기본값 사용) → ④ 결과 로그(`created` 잡 id·platform, `skipped` 사유).
 - `run_auto_create.sh`. launchd 엔트리. secrets source 후 `python -m popory_content.auto_create`.
-- `~/Library/LaunchAgents/com.popory.content-daily.plist` — 매일 04:00 KST(낮 온디맨드·영상 생성과 겹치지 않게 새벽). 레포에 사본 보관.
+- `~/Library/LaunchAgents/com.popory.content-daily.plist` — 매일 18:00 KST. 레포에 사본 보관.
 - owner_sub 는 기존 `POPORY_RECOMMEND_OWNER` 환경변수 재사용.
 
 영상·쇼츠 생성·자막·조립·imagegen·한도 재시도는 전부 기존 워커 경로를 그대로 탄다(이 파트에서 신규 생성 로직 없음).
 
 ### 한도·부하 고려
 
-- 매일 영상 1 + 쇼츠 1 = claude CLI 대본 2회 + 영상 조립 2회. 워커 단일 스레드라 새벽에 직렬 처리(수십 분 가능). 새벽 시간대라 사용자 온디맨드와 충돌 적음.
+- 매일 영상 1 + 쇼츠 1 = claude CLI 대본 2회 + 영상 조립 2회. 워커 단일 스레드라 직렬 처리(수십 분 가능).
+- **18:00 윈도우 겹침 주의.** 평일 18:00 에 기존 `com.popory.brief-naver-stock-pm`(저녁 브리핑)이 claude CLI 를 쓴다. 콘텐츠 자동 생성도 같은 Claude Max 5시간 롤링 윈도우를 공유하므로 동시 실행 시 한도 경합 가능. 기존 generate.py 한도 재시도/백오프로 흡수하되, 경합이 잦으면 content-daily 를 18:30 등으로 스태거하는 것을 후속 옵션으로 둔다.
 - Claude Max 한도에 걸리면 기존 generate.py 재시도/실패 처리에 위임. 실패는 파트 1 점검이 잡는다.
 - recommend 대기열 고갈 시 자동 생성이 멈추는데, 주간 recommend 가 매주 10~15건 보충하므로 평시엔 마르지 않는다. 고갈은 점검에서 warn.
 
