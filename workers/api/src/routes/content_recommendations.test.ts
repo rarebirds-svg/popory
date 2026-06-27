@@ -119,6 +119,19 @@ describe("POST /api/content/recommendations/service-bulk", () => {
     expect(res.status).toBe(401);
   });
 
+  it("category_slug를 category_id로 해석해 저장", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/service-bulk", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", items: [{ title: "사피엔스" }], category_slug: "book-review" }),
+    });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT category_id FROM content_recommendations WHERE title='사피엔스'").first<{ category_id: string }>();
+    expect(row?.category_id).toBe("c1");
+  });
+
   it("표기 변형(띄어쓰기·저자·괄호)은 정규화로 중복 skip", async () => {
     await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
     await env.DB.prepare("INSERT INTO content_recommendations (id, owner_sub, title, recommender, status, created_at, updated_at) VALUES ('e1','u1','부의 추월 차선','시스템','pending',1,1)").run();

@@ -49,8 +49,8 @@ async function existingTitles(db: Env["DB"], ownerSub: string): Promise<Set<stri
   return set;
 }
 
-// 중복 제거 후 batch INSERT. recommender 라벨을 인자로 받는다.
-async function insertItems(db: Env["DB"], ownerSub: string, items: RecommendationItem[], recommender: string) {
+// 중복 제거 후 batch INSERT. recommender 라벨과 category_id를 인자로 받는다.
+async function insertItems(db: Env["DB"], ownerSub: string, items: RecommendationItem[], recommender: string, categoryId: string | null = null) {
   const seen = await existingTitles(db, ownerSub);
   const now = Math.floor(Date.now() / 1000);
   const fresh: RecommendationItem[] = [];
@@ -65,9 +65,9 @@ async function insertItems(db: Env["DB"], ownerSub: string, items: Recommendatio
   if (fresh.length > 0) {
     await db.batch(fresh.map((it) =>
       db.prepare(
-        `INSERT INTO content_recommendations (id, owner_sub, title, author, recommender, status, note, created_at, updated_at)
-         VALUES (?,?,?,?,?,'pending',?,?,?)`,
-      ).bind(ulid(), ownerSub, it.title, it.author ?? null, recommender, it.note ?? null, now, now),
+        `INSERT INTO content_recommendations (id, owner_sub, title, author, recommender, status, note, created_at, updated_at, category_id)
+         VALUES (?,?,?,?,?,'pending',?,?,?,?)`,
+      ).bind(ulid(), ownerSub, it.title, it.author ?? null, recommender, it.note ?? null, now, now, categoryId),
     ));
   }
   return { added: fresh.length, skipped: skippedTitles.length, skipped_titles: skippedTitles };
@@ -123,7 +123,14 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
   app.post("/api/content/recommendations/service-bulk", requireService, async (c) => {
     const parsed = RecommendationServiceBulkSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text("bad request", 400);
-    const out = await insertItems(c.env.DB, parsed.data.owner_sub, parsed.data.items, "시스템");
+    const { owner_sub, items } = parsed.data;
+    let categoryId: string | null = null;
+    if (parsed.data.category_slug) {
+      const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE owner_sub=? AND slug=?")
+        .bind(owner_sub, parsed.data.category_slug).first<{ id: string }>();
+      categoryId = cat?.id ?? null;
+    }
+    const out = await insertItems(c.env.DB, owner_sub, items, "시스템", categoryId);
     return c.json(out);
   });
 

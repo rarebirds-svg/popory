@@ -61,10 +61,16 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const id = ulid();
     const now = Math.floor(Date.now() / 1000);
     const paramsJson = options ? JSON.stringify(options) : null;
+    let categoryId: string | null = null;
+    if (parsed.data.category_slug) {
+      const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE owner_sub=? AND slug=?")
+        .bind(owner_sub, parsed.data.category_slug).first<{ id: string }>();
+      categoryId = cat?.id ?? null;
+    }
     await c.env.DB.prepare(
-      `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?, ?)`,
-    ).bind(id, owner_sub, topic, platform, paramsJson, now, now).run();
+      `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, created_at, updated_at, category_id)
+       VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?)`,
+    ).bind(id, owner_sub, topic, platform, paramsJson, now, now, categoryId).run();
     if (recommendation_id) {
       await c.env.DB.prepare(
         "UPDATE content_recommendations SET status='used', updated_at=? WHERE id=? AND owner_sub=?",

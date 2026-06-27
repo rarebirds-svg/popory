@@ -571,4 +571,17 @@ describe("POST /api/content/jobs/service-create", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  it("category_slug를 category_id로 해석해 저장", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/jobs/service-create", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "원씽", platform: "youtube", category_slug: "book-review" }),
+    });
+    expect(res.status).toBe(201);
+    const job = await env.DB.prepare("SELECT category_id FROM content_jobs WHERE topic='원씽'").first<{ category_id: string }>();
+    expect(job?.category_id).toBe("c1");
+  });
 });

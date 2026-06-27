@@ -96,7 +96,7 @@ def run() -> int:
         return 0
 
     try:
-        out = client.post("/api/content/recommendations/service-bulk", json={"owner_sub": owner_sub, "items": items})
+        out = client.post("/api/content/recommendations/service-bulk", json={"owner_sub": owner_sub, "items": items, "category_slug": "book-review"})
     except PortalError as e:
         append_log(LOGS_DIR, {"cli": "recommend_weekly", "status": "post_fail", "error": str(e)})
         return 3

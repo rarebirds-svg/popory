@@ -31,6 +31,7 @@ export const JobServiceCreateSchema = z.object({
   platform: z.enum(["youtube", "shorts", "naver-blog"]),
   options: ContentJobOptionsSchema.optional(),
   recommendation_id: z.string().max(64).optional(),
+  category_slug: z.string().max(80).optional(),
 });
 export type JobServiceCreate = z.infer<typeof JobServiceCreateSchema>;
 

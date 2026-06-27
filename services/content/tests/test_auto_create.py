@@ -36,6 +36,7 @@ class _FakeClient:
 
     def __init__(self, fail_platform=None):
         self._fail_platform = fail_platform
+        self.posted = []
 
     def get(self, url):
         return {
@@ -46,6 +47,7 @@ class _FakeClient:
         }
 
     def post(self, url, json=None):
+        self.posted.append(json)
         platform = (json or {}).get("platform")
         if platform == self._fail_platform:
             raise PortalError(f"서버 오류 — {platform}", exit_code=500)
@@ -95,3 +97,13 @@ def test_run_all_success_status_ok(tmp_path, monkeypatch):
     assert len(summary["created"]) == 3
     platforms = {c["platform"] for c in summary["created"]}
     assert platforms == {"youtube", "shorts", "naver-blog"}
+
+
+def test_jobs_tagged_book_review(tmp_path, monkeypatch):
+    """service-create 페이로드 전체에 category_slug == 'book-review' 가 포함되어야 한다."""
+    monkeypatch.setenv("POPORY_RECOMMEND_OWNER", "u")
+    monkeypatch.setattr(auto_create, "LOGS_DIR", tmp_path)
+    fc = _FakeClient()
+    monkeypatch.setattr(auto_create, "_client", lambda: fc)
+    auto_create.run()
+    assert all(p.get("category_slug") == "book-review" for p in fc.posted)
