@@ -17,6 +17,25 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_categories");
   await env.DB.exec("DELETE FROM content_topics");
   await env.DB.exec("DELETE FROM content_jobs");
+  await env.DB.exec("DELETE FROM youtube_connections");
+});
+
+describe("카테고리 채널 폴백", () => {
+  it("카테고리 자체 바인딩 없으면 계정 youtube 연결로 폴백", async () => {
+    const ck = await userCookie("u1", "u1@e.com");
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책 리뷰','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO youtube_connections (sub, channel_id, channel_title, refresh_token, connected_at) VALUES ('u1','UCabc','포포리 책방','rt',1)").run();
+    const list = await (await SELF.fetch("https://e.com/api/content/categories", { headers: { cookie: ck } })).json<{ categories: { youtube_channel_title: string | null; youtube_channel_id: string | null }[] }>();
+    expect(list.categories[0].youtube_channel_title).toBe("포포리 책방");
+    expect(list.categories[0].youtube_channel_id).toBe("UCabc");
+  });
+
+  it("연결 없으면 null 유지", async () => {
+    const ck = await userCookie("u1", "u1@e.com");
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책 리뷰','book-review',0,1,1)").run();
+    const list = await (await SELF.fetch("https://e.com/api/content/categories", { headers: { cookie: ck } })).json<{ categories: { youtube_channel_title: string | null }[] }>();
+    expect(list.categories[0].youtube_channel_title).toBeNull();
+  });
 });
 
 describe("카테고리 CRUD", () => {
