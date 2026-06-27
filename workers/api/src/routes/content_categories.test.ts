@@ -16,6 +16,7 @@ async function userCookie(sub = "u1", email = "u1@e.com") {
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_categories");
   await env.DB.exec("DELETE FROM content_topics");
+  await env.DB.exec("DELETE FROM content_jobs");
 });
 
 describe("카테고리 CRUD", () => {
@@ -60,5 +61,15 @@ describe("카테고리 CRUD", () => {
   it("미인증 401", async () => {
     const res = await SELF.fetch("https://e.com/api/content/categories");
     expect(res.status).toBe(401);
+  });
+
+  it("자식 잡 category_id 있으면 running_count 반영", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('rc1','u1','러닝','running',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id) VALUES ('tp1','u1','테스트주제',1,'rc1')").run();
+    await env.DB.prepare("INSERT INTO content_jobs (id,owner_sub,topic,platform,status,created_at,updated_at,topic_id,category_id) VALUES ('j1','u1','테스트주제','naver-blog','queued',1,1,'tp1','rc1')").run();
+    const list = await (await SELF.fetch("https://e.com/api/content/categories", { headers: { cookie: ck } })).json<{ categories: { id: string; running_count: number }[] }>();
+    const cat = list.categories.find((c) => c.id === "rc1");
+    expect(cat?.running_count).toBeGreaterThanOrEqual(1);
   });
 });

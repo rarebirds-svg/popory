@@ -135,6 +135,7 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
       const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE owner_sub=? AND slug=?")
         .bind(owner_sub, parsed.data.category_slug).first<{ id: string }>();
       categoryId = cat?.id ?? null;
+      if (!categoryId) console.warn(`category_slug not found: ${parsed.data.category_slug} owner=${owner_sub}`);
     }
     const out = await insertItems(c.env.DB, owner_sub, items, "시스템", categoryId);
     return c.json(out);

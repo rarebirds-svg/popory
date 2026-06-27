@@ -39,9 +39,9 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
       const paramsJson = p.options ? JSON.stringify(p.options) : null;
       stmts.push(
         c.env.DB.prepare(
-          `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, topic_id, created_at, updated_at)
-           VALUES (?,?,?,?,'idle',?,?,?,?,?)`,
-        ).bind(jobId, u.sub, topic, p.platform, style_profile_id ?? null, paramsJson, topicId, now, now),
+          `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, topic_id, created_at, updated_at, category_id)
+           VALUES (?,?,?,?,'idle',?,?,?,?,?,?)`,
+        ).bind(jobId, u.sub, topic, p.platform, style_profile_id ?? null, paramsJson, topicId, now, now, category_id ?? null),
       );
       jobIds.push(jobId);
     }
@@ -77,7 +77,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     if (categoryId) { where.push("category_id=?"); vals.push(categoryId); }
     if (q) { where.push("topic LIKE ?"); vals.push(`%${q}%`); }
     const { results: topics } = await c.env.DB.prepare(
-      `SELECT id, topic, created_at FROM content_topics WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT id, topic, created_at FROM content_topics WHERE ${where.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
     ).bind(...vals, limit + 1, offset).all<{ id: string; topic: string; created_at: number }>();
     const hasMore = topics.length > limit;
     const page = hasMore ? topics.slice(0, limit) : topics;
@@ -108,8 +108,8 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
     const topicId = c.req.param("id");
-    const topic = await c.env.DB.prepare("SELECT id, owner_sub, topic FROM content_topics WHERE id=?")
-      .bind(topicId).first<{ id: string; owner_sub: string; topic: string }>();
+    const topic = await c.env.DB.prepare("SELECT id, owner_sub, topic, category_id FROM content_topics WHERE id=?")
+      .bind(topicId).first<{ id: string; owner_sub: string; topic: string; category_id: string | null }>();
     if (!topic || topic.owner_sub !== u.sub) return c.text("not found", 404);
     const parsed = TopicAddJobsSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text("bad request", 400);
@@ -134,9 +134,9 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
       const paramsJson = p.options ? JSON.stringify(p.options) : null;
       stmts.push(
         c.env.DB.prepare(
-          `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, topic_id, created_at, updated_at)
-           VALUES (?,?,?,?,'idle',?,?,?,?,?)`,
-        ).bind(jobId, u.sub, topic.topic, p.platform, style_profile_id ?? null, paramsJson, topicId, now, now),
+          `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, topic_id, created_at, updated_at, category_id)
+           VALUES (?,?,?,?,'idle',?,?,?,?,?,?)`,
+        ).bind(jobId, u.sub, topic.topic, p.platform, style_profile_id ?? null, paramsJson, topicId, now, now, topic.category_id ?? null),
       );
       addedJobIds.push(jobId);
     }

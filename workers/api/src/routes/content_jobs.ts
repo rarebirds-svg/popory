@@ -66,6 +66,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
       const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE owner_sub=? AND slug=?")
         .bind(owner_sub, parsed.data.category_slug).first<{ id: string }>();
       categoryId = cat?.id ?? null;
+      if (!categoryId) console.warn(`category_slug not found: ${parsed.data.category_slug} owner=${owner_sub}`);
     }
     await c.env.DB.prepare(
       `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, created_at, updated_at, category_id)
@@ -91,7 +92,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     if (q) { where.push("topic LIKE ?"); vals.push(`%${q}%`); }
     const { results } = await c.env.DB.prepare(
       `SELECT id, topic, platform, status, youtube_status, instagram_status, facebook_status, created_at, updated_at FROM content_jobs
-       WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+       WHERE ${where.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
     ).bind(...vals, limit + 1, offset).all();
     const hasMore = results.length > limit;
     const page = hasMore ? results.slice(0, limit) : results;
