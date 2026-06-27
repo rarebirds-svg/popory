@@ -12,12 +12,16 @@ AREA = "content-worker"
 
 
 def select_assignments(recs: list[dict]) -> list[tuple[str, dict]]:
-    """오래된 순 recs에서 youtube·shorts 배정. 1건이면 둘 다 같은 주제, 0건이면 빈 리스트."""
+    """오래된 순 recs에서 youtube·shorts·naver-blog 배정. 블로그는 영상과 같은 주제 재활용.
+
+    1건이면 셋 다 같은 주제, 0건이면 빈 리스트. 대기열 소모는 영상·쇼츠 2건만(블로그는 영상 주제 재사용).
+    """
     if not recs:
         return []
     yt = recs[0]
     sh = recs[1] if len(recs) >= 2 else recs[0]
-    return [("youtube", yt), ("shorts", sh)]
+    blog = recs[0]
+    return [("youtube", yt), ("shorts", sh), ("naver-blog", blog)]
 
 
 def _client() -> PortalClient:
