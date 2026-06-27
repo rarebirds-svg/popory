@@ -16,7 +16,7 @@ export default async function ContentStatusPage() {
     <div>
       <Header email={user.email} role={user.role} apiBase={API_BASE} />
       <main className="mx-auto max-w-3xl px-4 py-10">
-        <Kicker>컨텐츠 관리</Kicker>
+        <Kicker>컨텐츠 Factory</Kicker>
         <div className="mt-3 flex items-baseline gap-3">
           <h1 className="font-serif text-3xl font-semibold tracking-tight text-popory-fg">생성 상태</h1>
           <Link href="/content" className="ml-auto text-sm text-popory-muted hover:text-popory-fg">← 내 컨텐츠</Link>
