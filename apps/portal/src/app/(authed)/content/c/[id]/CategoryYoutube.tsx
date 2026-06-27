@@ -13,7 +13,11 @@ export function CategoryYoutube({ categoryId, channelTitle }: { categoryId: stri
     try {
       const res = await fetch(`${API_BASE}/api/content/categories/${categoryId}/youtube`, { method: "DELETE", credentials: "include" });
       if (res.ok) router.refresh(); else alert("해제 실패");
-    } finally { setBusy(false); }
+    } catch {
+      alert("해제 실패");
+    } finally {
+      setBusy(false);
+    }
   }
   if (channelTitle) {
     return (

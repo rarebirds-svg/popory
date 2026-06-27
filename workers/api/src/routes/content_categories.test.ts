@@ -35,6 +35,14 @@ describe("카테고리 채널 폴백", () => {
     const list = await (await SELF.fetch("https://e.com/api/content/categories", { headers: { cookie: ck } })).json<{ categories: { youtube_channel_title: string | null }[] }>();
     expect(list.categories[0].youtube_channel_title).toBeNull();
   });
+
+  it("자체 바인딩 있으면 그 채널명·ID 반환", async () => {
+    const ck = await userCookie("u1", "u1@e.com");
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,youtube_channel_id,youtube_channel_title,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,'UCx','포포리 책방',1,1)").run();
+    const list = await (await SELF.fetch("https://e.com/api/content/categories", { headers: { cookie: ck } })).json<{ categories: { youtube_channel_title: string | null; youtube_channel_id: string | null }[] }>();
+    expect(list.categories[0].youtube_channel_title).toBe("포포리 책방");
+    expect(list.categories[0].youtube_channel_id).toBe("UCx");
+  });
 });
 
 describe("카테고리 CRUD", () => {

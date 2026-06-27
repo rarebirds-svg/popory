@@ -77,7 +77,7 @@ export function mountContentYoutube(app: Hono<{ Bindings: Env; Variables: Vars }
     let sub: string; let categoryId: string | null = null;
     try {
       const p = JSON.parse(raw) as { sub?: string; category_id?: string };
-      if (p && typeof p === "object" && p.sub) { sub = p.sub; categoryId = p.category_id ?? null; } else { sub = raw; }
+      if (p && typeof p === "object" && typeof (p as { sub?: unknown }).sub === "string") { sub = p.sub as string; categoryId = p.category_id ?? null; } else { sub = raw; }
     } catch { sub = raw; }
     const tokRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
