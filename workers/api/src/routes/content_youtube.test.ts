@@ -1,6 +1,7 @@
 // YouTube 연결 라우트 — connect 리다이렉트·status·disconnect·인증.
 import { env, SELF } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
+import { bindCategoryYoutube } from "./content_youtube";
 import { ensureActiveKey } from "../db/signing_keys";
 import { signSession } from "@popory/auth";
 
@@ -16,7 +17,11 @@ async function userCookie(sub = "u1", email = "u1@e.com") {
   return `popory_session=${t}`;
 }
 
-beforeEach(async () => { await env.DB.exec("DELETE FROM youtube_connections"); });
+beforeEach(async () => {
+  await env.DB.exec("DELETE FROM youtube_connections");
+  await env.DB.exec("DELETE FROM content_categories");
+  await env.DB.exec("DELETE FROM category_youtube_tokens");
+});
 
 describe("YouTube connect", () => {
   it("connect 는 google 인가로 302 + state KV 저장", async () => {
@@ -31,6 +36,56 @@ describe("YouTube connect", () => {
   it("미인증 connect 는 401", async () => {
     const res = await SELF.fetch("https://example.com/api/content/youtube/connect", { redirect: "manual" });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("카테고리별 youtube connect/disconnect", () => {
+  it("connect 는 state에 category_id 담아 google 302", async () => {
+    const ck = await userCookie("u1", "u1@e.com");
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    const res = await SELF.fetch("https://example.com/api/content/categories/c1/youtube/connect", { headers: { cookie: ck }, redirect: "manual" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("accounts.google.com");
+  });
+  it("타인 카테고리 connect 404", async () => {
+    const ck = await userCookie("u1", "u1@e.com");
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('other','other@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c2','other','x','x',0,1,1)").run();
+    const res = await SELF.fetch("https://example.com/api/content/categories/c2/youtube/connect", { headers: { cookie: ck }, redirect: "manual" });
+    expect(res.status).toBe(404);
+  });
+  it("disconnect 는 채널 컬럼·토큰 정리 204", async () => {
+    const ck = await userCookie("u1", "u1@e.com");
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,youtube_channel_id,youtube_channel_title,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,'UCx','채널',1,1)").run();
+    await env.DB.prepare("INSERT INTO category_youtube_tokens (category_id, refresh_token, connected_at) VALUES ('c1','enc',1)").run();
+    const res = await SELF.fetch("https://example.com/api/content/categories/c1/youtube", { method: "DELETE", headers: { cookie: ck } });
+    expect(res.status).toBe(204);
+    const cat = await env.DB.prepare("SELECT youtube_channel_title FROM content_categories WHERE id='c1'").first<{ youtube_channel_title: string | null }>();
+    expect(cat?.youtube_channel_title).toBeNull();
+    const tok = await env.DB.prepare("SELECT category_id FROM category_youtube_tokens WHERE category_id='c1'").first();
+    expect(tok).toBeNull();
+  });
+});
+
+describe("bindCategoryYoutube", () => {
+  it("소유 카테고리면 채널 컬럼+토큰 기록 후 true", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    const ok = await bindCategoryYoutube(env.DB, { sub: "u1", categoryId: "c1", channelId: "UCx", channelTitle: "포포리 책방", encToken: "enc", now: 100 });
+    expect(ok).toBe(true);
+    const cat = await env.DB.prepare("SELECT youtube_channel_id, youtube_channel_title FROM content_categories WHERE id='c1'").first<{ youtube_channel_id: string; youtube_channel_title: string }>();
+    expect(cat?.youtube_channel_title).toBe("포포리 책방");
+    expect(cat?.youtube_channel_id).toBe("UCx");
+    const tok = await env.DB.prepare("SELECT refresh_token FROM category_youtube_tokens WHERE category_id='c1'").first<{ refresh_token: string }>();
+    expect(tok?.refresh_token).toBe("enc");
+  });
+  it("타인 카테고리면 false + 미기록", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('other','other@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c2','other','x','x',0,1,1)").run();
+    const ok = await bindCategoryYoutube(env.DB, { sub: "u1", categoryId: "c2", channelId: "UCx", channelTitle: "t", encToken: "enc", now: 100 });
+    expect(ok).toBe(false);
+    const tok = await env.DB.prepare("SELECT category_id FROM category_youtube_tokens WHERE category_id='c2'").first();
+    expect(tok).toBeNull();
   });
 });
 

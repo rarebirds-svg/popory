@@ -43,7 +43,7 @@ export default async function CategoryDetail({ params }: { params: Promise<{ id:
           <h1 className="font-serif text-3xl font-semibold tracking-tight text-popory-fg">{category.icon ?? "📁"} {category.name}</h1>
           <Link href={`/content/new?category=${id}`} className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90">+ 새 콘텐츠</Link>
         </div>
-        <CategoryChannels youtube={category.youtube_channel_title} instagram={category.instagram_username} />
+        <CategoryChannels categoryId={id} youtube={category.youtube_channel_title} instagram={category.instagram_username} />
 
         <ContentList categoryId={id} initialTopics={topics} initialTopicsHasMore={topicsHasMore} initialJobs={jobs} initialJobsHasMore={jobsHasMore} />
 

@@ -17,11 +17,13 @@ export function mountContentYoutubeUpload(app: Hono<{ Bindings: Env; Variables: 
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
     const id = c.req.param("id");
-    const job = await c.env.DB.prepare("SELECT id, owner_sub, platform FROM content_jobs WHERE id=?").bind(id).first<{ id: string; owner_sub: string; platform: string }>();
+    const job = await c.env.DB.prepare("SELECT id, owner_sub, platform, category_id FROM content_jobs WHERE id=?").bind(id).first<{ id: string; owner_sub: string; platform: string; category_id: string | null }>();
     if (!job || job.owner_sub !== u.sub) return c.text("not found", 404);
     if (job.platform !== "youtube" && job.platform !== "shorts") return c.text("not a video", 400);
-    const conn = await c.env.DB.prepare("SELECT sub FROM youtube_connections WHERE sub=?").bind(u.sub).first();
-    if (!conn) return c.text("youtube not connected", 409);
+    const conn = job.category_id
+      ? await c.env.DB.prepare("SELECT category_id FROM category_youtube_tokens WHERE category_id=?").bind(job.category_id).first()
+      : null;
+    if (!conn) return c.text("category youtube not connected", 409);
     const vid = await c.env.R2.head(`content/video/${id}.mp4`);
     if (!vid) return c.text("no video", 409);
     const body = (await c.req.json().catch(() => ({}))) as { privacy?: string };
@@ -44,10 +46,12 @@ export function mountContentYoutubeUpload(app: Hono<{ Bindings: Env; Variables: 
     // 클레임 시 updated_at 을 현재로 스탬프 → 리스 만료 판정의 기준점.
     const claim = await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='uploading', updated_at=? WHERE id=? AND youtube_status='requested'").bind(now, cand.id).run();
     if (!claim.meta.changes) return c.body(null, 204);
-    const job = await c.env.DB.prepare("SELECT id, owner_sub, meta_json, youtube_privacy FROM content_jobs WHERE id=?").bind(cand.id).first<{ id: string; owner_sub: string; meta_json: string | null; youtube_privacy: string | null }>();
-    const conn = await c.env.DB.prepare("SELECT refresh_token FROM youtube_connections WHERE sub=?").bind(job!.owner_sub).first<{ refresh_token: string }>();
+    const job = await c.env.DB.prepare("SELECT id, owner_sub, meta_json, youtube_privacy, category_id FROM content_jobs WHERE id=?").bind(cand.id).first<{ id: string; owner_sub: string; meta_json: string | null; youtube_privacy: string | null; category_id: string | null }>();
+    const conn = job!.category_id
+      ? await c.env.DB.prepare("SELECT refresh_token FROM category_youtube_tokens WHERE category_id=?").bind(job!.category_id).first<{ refresh_token: string }>()
+      : null;
     if (!conn) {
-      await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='failed', youtube_error='연결 없음' WHERE id=?").bind(cand.id).run();
+      await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='failed', youtube_error='카테고리 유튜브 미연결' WHERE id=?").bind(cand.id).run();
       return c.body(null, 204);
     }
     let accessToken: string;
