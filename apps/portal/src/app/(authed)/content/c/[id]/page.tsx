@@ -50,7 +50,7 @@ export default async function CategoryDetail({ params }: { params: Promise<{ id:
         <section className="mt-12">
           <div className="flex items-baseline gap-3">
             <Kicker>추천 컨텐츠</Kicker>
-            <span className="ml-auto"><BulkAddRecommendations /></span>
+            <span className="ml-auto"><BulkAddRecommendations categoryId={id} /></span>
           </div>
           {recommendations.length === 0 ? (
             <p className="mt-4 text-sm text-popory-muted">아직 추천 컨텐츠가 없습니다.</p>

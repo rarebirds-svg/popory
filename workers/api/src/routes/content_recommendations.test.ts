@@ -72,6 +72,20 @@ describe("GET /api/content/recommendations", () => {
 });
 
 describe("POST /api/content/recommendations/bulk", () => {
+  it("category_id 쿼리 파람이 있으면 해당 카테고리로 저장", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/bulk?category_id=c1", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ items: [{ title: "사피엔스" }] }),
+    });
+    expect(res.status).toBe(200);
+    const out = await res.json<{ added: number }>() ;
+    expect(out.added).toBe(1);
+    const row = await env.DB.prepare("SELECT category_id FROM content_recommendations WHERE title='사피엔스'").first<{ category_id: string }>();
+    expect(row?.category_id).toBe("c1");
+  });
+
   it("text 줄 파싱 — 마지막 ' - '로 제목/저자 분리, 기존 토픽·추천과 중복 skip", async () => {
     const ck = await userCookie();
     // 기존 토픽 1건 — 중복 대상

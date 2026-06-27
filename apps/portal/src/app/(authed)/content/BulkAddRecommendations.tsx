@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
 
-export function BulkAddRecommendations() {
+export function BulkAddRecommendations({ categoryId }: { categoryId?: string } = {}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
@@ -16,7 +16,10 @@ export function BulkAddRecommendations() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(`${API_BASE}/api/content/recommendations/bulk`, {
+      const url = categoryId
+        ? `${API_BASE}/api/content/recommendations/bulk?category_id=${encodeURIComponent(categoryId)}`
+        : `${API_BASE}/api/content/recommendations/bulk`;
+      const res = await fetch(url, {
         method: "POST", credentials: "include", headers: { "content-type": "application/json" },
         body: JSON.stringify({ text }),
       });

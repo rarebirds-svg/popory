@@ -107,6 +107,12 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
   app.post("/api/content/recommendations/bulk", async (c) => {
     const denied = requireAuth(c); if (denied) return denied;
     const u = c.get("user")!;
+    let bulkCategoryId: string | null = null;
+    const qCat = c.req.query("category_id");
+    if (qCat) {
+      const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE id=? AND owner_sub=?").bind(qCat, u.sub).first<{ id: string }>();
+      bulkCategoryId = cat?.id ?? null;
+    }
     const parsed = RecommendationBulkSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text("bad request", 400);
     let items: RecommendationItem[];
@@ -116,7 +122,7 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
       items = parsed.data.items;
     }
     if (items.length === 0) return c.json({ added: 0, skipped: 0, skipped_titles: [] });
-    const out = await insertItems(c.env.DB, u.sub, items, "대공");
+    const out = await insertItems(c.env.DB, u.sub, items, "대공", bulkCategoryId);
     return c.json(out);
   });
 
