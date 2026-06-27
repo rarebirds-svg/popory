@@ -20,6 +20,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_recommendations");
   await env.DB.exec("DELETE FROM content_jobs");
   await env.DB.exec("DELETE FROM content_topics");
+  await env.DB.exec("DELETE FROM content_categories");
 });
 
 describe("POST /api/content/recommendations", () => {
@@ -197,6 +198,20 @@ describe("GET /api/content/recommendations/service", () => {
   it("서비스 토큰 없으면 401", async () => {
     const res = await SELF.fetch("https://e.com/api/content/recommendations/service?owner_sub=u1");
     expect(res.status).toBe(401);
+  });
+});
+
+describe("GET /api/content/recommendations?category_id=", () => {
+  it("카테고리로 pending 필터", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c2','u1','영화','movie',1,1,1)").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id,owner_sub,title,recommender,status,created_at,updated_at,category_id) VALUES ('a','u1','책것','시스템','pending',1,1,'c1')").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id,owner_sub,title,recommender,status,created_at,updated_at,category_id) VALUES ('b','u1','영화것','시스템','pending',2,2,'c2')").run();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations?category_id=c1", { headers: { cookie: ck } });
+    const body = await res.json<{ recommendations: { title: string }[] }>();
+    expect(body.recommendations.length).toBe(1);
+    expect(body.recommendations[0].title).toBe("책것");
   });
 });
 

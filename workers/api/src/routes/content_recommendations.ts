@@ -77,10 +77,13 @@ export function mountContentRecommendations(app: Hono<HonoEnv>) {
   app.get("/api/content/recommendations", async (c) => {
     const denied = requireAuth(c); if (denied) return denied;
     const u = c.get("user")!;
+    const categoryId = c.req.query("category_id");
+    const where: string[] = ["owner_sub=?", "status='pending'"]; const vals: string[] = [u.sub];
+    if (categoryId) { where.push("category_id=?"); vals.push(categoryId); }
     const { results } = await c.env.DB.prepare(
       `SELECT id, title, author, recommender, status, note, created_at, updated_at
-       FROM content_recommendations WHERE owner_sub=? AND status='pending' ORDER BY created_at DESC`,
-    ).bind(u.sub).all();
+       FROM content_recommendations WHERE ${where.join(" AND ")} ORDER BY created_at DESC`,
+    ).bind(...vals).all();
     return c.json({ recommendations: results });
   });
 

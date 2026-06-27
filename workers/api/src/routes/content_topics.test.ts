@@ -21,6 +21,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_jobs");
   await env.DB.exec("DELETE FROM content_topics");
   await env.DB.exec("DELETE FROM content_recommendations");
+  await env.DB.exec("DELETE FROM content_categories");
 });
 
 describe("POST /api/content/topics", () => {
@@ -267,6 +268,32 @@ describe("POST /api/content/topics/:id/jobs", () => {
     expect(out.skipped_platforms).toContain("youtube");
     const { results } = await env.DB.prepare("SELECT platform FROM content_jobs WHERE topic_id=? AND platform='youtube'").bind(topicId).all();
     expect(results).toHaveLength(1);
+  });
+});
+
+describe("GET /api/content/topics 카테고리·검색·페이지네이션", () => {
+  it("category_id로 필터하고 has_more 반환", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    for (let i = 0; i < 3; i++) {
+      await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id) VALUES (?,?,?,?,?)").bind(`t${i}`, "u1", `주제${i}`, 100 + i, "c1").run();
+    }
+    await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id) VALUES ('o1','u1','다른카테','9',NULL)").run();
+    const res = await SELF.fetch("https://e.com/api/content/topics?category_id=c1&limit=2&offset=0", { headers: { cookie: ck } });
+    const body = await res.json<{ topics: { id: string }[]; has_more: boolean }>();
+    expect(body.topics.length).toBe(2);
+    expect(body.has_more).toBe(true);
+  });
+
+  it("q로 topic 검색", async () => {
+    const ck = await userCookie();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id) VALUES ('t1','u1','원씽',1,'c1')").run();
+    await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id) VALUES ('t2','u1','사피엔스',2,'c1')").run();
+    const res = await SELF.fetch("https://e.com/api/content/topics?category_id=c1&q=" + encodeURIComponent("원씽"), { headers: { cookie: ck } });
+    const body = await res.json<{ topics: { topic: string }[] }>();
+    expect(body.topics.length).toBe(1);
+    expect(body.topics[0].topic).toBe("원씽");
   });
 });
 

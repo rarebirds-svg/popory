@@ -42,9 +42,9 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const now = Math.floor(Date.now() / 1000);
     const paramsJson = parsed.data.options ? JSON.stringify(parsed.data.options) : null;
     await c.env.DB.prepare(
-      `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
-    ).bind(id, u.sub, parsed.data.topic, parsed.data.platform, parsed.data.style_profile_id ?? null, paramsJson, now, now).run();
+      `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, created_at, updated_at, category_id)
+       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+    ).bind(id, u.sub, parsed.data.topic, parsed.data.platform, parsed.data.style_profile_id ?? null, paramsJson, now, now, parsed.data.category_id ?? null).run();
     for (const s of parsed.data.sources ?? []) {
       await c.env.DB.prepare(
         `INSERT INTO content_sources (id, job_id, kind, url, title, note, added_by, created_at)
@@ -76,11 +76,20 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
   app.get("/api/content/jobs", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
+    const categoryId = c.req.query("category_id");
+    const q = c.req.query("q")?.trim();
+    const limit = Math.min(Math.max(1, Math.floor(Number(c.req.query("limit") ?? "20")) || 20), 100);
+    const offset = Math.max(0, Math.floor(Number(c.req.query("offset") ?? "0")) || 0);
+    const where: string[] = ["owner_sub=?", "topic_id IS NULL"]; const vals: (string | number)[] = [u.sub];
+    if (categoryId) { where.push("category_id=?"); vals.push(categoryId); }
+    if (q) { where.push("topic LIKE ?"); vals.push(`%${q}%`); }
     const { results } = await c.env.DB.prepare(
       `SELECT id, topic, platform, status, youtube_status, instagram_status, facebook_status, created_at, updated_at FROM content_jobs
-       WHERE owner_sub=? AND topic_id IS NULL ORDER BY created_at DESC LIMIT 100`,
-    ).bind(u.sub).all();
-    return c.json({ jobs: results });
+       WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    ).bind(...vals, limit + 1, offset).all();
+    const hasMore = results.length > limit;
+    const page = hasMore ? results.slice(0, limit) : results;
+    return c.json({ jobs: page, has_more: hasMore });
   });
 
   app.get("/api/content/jobs/:id", async (c) => {

@@ -19,7 +19,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     const u = c.get("user")!;
     const parsed = TopicCreateSchema.safeParse(await c.req.json());
     if (!parsed.success) return c.text("bad request", 400);
-    const { topic, style_profile_id, sources, platforms } = parsed.data;
+    const { topic, style_profile_id, sources, platforms, category_id } = parsed.data;
     if (style_profile_id) {
       const sp = await c.env.DB.prepare("SELECT id FROM style_profiles WHERE id=? AND owner_sub=?")
         .bind(style_profile_id, u.sub).first();
@@ -30,8 +30,8 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     // 주제·작업·소스 INSERT를 batch(암묵적 트랜잭션)로 묶는다 — 중간 실패 시
     // 전부 롤백되어, 작업 없는 빈 주제가 남는 일이 없게 한다.
     const stmts = [
-      c.env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at) VALUES (?,?,?,?)")
-        .bind(topicId, u.sub, topic, now),
+      c.env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at, category_id) VALUES (?,?,?,?,?)")
+        .bind(topicId, u.sub, topic, now, category_id ?? null),
     ];
     const jobIds: string[] = [];
     for (const p of platforms) {
@@ -69,16 +69,25 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
   app.get("/api/content/topics", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
+    const categoryId = c.req.query("category_id");
+    const q = c.req.query("q")?.trim();
+    const limit = Math.min(Math.max(1, Math.floor(Number(c.req.query("limit") ?? "20")) || 20), 100);
+    const offset = Math.max(0, Math.floor(Number(c.req.query("offset") ?? "0")) || 0);
+    const where: string[] = ["owner_sub=?"]; const vals: (string | number)[] = [u.sub];
+    if (categoryId) { where.push("category_id=?"); vals.push(categoryId); }
+    if (q) { where.push("topic LIKE ?"); vals.push(`%${q}%`); }
     const { results: topics } = await c.env.DB.prepare(
-      "SELECT id, topic, created_at FROM content_topics WHERE owner_sub=? ORDER BY created_at DESC LIMIT 100",
-    ).bind(u.sub).all<{ id: string; topic: string; created_at: number }>();
-    const enriched = await Promise.all(topics.map(async (t) => {
+      `SELECT id, topic, created_at FROM content_topics WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    ).bind(...vals, limit + 1, offset).all<{ id: string; topic: string; created_at: number }>();
+    const hasMore = topics.length > limit;
+    const page = hasMore ? topics.slice(0, limit) : topics;
+    const enriched = await Promise.all(page.map(async (t) => {
       const { results: jobs } = await c.env.DB.prepare(
         "SELECT id, platform, status, youtube_status, instagram_status, facebook_status FROM content_jobs WHERE topic_id=? ORDER BY created_at",
-      ).bind(t.id).all<{ id: string; platform: string; status: string; youtube_status: string | null; instagram_status: string | null; facebook_status: string | null }>();
+      ).bind(t.id).all();
       return { ...t, jobs };
     }));
-    return c.json({ topics: enriched });
+    return c.json({ topics: enriched, has_more: hasMore });
   });
 
   app.get("/api/content/topics/:id", async (c) => {
