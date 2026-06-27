@@ -7,7 +7,7 @@ import { API_BASE } from "@/lib/env";
 type AreaCard = { key: string; label: string; desc: string; href: (apiBase: string) => string; external?: boolean };
 
 const AREAS: AreaCard[] = [
-  { key: "brief", label: "뉴스 브리핑", desc: "부동산, 공정거래, 컴플라이언스, AI Tech 등 분야별 뉴스 요약.", href: () => "/p/brief" },
+  { key: "brief", label: "뉴스 브리핑", desc: "부동산, 공정거래, 컴플라이언스, AI Tech까지. 핵심만 빠르게 정리한 분야별 뉴스 브리핑.", href: () => "/p/brief" },
   { key: "content", label: "컨텐츠 Factory", desc: "책·영화 등 카테고리별로 블로그·영상·쇼츠를 만들고 채널에 올립니다.", href: () => "/content" },
   { key: "finance", label: "자산 관리 (예정)", desc: "우리 가족의 금융·부동산 자산 포트폴리오를 관리합니다.", href: (b) => `${b}/go/finance` },
   { key: "baduk", label: "잉크바둑", desc: "바둑 기보와 학습을 즐기는 잉크바둑 서비스.", href: () => "https://www.inkbaduk.com", external: true },
