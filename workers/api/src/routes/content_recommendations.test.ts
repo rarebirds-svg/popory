@@ -119,6 +119,34 @@ describe("POST /api/content/recommendations/service-bulk", () => {
   });
 });
 
+describe("GET /api/content/recommendations/service", () => {
+  it("서비스 토큰으로 owner pending을 오래된 순 반환", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    // created_at 이 작을수록 오래됨. 일부러 역순 삽입.
+    await env.DB.prepare("INSERT INTO content_recommendations (id, owner_sub, title, recommender, status, created_at, updated_at) VALUES ('r2','u1','새것','시스템','pending',200,200)").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id, owner_sub, title, recommender, status, created_at, updated_at) VALUES ('r1','u1','오래된것','시스템','pending',100,100)").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id, owner_sub, title, recommender, status, created_at, updated_at) VALUES ('r3','u1','쓴것','시스템','used',150,150)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/service?owner_sub=u1", {
+      headers: { authorization: `Bearer ${tok}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json<{ recommendations: { id: string; title: string }[] }>();
+    expect(body.recommendations.map((r) => r.title)).toEqual(["오래된것", "새것"]); // used 제외, ASC
+  });
+
+  it("owner_sub 누락 400", async () => {
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/service", { headers: { authorization: `Bearer ${tok}` } });
+    expect(res.status).toBe(400);
+  });
+
+  it("서비스 토큰 없으면 401", async () => {
+    const res = await SELF.fetch("https://e.com/api/content/recommendations/service?owner_sub=u1");
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("PATCH/DELETE/dismiss /api/content/recommendations/:id", () => {
   async function makeOne(ck: string, title = "원본") {
     await SELF.fetch("https://e.com/api/content/recommendations", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ title }) });
