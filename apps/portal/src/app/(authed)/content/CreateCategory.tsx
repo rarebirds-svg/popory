@@ -13,13 +13,18 @@ export function CreateCategory() {
   async function submit() {
     if (!name.trim() || busy) return;
     setBusy(true);
-    const res = await fetch(`${API_BASE}/api/content/categories`, {
-      method: "POST", credentials: "include", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: name.trim(), icon: icon.trim() || undefined }),
-    });
-    setBusy(false);
-    if (res.ok) { setName(""); setIcon(""); setOpen(false); router.refresh(); }
-    else alert("카테고리 생성 실패");
+    try {
+      const res = await fetch(`${API_BASE}/api/content/categories`, {
+        method: "POST", credentials: "include", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), icon: icon.trim() || undefined }),
+      });
+      if (res.ok) { setName(""); setIcon(""); setOpen(false); router.refresh(); }
+      else alert("카테고리 생성 실패");
+    } catch {
+      alert("카테고리 생성 실패");
+    } finally {
+      setBusy(false);
+    }
   }
   if (!open) return <button onClick={() => setOpen(true)} className="rounded-md border border-popory-border px-3 py-2 text-sm text-popory-fg hover:bg-popory-bg2">+ 카테고리</button>;
   return (
