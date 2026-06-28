@@ -57,4 +57,4 @@ def test_voice_map_uses_chirp3hd():
     from popory_content.options import VOICE
     assert VOICE["female-calm"] == "ko-KR-Chirp3-HD-Aoede"
     assert VOICE["female-bright"] == "ko-KR-Chirp3-HD-Leda"
-    assert VOICE["male"] == "ko-KR-Chirp3-HD-Charon"
+    assert VOICE["male"] == "ko-KR-Neural2-C"
