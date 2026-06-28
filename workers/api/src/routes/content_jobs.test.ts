@@ -585,6 +585,29 @@ describe("result 자동 업로드 트리거", () => {
   });
 });
 
+describe("썸네일 PUT/GET", () => {
+  it("서비스가 PUT 후 GET으로 동일 바이트 반환", async () => {
+    const tok = await workerToken();
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0x01, 0x02]); // JPEG 매직 흉내
+    const put = await SELF.fetch("https://e.com/api/content/jobs/jthumb/thumbnail", {
+      method: "PUT", headers: { authorization: `Bearer ${tok}`, "content-type": "image/jpeg" }, body: bytes,
+    });
+    expect(put.status).toBe(204);
+    const get = await SELF.fetch("https://e.com/api/content/jobs/jthumb/thumbnail", { headers: { authorization: `Bearer ${tok}` } });
+    expect(get.status).toBe(200);
+    expect(new Uint8Array(await get.arrayBuffer())).toEqual(bytes);
+  });
+  it("없으면 404", async () => {
+    const tok = await workerToken();
+    const get = await SELF.fetch("https://e.com/api/content/jobs/none/thumbnail", { headers: { authorization: `Bearer ${tok}` } });
+    expect(get.status).toBe(404);
+  });
+  it("PUT 미서비스 401", async () => {
+    const put = await SELF.fetch("https://e.com/api/content/jobs/x/thumbnail", { method: "PUT", headers: { "content-type": "image/jpeg" }, body: new Uint8Array([1]) });
+    expect(put.status).toBe(401);
+  });
+});
+
 describe("POST /api/content/jobs/service-create", () => {
   it("서비스 토큰으로 잡 생성 + 추천 used 표시", async () => {
     await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
