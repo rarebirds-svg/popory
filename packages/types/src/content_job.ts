@@ -82,3 +82,12 @@ export const TopicAddJobsSchema = z.object({
   style_profile_id: z.string().max(64).optional(),
 });
 export type TopicAddJobs = z.infer<typeof TopicAddJobsSchema>;
+
+export const TopicServiceCreateSchema = z.object({
+  owner_sub: z.string().min(1).max(64),
+  topic: z.string().min(1).max(200),
+  category_slug: z.string().max(80).optional(),
+  platforms: z.array(TopicPlatformSchema).min(1).max(5),
+  recommendation_id: z.string().max(64).optional(),
+});
+export type TopicServiceCreate = z.infer<typeof TopicServiceCreateSchema>;
