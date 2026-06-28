@@ -1,9 +1,9 @@
 // 주제 그룹 CRUD — 주제 생성 시 플랫폼별 idle 작업 일괄 생성.
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { TopicCreateSchema, TopicAddJobsSchema } from "@popory/types";
+import { TopicCreateSchema, TopicAddJobsSchema, TopicServiceCreateSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
-import type { ServiceVars } from "../middleware/service_auth";
+import { requireService, type ServiceVars } from "../middleware/service_auth";
 import { deleteContentJob } from "../db/content_delete";
 import { withD1Retry } from "../db/d1_retry";
 
@@ -63,6 +63,46 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     await c.env.DB.prepare(
       "UPDATE content_recommendations SET status='registered', updated_at=? WHERE owner_sub=? AND status='pending' AND (title=? OR title=?)",
     ).bind(now, u.sub, topic, recTitle).run().catch(() => {});
+    return c.json({ topic_id: topicId, job_ids: jobIds }, 201);
+  });
+
+  app.post("/api/content/topics/service-create", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== "content-worker") return c.text("forbidden", 403);
+    const parsed = TopicServiceCreateSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.text("bad request", 400);
+    const { owner_sub, topic, category_slug, platforms, recommendation_id } = parsed.data;
+    let categoryId: string | null = null;
+    if (category_slug) {
+      const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE owner_sub=? AND slug=?")
+        .bind(owner_sub, category_slug).first<{ id: string }>();
+      categoryId = cat?.id ?? null;
+      if (!categoryId) console.warn(`category_slug not found: ${category_slug} owner=${owner_sub}`);
+    }
+    const topicId = ulid();
+    const now = Math.floor(Date.now() / 1000);
+    const stmts = [
+      c.env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at, category_id) VALUES (?,?,?,?,?)")
+        .bind(topicId, owner_sub, topic, now, categoryId),
+    ];
+    const jobIds: string[] = [];
+    for (const p of platforms) {
+      const jobId = ulid();
+      const paramsJson = p.options ? JSON.stringify(p.options) : null;
+      const autoUpload = (p.platform === "youtube" || p.platform === "shorts") ? 1 : 0;
+      stmts.push(
+        c.env.DB.prepare(
+          `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, style_profile_id, params_json, topic_id, created_at, updated_at, category_id, auto_upload)
+           VALUES (?,?,?,?,'queued',NULL,?,?,?,?,?,?)`,
+        ).bind(jobId, owner_sub, topic, p.platform, paramsJson, topicId, now, now, categoryId, autoUpload),
+      );
+      jobIds.push(jobId);
+    }
+    await withD1Retry(() => c.env.DB.batch(stmts));
+    if (recommendation_id) {
+      await c.env.DB.prepare("UPDATE content_recommendations SET status='used', updated_at=? WHERE id=? AND owner_sub=?")
+        .bind(now, recommendation_id, owner_sub).run().catch(() => {});
+    }
     return c.json({ topic_id: topicId, job_ids: jobIds }, 201);
   });
 

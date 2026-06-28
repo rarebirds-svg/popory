@@ -2,7 +2,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
 import { ensureActiveKey } from "../db/signing_keys";
-import { signSession } from "@popory/auth";
+import { signSession, signAreaToken } from "@popory/auth";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -14,6 +14,11 @@ async function userCookie(sub = "u1", email = "u1@e.com") {
   const k = await ensureActiveKey(env.DB);
   const t = await signSession({ privateJwk: k.privateJwk, kid: k.kid, claims: { sub, email, role: "member" } });
   return `popory_session=${t}`;
+}
+
+async function serviceToken() {
+  const k = await ensureActiveKey(env.DB);
+  return signAreaToken({ privateJwk: k.privateJwk, kid: k.kid, claims: { sub: "services-content", email: "svc@e.com", area: "content-worker", aud: "popory-portal" } });
 }
 
 beforeEach(async () => {
@@ -338,6 +343,62 @@ describe("GET /api/content/topics 카테고리·검색·페이지네이션", () 
     const body = await res.json<{ topics: { topic: string }[] }>();
     expect(body.topics.length).toBe(1);
     expect(body.topics[0].topic).toBe("원씽");
+  });
+});
+
+describe("POST /api/content/topics/service-create", () => {
+  it("주제+자식잡(queued) 묶음 생성 + youtube/shorts auto_upload + 추천 used", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id,owner_sub,title,recommender,status,created_at,updated_at) VALUES ('r1','u1','원씽','시스템','pending',1,1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/topics/service-create", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "원씽", category_slug: "book-review",
+        platforms: [{ platform: "naver-blog" }, { platform: "youtube" }, { platform: "shorts" }], recommendation_id: "r1" }),
+    });
+    expect(res.status).toBe(201);
+    const { results } = await env.DB.prepare("SELECT platform, status, topic_id, category_id, auto_upload FROM content_jobs WHERE owner_sub='u1' ORDER BY platform").all<{ platform: string; status: string; topic_id: string; category_id: string; auto_upload: number }>();
+    expect(results.length).toBe(3);
+    expect(results.every((r) => r.status === "queued")).toBe(true);
+    expect(results.every((r) => r.topic_id && r.category_id === "c1")).toBe(true);
+    const byPlat = Object.fromEntries(results.map((r) => [r.platform, r.auto_upload]));
+    expect(byPlat["youtube"]).toBe(1);
+    expect(byPlat["shorts"]).toBe(1);
+    expect(byPlat["naver-blog"]).toBe(0);
+    const rec = await env.DB.prepare("SELECT status FROM content_recommendations WHERE id='r1'").first<{ status: string }>();
+    expect(rec?.status).toBe("used");
+  });
+
+  it("서비스 토큰 없으면 401", async () => {
+    const res = await SELF.fetch("https://e.com/api/content/topics/service-create", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "t", platforms: [{ platform: "youtube" }] }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("area가 content-worker가 아니면 403", async () => {
+    const k = await ensureActiveKey(env.DB);
+    const tok = await signAreaToken({ privateJwk: k.privateJwk, kid: k.kid, claims: { sub: "services-content", email: "svc@e.com", area: "content-recommend", aud: "popory-portal" } });
+    const res = await SELF.fetch("https://e.com/api/content/topics/service-create", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "t", platforms: [{ platform: "youtube" }] }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("category_slug 없으면 category_id NULL로 잡 생성", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_recommendations (id,owner_sub,title,recommender,status,created_at,updated_at) VALUES ('r2','u1','사피엔스','시스템','pending',1,1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/topics/service-create", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "사피엔스", category_slug: "no-such-slug", platforms: [{ platform: "youtube" }], recommendation_id: "r2" }),
+    });
+    expect(res.status).toBe(201);
+    const job = await env.DB.prepare("SELECT category_id FROM content_jobs WHERE owner_sub='u1' AND topic='사피엔스'").first<{ category_id: string | null }>();
+    expect(job?.category_id).toBeNull();
   });
 });
 

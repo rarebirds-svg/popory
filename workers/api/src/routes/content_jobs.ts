@@ -223,7 +223,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const parsed = ContentJobResultSchema.safeParse(await c.req.json());
     if (!parsed.success) return c.text("bad request", 400);
     const id = c.req.param("id");
-    const row = await c.env.DB.prepare("SELECT id, status FROM content_jobs WHERE id=?").bind(id).first<{ id: string; status: string }>();
+    const row = await c.env.DB.prepare("SELECT id, status, platform, auto_upload, category_id FROM content_jobs WHERE id=?").bind(id).first<{ id: string; status: string; platform: string; auto_upload: number; category_id: string | null }>();
     if (!row) return c.text("not found", 404);
     if (row.status !== "running") return c.text("conflict", 409);
     const now = Math.floor(Date.now() / 1000);
@@ -235,6 +235,13 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     await c.env.DB.prepare(
       "UPDATE content_jobs SET status=?, draft_r2_key=COALESCE(?, draft_r2_key), meta_json=COALESCE(?, meta_json), error=?, updated_at=? WHERE id=?",
     ).bind(parsed.data.status, draftKey, parsed.data.meta ? JSON.stringify(parsed.data.meta) : null, parsed.data.error ?? null, now, id).run();
+    // review 전이 시 youtube/shorts 자동 업로드 트리거 — 카테고리에 유튜브 채널 연결된 경우에만 비공개 업로드 요청.
+    if (parsed.data.status === "review" && row.auto_upload === 1 && (row.platform === "youtube" || row.platform === "shorts") && row.category_id) {
+      const conn = await c.env.DB.prepare("SELECT category_id FROM category_youtube_tokens WHERE category_id=?").bind(row.category_id).first();
+      if (conn) {
+        await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='requested', youtube_privacy='private', youtube_error=NULL, updated_at=? WHERE id=?").bind(now, id).run();
+      }
+    }
     return c.json({ ok: true });
   });
 

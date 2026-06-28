@@ -21,6 +21,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_jobs");
   await env.DB.exec("DELETE FROM content_recommendations");
   await env.DB.exec("DELETE FROM style_profiles");
+  await env.DB.exec("DELETE FROM category_youtube_tokens");
   await env.DB.exec("DELETE FROM content_categories");
 });
 
@@ -533,6 +534,54 @@ describe("DELETE /api/content/jobs/:id", () => {
   it("미인증 요청 401", async () => {
     const res = await SELF.fetch("https://example.com/api/content/jobs/anything", { method: "DELETE" });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("result 자동 업로드 트리거", () => {
+  async function setup(opts: { platform: string; auto: number; connected: boolean }) {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    if (opts.connected) await env.DB.prepare("INSERT INTO category_youtube_tokens (category_id, refresh_token, connected_at) VALUES ('c1','enc',1)").run();
+    await env.DB.prepare("INSERT INTO content_jobs (id,owner_sub,topic,platform,status,category_id,auto_upload,created_at,updated_at) VALUES ('j1','u1','t',?,'running','c1',?,1,1)").bind(opts.platform, opts.auto).run();
+  }
+  async function reportReview() {
+    const tok = await workerToken();
+    return SELF.fetch("https://e.com/api/content/jobs/j1/result", {
+      method: "PATCH", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ status: "review", draft: "대본", meta: { title: "제목" } }),
+    });
+  }
+  async function ytStatus() {
+    return (await env.DB.prepare("SELECT youtube_status, youtube_privacy FROM content_jobs WHERE id='j1'").first<{ youtube_status: string | null; youtube_privacy: string | null }>());
+  }
+
+  it("youtube+auto_upload+연결 → requested/private", async () => {
+    await setup({ platform: "youtube", auto: 1, connected: true });
+    expect((await reportReview()).status).toBe(200);
+    const s = await ytStatus();
+    expect(s?.youtube_status).toBe("requested");
+    expect(s?.youtube_privacy).toBe("private");
+  });
+  it("shorts도 동일", async () => {
+    await setup({ platform: "shorts", auto: 1, connected: true });
+    await reportReview();
+    expect((await ytStatus())?.youtube_status).toBe("requested");
+    expect((await ytStatus())?.youtube_privacy).toBe("private");
+  });
+  it("카테고리 미연결이면 트리거 안 함", async () => {
+    await setup({ platform: "youtube", auto: 1, connected: false });
+    await reportReview();
+    expect((await ytStatus())?.youtube_status).toBeNull();
+  });
+  it("auto_upload=0이면 트리거 안 함", async () => {
+    await setup({ platform: "youtube", auto: 0, connected: true });
+    await reportReview();
+    expect((await ytStatus())?.youtube_status).toBeNull();
+  });
+  it("naver-blog는 트리거 안 함", async () => {
+    await setup({ platform: "naver-blog", auto: 1, connected: true });
+    await reportReview();
+    expect((await ytStatus())?.youtube_status).toBeNull();
   });
 });
 

@@ -1,109 +1,38 @@
-# auto_create 의 주제 선택·배정 규칙과 run 흐름 단위 테스트.
-import json
+# auto_create 의 1주제·3플랫폼 묶음 생성 흐름 단위 테스트.
 import pytest
 from popory_content import auto_create
-from popory_content.auto_create import select_assignments
-from popory_content.portal_client import PortalError
 
 
-# ---------------------------------------------------------------------------
-# select_assignments 단위 테스트
-# ---------------------------------------------------------------------------
-
-def test_two_recs_youtube_shorts_blog():
-    recs = [{"id": "a", "title": "오래된것"}, {"id": "b", "title": "새것"}]
-    out = select_assignments(recs)
-    # 블로그는 영상(recs[0])과 같은 주제 재활용.
-    assert out == [("youtube", recs[0]), ("shorts", recs[1]), ("naver-blog", recs[0])]
-
-
-def test_one_rec_same_topic_all_three():
-    recs = [{"id": "a", "title": "하나"}]
-    out = select_assignments(recs)
-    assert out == [("youtube", recs[0]), ("shorts", recs[0]), ("naver-blog", recs[0])]
-
-
-def test_empty_returns_empty():
-    assert select_assignments([]) == []
-
-
-# ---------------------------------------------------------------------------
-# run() 흐름 테스트 — 부분 실패 / 전체 성공
-# ---------------------------------------------------------------------------
-
-class _FakeClient:
-    """PortalClient 대역. fail_platform 이 지정된 플랫폼 POST 에서 PortalError 발생."""
-
-    def __init__(self, fail_platform=None):
-        self._fail_platform = fail_platform
-        self.posted = []
-
-    def get(self, url):
-        return {
-            "recommendations": [
-                {"id": "r1", "title": "주제A"},
-                {"id": "r2", "title": "주제B"},
-            ]
-        }
-
-    def post(self, url, json=None):
-        self.posted.append(json)
-        platform = (json or {}).get("platform")
-        if platform == self._fail_platform:
-            raise PortalError(f"서버 오류 — {platform}", exit_code=500)
-        return {"id": f"job-{platform}"}
-
-
-def _read_logs(log_dir):
-    """tmp_path 아래 날짜 JSONL 파일을 모두 읽어 record 리스트로 반환."""
-    records = []
-    for f in sorted(log_dir.glob("*.log")):
-        for line in f.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                records.append(json.loads(line))
-    return records
-
-
-def test_run_partial_failure_status_partial(tmp_path, monkeypatch):
-    """POST 중 하나가 PortalError 이면 최종 요약 status 가 'partial' 이어야 한다."""
-    monkeypatch.setenv("POPORY_RECOMMEND_OWNER", "user-sub-test")
-    monkeypatch.setattr(auto_create, "LOGS_DIR", tmp_path)
-    monkeypatch.setattr(auto_create, "_client", lambda: _FakeClient(fail_platform="shorts"))
-
-    rc = auto_create.run()
-
-    assert rc == 0
-    records = _read_logs(tmp_path)
-    summary = records[-1]
-    assert summary["status"] == "partial"
-    # create_fail 로그도 기록되어야 한다.
-    fail_logs = [r for r in records if r.get("status") == "create_fail"]
-    assert len(fail_logs) == 1
-    assert fail_logs[0]["platform"] == "shorts"
-
-
-def test_run_all_success_status_ok(tmp_path, monkeypatch):
-    """세 POST(영상·쇼츠·블로그) 모두 성공하면 최종 요약 status 가 'ok' 이고 created 에 3건이어야 한다."""
-    monkeypatch.setenv("POPORY_RECOMMEND_OWNER", "user-sub-test")
-    monkeypatch.setattr(auto_create, "LOGS_DIR", tmp_path)
-    monkeypatch.setattr(auto_create, "_client", lambda: _FakeClient())
-
-    rc = auto_create.run()
-
-    assert rc == 0
-    records = _read_logs(tmp_path)
-    summary = records[-1]
-    assert summary["status"] == "ok"
-    assert len(summary["created"]) == 3
-    platforms = {c["platform"] for c in summary["created"]}
-    assert platforms == {"youtube", "shorts", "naver-blog"}
-
-
-def test_jobs_tagged_book_review(tmp_path, monkeypatch):
-    """service-create 페이로드 전체에 category_slug == 'book-review' 가 포함되어야 한다."""
+def test_run_creates_one_grouped_topic(tmp_path, monkeypatch):
     monkeypatch.setenv("POPORY_RECOMMEND_OWNER", "u")
     monkeypatch.setattr(auto_create, "LOGS_DIR", tmp_path)
-    fc = _FakeClient()
+
+    class FakeClient:
+        def __init__(self): self.posted = []
+        def get(self, url): return {"recommendations": [{"id": "r1", "title": "원씽"}, {"id": "r2", "title": "다음"}]}
+        def post(self, url, json=None):
+            self.posted.append((url, json)); return {"topic_id": "t1", "job_ids": ["a", "b", "c"]}
+    fc = FakeClient()
     monkeypatch.setattr(auto_create, "_client", lambda: fc)
-    auto_create.run()
-    assert all(p.get("category_slug") == "book-review" for p in fc.posted)
+
+    rc = auto_create.run()
+    assert rc == 0
+    assert len(fc.posted) == 1
+    url, body = fc.posted[0]
+    assert url == "/api/content/topics/service-create"
+    plats = sorted(p["platform"] for p in body["platforms"])
+    assert plats == ["naver-blog", "shorts", "youtube"]
+    assert body["category_slug"] == "book-review"
+    assert body["recommendation_id"] == "r1"
+    assert body["topic"] == "원씽"
+    assert body["owner_sub"] == "u"
+
+
+def test_run_empty_skips(tmp_path, monkeypatch):
+    monkeypatch.setenv("POPORY_RECOMMEND_OWNER", "u")
+    monkeypatch.setattr(auto_create, "LOGS_DIR", tmp_path)
+    class Empty:
+        def get(self, url): return {"recommendations": []}
+        def post(self, url, json=None): raise AssertionError("should not post")
+    monkeypatch.setattr(auto_create, "_client", lambda: Empty())
+    assert auto_create.run() == 0
