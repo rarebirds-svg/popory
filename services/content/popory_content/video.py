@@ -24,6 +24,8 @@ SAY_VOICE = "Yuna"
 FONT_PATH = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
 LANDSCAPE_W, LANDSCAPE_H = 1920, 1080
 PORTRAIT_W, PORTRAIT_H = 1080, 1920
+THUMB_W, THUMB_H = 1280, 720
+THUMB_PW, THUMB_PH = 1080, 1920
 BG = (11, 31, 58)
 HEAD_COLOR = (255, 255, 255)
 BODY_COLOR = (223, 231, 245)
@@ -125,6 +127,36 @@ def _render_headline_png(title: str, out_png: Path, portrait: bool = False) -> N
     t = "\n".join(textwrap.wrap(title, width=title_wrap)) or " "
     d.multiline_text((80, 70), t, font=title_font, fill=HEAD_COLOR, anchor="la", align="left", spacing=10)
     img.save(out_png)
+
+
+def render_thumbnail(copy: str | None, image_prompt: str | None, out_jpg: Path,
+                     portrait: bool = False, image_fetcher=None) -> Path | None:
+    """전용 카피·배경으로 유튜브 썸네일 JPEG 생성. copy/image_prompt 없으면 None."""
+    if not copy or not image_prompt:
+        return None
+    w, h = (THUMB_PW, THUMB_PH) if portrait else (THUMB_W, THUMB_H)
+    img = None
+    if image_fetcher is not None:
+        try:
+            b = image_fetcher(image_prompt)
+            if b:
+                img = _cover(Image.open(BytesIO(b)).convert("RGB"), w, h)
+        except Exception:  # noqa: BLE001 — 깨진/실패 이미지는 단색 폴백
+            img = None
+    if img is None:
+        img = Image.new("RGB", (w, h), BG)
+    # 전체 어두운 스크림으로 카피 가독성 확보
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 90))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    d = ImageDraw.Draw(img)
+    font_size = 130 if portrait else 150
+    font = ImageFont.truetype(FONT_PATH, font_size)
+    wrap = 8 if portrait else 9
+    lines = "\n".join(textwrap.wrap(copy, width=wrap)) or " "
+    d.multiline_text((w / 2, h / 2), lines, font=font, fill=(255, 255, 255), anchor="mm",
+                     align="center", spacing=16, stroke_width=8, stroke_fill=(0, 0, 0))
+    img.save(out_jpg, format="JPEG", quality=85)
+    return out_jpg
 
 
 def _split_sentences(text: str) -> list[str]:
