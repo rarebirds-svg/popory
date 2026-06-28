@@ -25,6 +25,7 @@ def test_run_creates_one_grouped_topic(tmp_path, monkeypatch):
     assert body["category_slug"] == "book-review"
     assert body["recommendation_id"] == "r1"
     assert body["topic"] == "원씽"
+    assert body["owner_sub"] == "u"
 
 
 def test_run_empty_skips(tmp_path, monkeypatch):

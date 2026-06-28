@@ -3,8 +3,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { TopicCreateSchema, TopicAddJobsSchema, TopicServiceCreateSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
-import { requireService } from "../middleware/service_auth";
-import type { ServiceVars } from "../middleware/service_auth";
+import { requireService, type ServiceVars } from "../middleware/service_auth";
 import { deleteContentJob } from "../db/content_delete";
 import { withD1Retry } from "../db/d1_retry";
 

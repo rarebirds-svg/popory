@@ -566,6 +566,7 @@ describe("result 자동 업로드 트리거", () => {
     await setup({ platform: "shorts", auto: 1, connected: true });
     await reportReview();
     expect((await ytStatus())?.youtube_status).toBe("requested");
+    expect((await ytStatus())?.youtube_privacy).toBe("private");
   });
   it("카테고리 미연결이면 트리거 안 함", async () => {
     await setup({ platform: "youtube", auto: 1, connected: false });
