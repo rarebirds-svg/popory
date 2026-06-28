@@ -188,6 +188,40 @@ describe("claim-upload 카테고리 토큰 없음 처리", () => {
   });
 });
 
+describe("comment-backfill", () => {
+  it("comment-backfill 가 done 책 리뷰 영상 목록+토큰 반환", async () => {
+    const encRefresh = await encrypt("real-refresh-token", env.YOUTUBE_TOKEN_KEY);
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('cat_br','u1','책','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO category_youtube_tokens (category_id, refresh_token, connected_at) VALUES ('cat_br',?,1)").bind(encRefresh).run();
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id,owner_sub,topic,platform,status,category_id,youtube_status,youtube_video_id,created_at,updated_at) VALUES ('jcb','u1','원씽 - 게리 켈러','youtube','review','cat_br','done','vid1',1,1)"
+    ).run();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ access_token: "test-access-token" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("not mocked", { status: 500 });
+    });
+    const tok = await workerToken();
+    const res = await SELF.fetch("https://e.com/api/content/youtube/comment-backfill", {
+      method: "GET", headers: { authorization: `Bearer ${tok}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { items: { video_id: string; topic: string; access_token: string }[] };
+    expect(body.items.length).toBeGreaterThanOrEqual(1);
+    expect(body.items[0].video_id).toBe("vid1");
+    expect(body.items[0].topic).toBe("원씽 - 게리 켈러");
+    expect(body.items[0].access_token).toBeTruthy();
+  });
+
+  it("comment-backfill 미서비스 401", async () => {
+    const res = await SELF.fetch("https://e.com/api/content/youtube/comment-backfill");
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("claim-upload book 필드 반환", () => {
   it("claim-upload 가 book_title·book_author·category_slug 반환", async () => {
     const encRefresh = await encrypt("real-refresh-token", env.YOUTUBE_TOKEN_KEY);
