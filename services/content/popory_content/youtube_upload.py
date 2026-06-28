@@ -5,6 +5,7 @@ import requests
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
 CAPTION_URL = "https://www.googleapis.com/upload/youtube/v3/captions?part=snippet&uploadType=multipart"
 THUMBNAIL_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
+COMMENT_URL = "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet"
 
 
 class UploadError(Exception):
@@ -46,6 +47,18 @@ def set_thumbnail(access_token: str, video_id: str, jpg_bytes: bytes) -> None:
     )
     if resp.status_code not in (200, 201):
         raise UploadError(f"thumbnail {resp.status_code}: {resp.text[:200]}")
+
+
+def post_comment(access_token: str, video_id: str, text: str) -> None:
+    """영상에 최상위 댓글 1개 작성. 실패 시 UploadError."""
+    resp = requests.post(
+        COMMENT_URL,
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={"snippet": {"videoId": video_id, "topLevelComment": {"snippet": {"textOriginal": text}}}},
+        timeout=60,
+    )
+    if resp.status_code not in (200, 201):
+        raise UploadError(f"comment {resp.status_code}: {resp.text[:200]}")
 
 
 def upload_caption(access_token: str, video_id: str, language: str, name: str, srt_bytes: bytes) -> None:
