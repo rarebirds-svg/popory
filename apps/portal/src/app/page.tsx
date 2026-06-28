@@ -13,10 +13,10 @@ export default async function Page() {
     <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center px-4 text-center">
       <Kicker>popory family</Kicker>
       <h1 className="mt-4 font-serif text-4xl font-semibold tracking-tight text-popory-fg">
-        매일 아침, 우리 가족의 브리핑
+        우리 가족의 하루를 여는 곳
       </h1>
       <p className="mt-3 text-sm leading-relaxed text-popory-muted">
-        AI가 큐레이션한 일일 브리핑과 가족 서비스를 한곳에서. 가족 전용 포털입니다.
+        브리핑부터 콘텐츠 제작, 자산 관리까지. 가족이 함께 쓰는 프라이빗 포털.
       </p>
       <Link
         href={`${API_BASE}/auth/google/start`}
