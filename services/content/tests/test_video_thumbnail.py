@@ -45,3 +45,21 @@ def test_prompts_instruct_thumbnail_keys():
     assert "thumbnail_copy" in build_video_system_prompt([], scene_count=8)
     assert "thumbnail_image_prompt" in build_video_system_prompt([], scene_count=8)
     assert "thumbnail_copy" in build_shorts_system_prompt([], scene_count=8)
+
+
+import responses
+import pytest
+from popory_content.youtube_upload import set_thumbnail, UploadError
+
+
+@responses.activate
+def test_set_thumbnail_ok():
+    responses.add(responses.POST, "https://www.googleapis.com/upload/youtube/v3/thumbnails/set", json={"items": [{}]}, status=200)
+    set_thumbnail("tok", "vid123", b"\xff\xd8\xff")  # 예외 없으면 통과
+
+
+@responses.activate
+def test_set_thumbnail_403_raises():
+    responses.add(responses.POST, "https://www.googleapis.com/upload/youtube/v3/thumbnails/set", json={"error": {}}, status=403)
+    with pytest.raises(UploadError):
+        set_thumbnail("tok", "vid123", b"\xff\xd8\xff")

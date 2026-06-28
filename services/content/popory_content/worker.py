@@ -12,10 +12,10 @@ from PIL import Image
 
 from popory_content.generate import generate, GenerateError
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
-from popory_content.video import make_video, VideoError
+from popory_content.video import make_video, VideoError, render_thumbnail
 from popory_content.subtitles import to_srt
 from popory_content.translate import translate_lines
-from popory_content.youtube_upload import upload, upload_caption
+from popory_content.youtube_upload import upload, upload_caption, set_thumbnail
 from popory_content.options import parse_options, parse_shorts_options, SCENE_COUNT, SHORT_SCENE_COUNT, VOICE, STYLE
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
@@ -70,6 +70,7 @@ def run_once(client) -> bool:
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
+            _maybe_put_thumbnail(client, job_id, meta, portrait=False)
             _finalize_video(client, job_id, script, meta, img_missing, img_total)
         elif platform == "shorts":
             opts = parse_shorts_options(job.get("params_json"))
@@ -86,6 +87,7 @@ def run_once(client) -> bool:
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
+            _maybe_put_thumbnail(client, job_id, meta, portrait=True)
             _finalize_video(client, job_id, script, meta, img_missing, img_total)
         elif platform == "instagram-image":
             import json as _json
@@ -246,6 +248,18 @@ def _safe_image(client, prompt: str, job_id: str = "?"):
     return None
 
 
+def _maybe_put_thumbnail(client, job_id: str, meta: dict, portrait: bool) -> None:
+    """메타에 썸네일 키가 있으면 렌더 후 PUT. 실패는 로그만(영상 흐름 유지)."""
+    try:
+        out = Path("/tmp") / f"thumb_{job_id}.jpg"
+        res = render_thumbnail(meta.get("thumbnail_copy"), meta.get("thumbnail_image_prompt"), out,
+                               portrait=portrait, image_fetcher=lambda p: _safe_image(client, p, job_id))
+        if res:
+            client.put_binary(f"/api/content/jobs/{job_id}/thumbnail", data=res.read_bytes(), content_type="image/jpeg")
+    except Exception as e:  # noqa: BLE001
+        append_log(LOGS_DIR, {"worker": "content", "status": "thumbnail_failed", "job": job_id, "error": str(e)[:200]})
+
+
 def _finalize_video(client, job_id, script, meta, img_missing, img_total):
     """누락 이미지 비율로 status 결정. 대부분 실패면 failed, 일부면 review+경고."""
     if img_total > 0 and img_missing / img_total >= IMAGE_FAIL_RATIO:
@@ -328,6 +342,12 @@ def run_upload_once(client) -> bool:
         mp4 = client.get_bytes(f"/api/content/jobs/{job_id}/video")
         video_id = upload(data["access_token"], mp4, data.get("title", "popory 영상"), data.get("description", ""), data.get("tags", []), privacy=data.get("privacy", "public"))
         _upload_captions(client, data["access_token"], job_id, video_id)
+        try:
+            thumb = client.get_bytes(f"/api/content/jobs/{job_id}/thumbnail")
+            if thumb:
+                set_thumbnail(data["access_token"], video_id, thumb)
+        except Exception as e:  # noqa: BLE001 — 썸네일 실패는 업로드 done 유지
+            append_log(LOGS_DIR, {"worker": "content", "status": "thumbnail_set_failed", "job": job_id, "error": str(e)[:200]})
         client.patch(f"/api/content/jobs/{job_id}/youtube-result", json={"status": "done", "video_id": video_id})
         append_log(LOGS_DIR, {"worker": "content", "status": "uploaded", "job": job_id, "video": video_id})
     except Exception as e:  # noqa: BLE001 — 업로드 실패는 result 에 기록하고 계속

@@ -232,6 +232,32 @@ def test_run_upload_once_no_job():
     assert worker.run_upload_once(C()) is False
 
 
+def test_upload_thumbnail_failure_keeps_done(monkeypatch):
+    """set_thumbnail 실패해도 youtube-result done이 유지되어야 한다(베스트에포트)."""
+    monkeypatch.setattr(worker, "upload", lambda *a, **k: "vid1")
+    monkeypatch.setattr(worker, "_upload_captions", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise RuntimeError("thumb 403")
+
+    monkeypatch.setattr(worker, "set_thumbnail", boom)
+    patched = []
+
+    class C:
+        def post(self, path, *, json=None):
+            return {"job_id": "j1", "access_token": "t", "title": "t"}
+
+        def get_bytes(self, path):
+            return b"\xff\xd8\xff"
+
+        def patch(self, path, *, json):
+            patched.append((path, json))
+            return {}
+
+    assert worker.run_upload_once(C()) is True
+    assert any("youtube-result" in p and j.get("status") == "done" for p, j in patched)
+
+
 def test_safe_image_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(worker.time, "sleep", lambda s: None)
     calls = {"n": 0}
