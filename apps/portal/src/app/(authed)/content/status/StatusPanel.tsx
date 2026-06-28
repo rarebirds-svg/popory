@@ -68,11 +68,15 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
               {s.image_free.exhausted ? `오늘 소진 · ${s.image_free.reset_date} 09:00(KST) 리셋 → 로컬 폴백` : "사용 가능"}
             </span>
           </li>
-          <li className="flex justify-between pb-2">
+          <li className="flex justify-between border-b border-popory-muted/20 pb-2">
             <span className="text-popory-muted">로컬 이미지(imagegen · RealVisXL SDXL)</span>
             <span className={s.imagegen_ok ? "text-green-600" : "text-popory-muted"}>
               {s.imagegen_ok ? "응답" : "무응답"}
             </span>
+          </li>
+          <li className="flex justify-between pb-2">
+            <span className="text-popory-muted">음성(TTS)</span>
+            <span className="text-popory-fg">Google Chirp3-HD (ko-KR)</span>
           </li>
         </ul>
       </section>
