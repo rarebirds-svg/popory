@@ -63,13 +63,13 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
             </span>
           </li>
           <li className="flex justify-between border-b border-popory-muted/20 pb-2">
-            <span className="text-popory-muted">무료 이미지(Cloudflare)</span>
+            <span className="text-popory-muted">무료 이미지(Cloudflare · FLUX.1 schnell)</span>
             <span className={s.image_free.exhausted ? "text-yellow-600" : "text-green-600"}>
-              {s.image_free.exhausted ? `오늘 소진 · ${s.image_free.reset_date} 리셋 → 로컬 폴백` : "사용 가능"}
+              {s.image_free.exhausted ? `오늘 소진 · ${s.image_free.reset_date} 09:00(KST) 리셋 → 로컬 폴백` : "사용 가능"}
             </span>
           </li>
           <li className="flex justify-between pb-2">
-            <span className="text-popory-muted">로컬 이미지(imagegen)</span>
+            <span className="text-popory-muted">로컬 이미지(imagegen · RealVisXL SDXL)</span>
             <span className={s.imagegen_ok ? "text-green-600" : "text-popory-muted"}>
               {s.imagegen_ok ? "응답" : "무응답"}
             </span>
