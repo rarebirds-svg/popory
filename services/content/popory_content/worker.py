@@ -12,7 +12,7 @@ from PIL import Image
 
 from popory_content.generate import generate, GenerateError
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
-from popory_content.video import make_video, VideoError, render_thumbnail
+from popory_content.video import make_video, VideoError, render_thumbnail, TMP
 from popory_content.subtitles import to_srt
 from popory_content.translate import translate_lines
 from popory_content.youtube_upload import upload, upload_caption, set_thumbnail
@@ -251,11 +251,12 @@ def _safe_image(client, prompt: str, job_id: str = "?"):
 def _maybe_put_thumbnail(client, job_id: str, meta: dict, portrait: bool) -> None:
     """메타에 썸네일 키가 있으면 렌더 후 PUT. 실패는 로그만(영상 흐름 유지)."""
     try:
-        out = Path("/tmp") / f"thumb_{job_id}.jpg"
+        out = TMP / f"thumb_{job_id}.jpg"
         res = render_thumbnail(meta.get("thumbnail_copy"), meta.get("thumbnail_image_prompt"), out,
                                portrait=portrait, image_fetcher=lambda p: _safe_image(client, p, job_id))
         if res:
             client.put_binary(f"/api/content/jobs/{job_id}/thumbnail", data=res.read_bytes(), content_type="image/jpeg")
+            res.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001
         append_log(LOGS_DIR, {"worker": "content", "status": "thumbnail_failed", "job": job_id, "error": str(e)[:200]})
 
@@ -344,10 +345,13 @@ def run_upload_once(client) -> bool:
         _upload_captions(client, data["access_token"], job_id, video_id)
         try:
             thumb = client.get_bytes(f"/api/content/jobs/{job_id}/thumbnail")
-            if thumb:
+        except PortalError:
+            thumb = None  # 썸네일 없음(구 콘텐츠) — 정상 건너뜀.
+        if thumb:
+            try:
                 set_thumbnail(data["access_token"], video_id, thumb)
-        except Exception as e:  # noqa: BLE001 — 썸네일 실패는 업로드 done 유지
-            append_log(LOGS_DIR, {"worker": "content", "status": "thumbnail_set_failed", "job": job_id, "error": str(e)[:200]})
+            except Exception as e:  # noqa: BLE001 — 썸네일 실패는 업로드 done 유지.
+                append_log(LOGS_DIR, {"worker": "content", "status": "thumbnail_set_failed", "job": job_id, "error": str(e)[:200]})
         client.patch(f"/api/content/jobs/{job_id}/youtube-result", json={"status": "done", "video_id": video_id})
         append_log(LOGS_DIR, {"worker": "content", "status": "uploaded", "job": job_id, "video": video_id})
     except Exception as e:  # noqa: BLE001 — 업로드 실패는 result 에 기록하고 계속

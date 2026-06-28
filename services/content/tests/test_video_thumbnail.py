@@ -3,6 +3,10 @@ import io
 from pathlib import Path
 from PIL import Image
 from popory_content import video
+from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
+import responses
+import pytest
+from popory_content.youtube_upload import set_thumbnail, UploadError
 
 
 def _png(color=(20, 40, 80)) -> bytes:
@@ -30,6 +34,7 @@ def test_portrait_1080x1920_with_solid_fallback(tmp_path):
     assert out is not None
     im = Image.open(out)
     assert im.size == (1080, 1920)
+    assert im.format == "JPEG"
 
 
 def test_broken_image_bytes_falls_back(tmp_path):
@@ -38,18 +43,11 @@ def test_broken_image_bytes_falls_back(tmp_path):
     assert Image.open(out).size == (1280, 720)
 
 
-from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
-
-
 def test_prompts_instruct_thumbnail_keys():
     assert "thumbnail_copy" in build_video_system_prompt([], scene_count=8)
     assert "thumbnail_image_prompt" in build_video_system_prompt([], scene_count=8)
     assert "thumbnail_copy" in build_shorts_system_prompt([], scene_count=8)
-
-
-import responses
-import pytest
-from popory_content.youtube_upload import set_thumbnail, UploadError
+    assert "thumbnail_image_prompt" in build_shorts_system_prompt([], scene_count=8)
 
 
 @responses.activate
