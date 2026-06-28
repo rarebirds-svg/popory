@@ -545,6 +545,8 @@ def test_comment_skipped_when_no_valid_links(monkeypatch):
     monkeypatch.setattr(worker, "build_purchase_comment_validated", lambda *a, **k: None)
     called = {"n": 0}
     monkeypatch.setattr(worker, "post_comment", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    logs = []
+    monkeypatch.setattr(worker, "append_log", lambda d, entry: logs.append(entry))
     patched = []
     class C:
         def post(self, path, *, json=None):
@@ -557,3 +559,4 @@ def test_comment_skipped_when_no_valid_links(monkeypatch):
     assert worker.run_upload_once(C()) is True
     assert called["n"] == 0
     assert any("youtube-result" in p and j.get("status") == "done" for p, j in patched)
+    assert any(e.get("status") == "comment_skipped_no_valid_links" for e in logs)

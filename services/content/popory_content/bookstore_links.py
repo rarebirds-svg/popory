@@ -15,9 +15,8 @@ _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML
 
 def _default_status(url: str) -> int:
     """검색 URL 도달성 확인용 기본 fetcher — status code 반환."""
-    resp = requests.get(url, timeout=8, headers={"User-Agent": _UA}, allow_redirects=True, stream=True)
-    resp.close()
-    return resp.status_code
+    with requests.get(url, timeout=8, headers={"User-Agent": _UA}, allow_redirects=True, stream=True) as resp:
+        return resp.status_code
 
 
 def validate_store_url(url: str, fetcher=_default_status) -> bool:
@@ -34,7 +33,7 @@ def build_purchase_comment_validated(title: str, author: str | None, fetcher=_de
     label = f"{title} - {author}" if author else title
     keyword = f"{title} {author}" if author else title
     q = quote(keyword, safe="")
-    valid = [(name, tmpl.format(q=q)) for name, tmpl in _STORES if validate_store_url(tmpl.format(q=q), fetcher)]
+    valid = [(name, url) for name, tmpl in _STORES for url in (tmpl.format(q=q),) if validate_store_url(url, fetcher)]
     if not valid:
         return None
     lines = [f"📚 『{label}』 구매하기 — 작가와 출판사를 응원해 주세요."]
