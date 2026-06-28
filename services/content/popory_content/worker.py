@@ -353,7 +353,7 @@ def run_upload_once(client) -> bool:
                 set_thumbnail(data["access_token"], video_id, thumb)
             except Exception as e:  # noqa: BLE001 — 썸네일 실패는 업로드 done 유지.
                 append_log(LOGS_DIR, {"worker": "content", "status": "thumbnail_set_failed", "job": job_id, "error": str(e)[:200]})
-        if data.get("category_slug") == "book-review" and data.get("book_title"):
+        if data.get("category_slug") in ("book-review", "책리뷰") and data.get("book_title"):
             try:
                 text = build_purchase_comment_validated(data["book_title"], data.get("book_author"))
                 if text:

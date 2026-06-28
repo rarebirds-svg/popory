@@ -15,7 +15,7 @@ _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML
 
 def _default_status(url: str) -> int:
     """검색 URL 도달성 확인용 기본 fetcher — status code 반환."""
-    with requests.get(url, timeout=8, headers={"User-Agent": _UA}, allow_redirects=True, stream=True) as resp:
+    with requests.get(url, timeout=4, headers={"User-Agent": _UA}, allow_redirects=True, stream=True) as resp:
         return resp.status_code
 
 

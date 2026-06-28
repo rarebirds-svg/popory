@@ -520,6 +520,28 @@ def test_upload_skips_comment_for_non_book_review(monkeypatch):
     assert called["n"] == 0
 
 
+def test_upload_posts_comment_for_chaekrebyu_slug(monkeypatch):
+    """category_slug='책리뷰'도 book-review와 동일하게 댓글이 달려야 한다."""
+    monkeypatch.setattr(worker, "upload", lambda *a, **k: "vid2")
+    monkeypatch.setattr(worker, "_upload_captions", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "build_purchase_comment_validated",
+                        lambda *a, **k: "📚 어린왕자\n· 교보문고: https://example.com/")
+    posted = {}
+    monkeypatch.setattr(worker, "post_comment", lambda tok, vid, text: posted.update(vid=vid, text=text))
+    class C:
+        def post(self, path, *, json=None):
+            return {"job_id": "j9", "access_token": "t", "title": "어린왕자 리뷰",
+                    "book_title": "어린왕자", "book_author": "생텍쥐페리", "category_slug": "책리뷰"}
+        def get_bytes(self, path):
+            from popory_content.portal_client import PortalError
+            if path.endswith("/thumbnail"): raise PortalError("404", 404)
+            return b"mp4"
+        def patch(self, path, *, json): return {}
+    assert worker.run_upload_once(C()) is True
+    assert posted.get("vid") == "vid2"
+    assert "어린왕자" in posted["text"]
+
+
 def test_comment_failure_keeps_done(monkeypatch):
     monkeypatch.setattr(worker, "upload", lambda *a, **k: "vid1")
     monkeypatch.setattr(worker, "_upload_captions", lambda *a, **k: None)
