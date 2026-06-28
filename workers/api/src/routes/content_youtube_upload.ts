@@ -46,7 +46,14 @@ export function mountContentYoutubeUpload(app: Hono<{ Bindings: Env; Variables: 
     // 클레임 시 updated_at 을 현재로 스탬프 → 리스 만료 판정의 기준점.
     const claim = await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='uploading', updated_at=? WHERE id=? AND youtube_status='requested'").bind(now, cand.id).run();
     if (!claim.meta.changes) return c.body(null, 204);
-    const job = await c.env.DB.prepare("SELECT id, owner_sub, meta_json, youtube_privacy, category_id FROM content_jobs WHERE id=?").bind(cand.id).first<{ id: string; owner_sub: string; meta_json: string | null; youtube_privacy: string | null; category_id: string | null }>();
+    const job = await c.env.DB.prepare(
+      `SELECT j.id, j.owner_sub, j.meta_json, j.youtube_privacy, j.category_id, j.topic AS book_title,
+              t.author AS book_author, cat.slug AS category_slug
+         FROM content_jobs j
+         LEFT JOIN content_topics t ON j.topic_id = t.id
+         LEFT JOIN content_categories cat ON j.category_id = cat.id
+        WHERE j.id=?`,
+    ).bind(cand.id).first<{ id: string; owner_sub: string; meta_json: string | null; youtube_privacy: string | null; category_id: string | null; book_title: string; book_author: string | null; category_slug: string | null }>();
     const conn = job!.category_id
       ? await c.env.DB.prepare("SELECT refresh_token FROM category_youtube_tokens WHERE category_id=?").bind(job!.category_id).first<{ refresh_token: string }>()
       : null;
@@ -68,7 +75,7 @@ export function mountContentYoutubeUpload(app: Hono<{ Bindings: Env; Variables: 
       return c.body(null, 204);
     }
     const meta = job!.meta_json ? (JSON.parse(job!.meta_json) as { title?: string; description?: string; tags?: string[] }) : {};
-    return c.json({ job_id: job!.id, title: meta.title ?? "popory 영상", description: meta.description ?? "", tags: meta.tags ?? [], access_token: accessToken, privacy: job!.youtube_privacy ?? "public" });
+    return c.json({ job_id: job!.id, title: meta.title ?? "popory 영상", description: meta.description ?? "", tags: meta.tags ?? [], access_token: accessToken, privacy: job!.youtube_privacy ?? "public", book_title: job!.book_title, book_author: job!.book_author, category_slug: job!.category_slug });
   });
 
   app.patch("/api/content/jobs/:id/youtube-result", requireService, async (c) => {

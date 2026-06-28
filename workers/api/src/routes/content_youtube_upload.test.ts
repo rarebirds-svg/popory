@@ -1,8 +1,9 @@
 // 업로드 요청·claim·result 라우트의 인증·상태 전이 검증(실제 Google 호출은 e2e).
 import { env, SELF } from "cloudflare:test";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { ensureActiveKey, loadActivePrivate } from "../db/signing_keys";
 import { signSession, signAreaToken } from "@popory/auth";
+import { encrypt } from "../lib/secretbox";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -24,8 +25,13 @@ async function serviceToken() { return workerToken(); }
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_jobs");
+  await env.DB.exec("DELETE FROM content_topics");
   await env.DB.exec("DELETE FROM content_categories");
   await env.DB.exec("DELETE FROM category_youtube_tokens");
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 async function makeYoutubeJob(sub = "u1", categoryId?: string) {
@@ -179,5 +185,33 @@ describe("claim-upload 카테고리 토큰 없음 처리", () => {
     const row = await env.DB.prepare("SELECT youtube_status, youtube_error FROM content_jobs WHERE id='jc'").first<{ youtube_status: string; youtube_error: string }>();
     expect(row?.youtube_status).toBe("failed");
     expect(row?.youtube_error).toBe("카테고리 유튜브 미연결");
+  });
+});
+
+describe("claim-upload book 필드 반환", () => {
+  it("claim-upload 가 book_title·book_author·category_slug 반환", async () => {
+    const YOUTUBE_TOKEN_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const encRefresh = await encrypt("real-refresh-token", YOUTUBE_TOKEN_KEY);
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('cat_br','u1','책','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO category_youtube_tokens (category_id, refresh_token, connected_at) VALUES ('cat_br',?,1)").bind(encRefresh).run();
+    await env.DB.prepare("INSERT INTO content_topics (id,owner_sub,topic,created_at,category_id,author) VALUES ('tp1','u1','원씽',1,'cat_br','게리 켈러')").run();
+    await env.DB.prepare("INSERT INTO content_jobs (id,owner_sub,topic,platform,status,category_id,youtube_status,topic_id,created_at,updated_at) VALUES ('jb','u1','원씽','youtube','review','cat_br','requested','tp1',1,1)").run();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ access_token: "test-access-token" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("not mocked", { status: 500 });
+    });
+    const tok = await workerToken();
+    const res = await SELF.fetch("https://e.com/api/content/youtube/claim-upload", {
+      method: "POST", headers: { authorization: `Bearer ${tok}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { book_title: string; book_author: string | null; category_slug: string | null };
+    expect(body.book_title).toBe("원씽");
+    expect(body.book_author).toBe("게리 켈러");
+    expect(body.category_slug).toBe("book-review");
   });
 });

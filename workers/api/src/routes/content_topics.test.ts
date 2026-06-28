@@ -388,6 +388,19 @@ describe("POST /api/content/topics/service-create", () => {
     expect(res.status).toBe(403);
   });
 
+  it("service-create 가 author 를 content_topics 에 저장", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
+    const tok = await serviceToken();
+    const res = await SELF.fetch("https://e.com/api/content/topics/service-create", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner_sub: "u1", topic: "원씽", author: "게리 켈러", platforms: [{ platform: "youtube" }] }),
+    });
+    expect(res.status).toBe(201);
+    const { topic_id } = await res.json() as { topic_id: string };
+    const row = await env.DB.prepare("SELECT author FROM content_topics WHERE id=?").bind(topic_id).first<{ author: string }>();
+    expect(row?.author).toBe("게리 켈러");
+  });
+
   it("category_slug 없으면 category_id NULL로 잡 생성", async () => {
     await env.DB.prepare("INSERT OR IGNORE INTO users (sub,email,role,created_at) VALUES ('u1','u1@e.com','member',1)").run();
     await env.DB.prepare("INSERT INTO content_recommendations (id,owner_sub,title,recommender,status,created_at,updated_at) VALUES ('r2','u1','사피엔스','시스템','pending',1,1)").run();
