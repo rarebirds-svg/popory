@@ -6,6 +6,23 @@ import { requireService, type ServiceVars } from "../middleware/service_auth";
 import { decrypt } from "../lib/secretbox";
 
 const WORKER_AREA = "content-worker";
+
+// 카테고리 유튜브 refresh_token 으로 access_token 발급(없거나 실패면 null).
+async function mintCategoryAccessToken(env: Env, categoryId: string): Promise<string | null> {
+  const conn = await env.DB.prepare("SELECT refresh_token FROM category_youtube_tokens WHERE category_id=?").bind(categoryId).first<{ refresh_token: string }>();
+  if (!conn) return null;
+  try {
+    const refresh = await decrypt(conn.refresh_token, env.YOUTUBE_TOKEN_KEY);
+    const tokRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, refresh_token: refresh, grant_type: "refresh_token" }),
+    });
+    if (!tokRes.ok) return null;
+    return ((await tokRes.json()) as { access_token: string }).access_token;
+  } catch {
+    return null;
+  }
+}
 // 업로드 클레임 리스(초). uploading 으로 이 시간 넘게 정체된 잡은 워커가 죽은 것으로 보고
 // requested 로 되돌려 재시도한다(stuck 자동복구). 짧은 영상 업로드 시간보다 충분히 길게 잡아
 // 정상 업로드 중인 잡을 중복 회수하지 않도록 한다.
@@ -76,6 +93,26 @@ export function mountContentYoutubeUpload(app: Hono<{ Bindings: Env; Variables: 
     }
     const meta = job!.meta_json ? (JSON.parse(job!.meta_json) as { title?: string; description?: string; tags?: string[] }) : {};
     return c.json({ job_id: job!.id, title: meta.title ?? "popory 영상", description: meta.description ?? "", tags: meta.tags ?? [], access_token: accessToken, privacy: job!.youtube_privacy ?? "public", book_title: job!.book_title, book_author: job!.book_author, category_slug: job!.category_slug });
+  });
+
+  app.get("/api/content/youtube/comment-backfill", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const { results } = await c.env.DB.prepare(
+      `SELECT j.youtube_video_id AS video_id, j.topic AS topic, j.category_id AS category_id
+         FROM content_jobs j JOIN content_categories cat ON j.category_id = cat.id
+        WHERE j.youtube_status='done' AND j.youtube_video_id IS NOT NULL
+          AND j.platform IN ('youtube','shorts') AND cat.slug IN ('book-review','책리뷰')`,
+    ).all<{ video_id: string; topic: string; category_id: string }>();
+    const cache = new Map<string, string | null>();
+    const items: { video_id: string; topic: string; access_token: string }[] = [];
+    for (const r of results) {
+      if (!cache.has(r.category_id)) cache.set(r.category_id, await mintCategoryAccessToken(c.env, r.category_id));
+      const t = cache.get(r.category_id);
+      if (!t) continue;  // 토큰 발급 실패 카테고리 제외.
+      items.push({ video_id: r.video_id, topic: r.topic, access_token: t });
+    }
+    return c.json({ items });
   });
 
   app.patch("/api/content/jobs/:id/youtube-result", requireService, async (c) => {

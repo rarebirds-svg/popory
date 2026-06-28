@@ -2,7 +2,7 @@
 from urllib.parse import quote
 import pytest
 import responses
-from popory_content.bookstore_links import build_purchase_comment
+from popory_content.bookstore_links import build_purchase_comment, validate_store_url, build_purchase_comment_validated
 from popory_content.youtube_upload import post_comment, UploadError
 
 
@@ -32,6 +32,32 @@ def test_empty_author_string_treated_as_none():
     assert quote("원씽") in text  # 제목은 여전히 포함
     for d in ("kyobobook", "ypbooks", "aladin", "yes24"):
         assert d in text  # 4개 서점 모두 유지
+
+
+def test_validate_store_url_2xx_true():
+    assert validate_store_url("https://x/y", fetcher=lambda u: 200) is True
+    assert validate_store_url("https://x/y", fetcher=lambda u: 301) is True
+
+
+def test_validate_store_url_4xx_or_error_false():
+    assert validate_store_url("https://x/y", fetcher=lambda u: 404) is False
+    def boom(u): raise RuntimeError("timeout")
+    assert validate_store_url("https://x/y", fetcher=boom) is False
+
+
+def test_validated_includes_only_reachable():
+    # 알라딘 URL만 유효, 나머지 무효
+    def f(url):
+        return 200 if "aladin.co.kr" in url else 404
+    text = build_purchase_comment_validated("원씽", "게리 켈러", fetcher=f)
+    assert text is not None
+    assert "aladin.co.kr" in text
+    assert "kyobobook" not in text and "ypbooks" not in text and "yes24" not in text
+    assert "원씽" in text
+
+
+def test_validated_none_when_all_invalid():
+    assert build_purchase_comment_validated("원씽", None, fetcher=lambda u: 503) is None
 
 
 @responses.activate

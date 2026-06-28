@@ -6,10 +6,28 @@ UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=res
 CAPTION_URL = "https://www.googleapis.com/upload/youtube/v3/captions?part=snippet&uploadType=multipart"
 THUMBNAIL_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
 COMMENT_URL = "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet"
+COMMENT_LIST_URL = "https://www.googleapis.com/youtube/v3/commentThreads"
+_STORE_MARKERS = ("aladin.co.kr", "kyobobook.co.kr", "yes24.com", "ypbooks.co.kr")
 
 
 class UploadError(Exception):
     """업로드 실패."""
+
+
+def comment_exists(access_token: str, video_id: str) -> bool:
+    """영상에 서점 링크 댓글이 이미 있으면 True. 조회 실패면 False."""
+    resp = requests.get(
+        COMMENT_LIST_URL,
+        params={"part": "snippet", "videoId": video_id, "maxResults": 100, "textFormat": "plainText"},
+        headers={"Authorization": f"Bearer {access_token}"}, timeout=30,
+    )
+    if resp.status_code != 200:
+        return False
+    for it in resp.json().get("items", []):
+        text = it.get("snippet", {}).get("topLevelComment", {}).get("snippet", {}).get("textOriginal", "")
+        if any(m in text for m in _STORE_MARKERS):
+            return True
+    return False
 
 
 def upload(access_token: str, mp4_bytes: bytes, title: str, description: str, tags: list[str], privacy: str = "private") -> str:
