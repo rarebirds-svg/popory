@@ -36,3 +36,16 @@ def test_run_empty_skips(tmp_path, monkeypatch):
         def post(self, url, json=None): raise AssertionError("should not post")
     monkeypatch.setattr(auto_create, "_client", lambda: Empty())
     assert auto_create.run() == 0
+
+
+# auto_create 가 추천 저자를 service-create 로 전달하는지 검증.
+def test_auto_create_passes_author(monkeypatch):
+    from popory_content import auto_create
+    sent = {}
+    class C:
+        def get(self, path): return {"recommendations": [{"id": "r1", "title": "원씽", "author": "게리 켈러"}]}
+        def post(self, path, *, json=None): sent.update(json); return {"topic_id": "t1", "job_ids": ["j1"]}
+    monkeypatch.setattr(auto_create, "_client", lambda: C())
+    monkeypatch.setenv("POPORY_RECOMMEND_OWNER", "u1")
+    auto_create.run()
+    assert sent.get("author") == "게리 켈러"

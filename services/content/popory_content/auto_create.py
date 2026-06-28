@@ -47,6 +47,7 @@ def run() -> int:
         out = client.post("/api/content/topics/service-create", json={
             "owner_sub": owner_sub,
             "topic": rec["title"],
+            "author": rec.get("author"),
             "category_slug": "book-review",
             "platforms": [{"platform": "naver-blog"}, {"platform": "youtube"}, {"platform": "shorts"}],
             "recommendation_id": rec["id"],

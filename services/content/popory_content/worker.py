@@ -15,7 +15,8 @@ from popory_content.video_prompt import build_shorts_system_prompt, build_shorts
 from popory_content.video import make_video, VideoError, render_thumbnail, TMP
 from popory_content.subtitles import to_srt
 from popory_content.translate import translate_lines
-from popory_content.youtube_upload import upload, upload_caption, set_thumbnail
+from popory_content.youtube_upload import upload, upload_caption, set_thumbnail, post_comment
+from popory_content.bookstore_links import build_purchase_comment
 from popory_content.options import parse_options, parse_shorts_options, SCENE_COUNT, SHORT_SCENE_COUNT, VOICE, STYLE
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
@@ -352,6 +353,12 @@ def run_upload_once(client) -> bool:
                 set_thumbnail(data["access_token"], video_id, thumb)
             except Exception as e:  # noqa: BLE001 — 썸네일 실패는 업로드 done 유지.
                 append_log(LOGS_DIR, {"worker": "content", "status": "thumbnail_set_failed", "job": job_id, "error": str(e)[:200]})
+        if data.get("category_slug") == "book-review" and data.get("book_title"):
+            try:
+                text = build_purchase_comment(data["book_title"], data.get("book_author"))
+                post_comment(data["access_token"], video_id, text)
+            except Exception as e:  # noqa: BLE001 — 댓글 실패는 업로드 done 유지.
+                append_log(LOGS_DIR, {"worker": "content", "status": "comment_failed", "job": job_id, "error": str(e)[:200]})
         client.patch(f"/api/content/jobs/{job_id}/youtube-result", json={"status": "done", "video_id": video_id})
         append_log(LOGS_DIR, {"worker": "content", "status": "uploaded", "job": job_id, "video": video_id})
     except Exception as e:  # noqa: BLE001 — 업로드 실패는 result 에 기록하고 계속

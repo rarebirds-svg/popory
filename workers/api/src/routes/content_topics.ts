@@ -71,7 +71,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     if (svc.area !== "content-worker") return c.text("forbidden", 403);
     const parsed = TopicServiceCreateSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text("bad request", 400);
-    const { owner_sub, topic, category_slug, platforms, recommendation_id } = parsed.data;
+    const { owner_sub, topic, author, category_slug, platforms, recommendation_id } = parsed.data;
     let categoryId: string | null = null;
     if (category_slug) {
       const cat = await c.env.DB.prepare("SELECT id FROM content_categories WHERE owner_sub=? AND slug=?")
@@ -82,8 +82,8 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     const topicId = ulid();
     const now = Math.floor(Date.now() / 1000);
     const stmts = [
-      c.env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at, category_id) VALUES (?,?,?,?,?)")
-        .bind(topicId, owner_sub, topic, now, categoryId),
+      c.env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at, category_id, author) VALUES (?,?,?,?,?,?)")
+        .bind(topicId, owner_sub, topic, now, categoryId, author ?? null),
     ];
     const jobIds: string[] = [];
     for (const p of platforms) {
