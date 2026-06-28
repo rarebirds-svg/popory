@@ -169,7 +169,7 @@ def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
             json={
                 "input": {"ssml": _to_ssml(_prep_text(text))},
                 "voice": {"languageCode": LANGUAGE, "name": voice},
-                "audioConfig": {"audioEncoding": "MP3", "speakingRate": 1.06},
+                "audioConfig": {"audioEncoding": "MP3", "speakingRate": 1.0},
             },
             timeout=30,
         )
