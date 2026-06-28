@@ -27,8 +27,9 @@ def _rules(scene_count: int, image_style_kw: str) -> str:
 [{{"caption": "...", "narration": "...", "image_prompt": "english description"}}, ...]
 </scenes_json>
 <video_meta>
-{{"title": "...", "description": "...", "tags": ["..."]}}
+{{"title": "...", "description": "...", "tags": ["..."], "thumbnail_copy": "...", "thumbnail_image_prompt": "english cinematic background, no text"}}
 </video_meta>
+- thumbnail_copy 는 썸네일에 크게 띄울 후킹 한 줄(16자 내외, 제목보다 짧고 강하게). thumbnail_image_prompt 는 썸네일 배경용 영어 묘사(시네마틱·고대비, 이미지 안에 글자 없음).
 """
 
 
@@ -84,8 +85,9 @@ def _shorts_rules(scene_count: int, image_style_kw: str) -> str:
 [{{"caption": "...", "narration": "...", "image_prompt": "english description"}}, ...]
 </scenes_json>
 <video_meta>
-{{"title": "...", "description": "...", "tags": ["..."]}}
+{{"title": "...", "description": "...", "tags": ["..."], "thumbnail_copy": "...", "thumbnail_image_prompt": "english cinematic background, no text"}}
 </video_meta>
+- thumbnail_copy 는 썸네일에 크게 띄울 후킹 한 줄(10자 내외, 쇼츠답게 더 짧고 강하게). thumbnail_image_prompt 는 썸네일 배경용 영어 묘사(시네마틱·고대비, 이미지 안에 글자 없음).
 """
 
 

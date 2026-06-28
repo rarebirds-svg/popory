@@ -281,6 +281,42 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     return new Response(obj.body, { headers: { "content-type": "video/mp4" } });
   });
 
+  app.put("/api/content/jobs/:id/thumbnail", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const id = c.req.param("id");
+    const row = await c.env.DB.prepare("SELECT id FROM content_jobs WHERE id=?").bind(id).first<{ id: string }>();
+    if (!row) return c.text("not found", 404);
+    const body = await c.req.arrayBuffer();
+    await c.env.R2.put(`content/thumb/${id}.jpg`, body, { httpMetadata: { contentType: "image/jpeg" } });
+    return c.body(null, 204);
+  });
+
+  app.get("/api/content/jobs/:id/thumbnail", async (c) => {
+    const id = c.req.param("id");
+    const u = c.get("user");
+    let allowed = false;
+    if (u) {
+      const row = await c.env.DB.prepare("SELECT owner_sub FROM content_jobs WHERE id=?").bind(id).first<{ owner_sub: string }>();
+      allowed = !!row && row.owner_sub === u.sub;
+    } else {
+      const m = /^Bearer (.+)$/.exec(c.req.header("authorization") ?? "");
+      if (m) {
+        try {
+          const jwks = await loadJwks(c.env.DB);
+          const claims = await verifyAreaToken({ token: m[1]!, jwks, expectedAudience: "popory-portal" });
+          allowed = claims.area === WORKER_AREA;
+        } catch {
+          allowed = false;
+        }
+      }
+    }
+    if (!allowed) return c.text("not found", 404);
+    const obj = await c.env.R2.get(`content/thumb/${id}.jpg`);
+    if (!obj) return c.text("not found", 404);
+    return new Response(obj.body, { headers: { "content-type": "image/jpeg" } });
+  });
+
   const SUB_LANGS = new Set(["ko", "en", "zh", "ja"]);
 
   app.put("/api/content/jobs/:id/subtitle/:lang", requireService, async (c) => {

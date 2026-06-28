@@ -4,6 +4,7 @@ import requests
 
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
 CAPTION_URL = "https://www.googleapis.com/upload/youtube/v3/captions?part=snippet&uploadType=multipart"
+THUMBNAIL_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
 
 
 class UploadError(Exception):
@@ -34,6 +35,17 @@ def upload(access_token: str, mp4_bytes: bytes, title: str, description: str, ta
     if not vid:
         raise UploadError("video id 없음")
     return vid
+
+
+def set_thumbnail(access_token: str, video_id: str, jpg_bytes: bytes) -> None:
+    """업로드된 영상에 커스텀 썸네일 설정. 채널 미인증 등 실패 시 UploadError."""
+    resp = requests.post(
+        f"{THUMBNAIL_URL}?videoId={video_id}",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "image/jpeg"},
+        data=jpg_bytes, timeout=60,
+    )
+    if resp.status_code not in (200, 201):
+        raise UploadError(f"thumbnail {resp.status_code}: {resp.text[:200]}")
 
 
 def upload_caption(access_token: str, video_id: str, language: str, name: str, srt_bytes: bytes) -> None:
