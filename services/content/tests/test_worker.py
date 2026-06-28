@@ -480,3 +480,57 @@ def test_store_subtitles_empty_cues_noop():
     client = SubClient()
     worker._store_subtitles(client, "j1", [])
     assert client.put == []
+
+
+def test_upload_posts_bookstore_comment_for_book_review(monkeypatch):
+    monkeypatch.setattr(worker, "upload", lambda *a, **k: "vid1")
+    monkeypatch.setattr(worker, "_upload_captions", lambda *a, **k: None)
+    posted = {}
+    monkeypatch.setattr(worker, "post_comment", lambda tok, vid, text: posted.update(vid=vid, text=text))
+    class C:
+        def post(self, path, *, json=None):
+            return {"job_id": "j1", "access_token": "t", "title": "후킹제목",
+                    "book_title": "원씽", "book_author": "게리 켈러", "category_slug": "book-review"}
+        def get_bytes(self, path):
+            from popory_content.portal_client import PortalError
+            if path.endswith("/thumbnail"): raise PortalError("404", 404)
+            return b"mp4"
+        def patch(self, path, *, json): return {}
+    assert worker.run_upload_once(C()) is True
+    assert posted.get("vid") == "vid1"
+    assert "원씽" in posted["text"] and "kyobobook" in posted["text"]
+
+
+def test_upload_skips_comment_for_non_book_review(monkeypatch):
+    monkeypatch.setattr(worker, "upload", lambda *a, **k: "vid1")
+    monkeypatch.setattr(worker, "_upload_captions", lambda *a, **k: None)
+    called = {"n": 0}
+    monkeypatch.setattr(worker, "post_comment", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    class C:
+        def post(self, path, *, json=None):
+            return {"job_id": "j1", "access_token": "t", "book_title": "조커", "category_slug": "movie-review"}
+        def get_bytes(self, path):
+            from popory_content.portal_client import PortalError
+            if path.endswith("/thumbnail"): raise PortalError("404", 404)
+            return b"mp4"
+        def patch(self, path, *, json): return {}
+    assert worker.run_upload_once(C()) is True
+    assert called["n"] == 0
+
+
+def test_comment_failure_keeps_done(monkeypatch):
+    monkeypatch.setattr(worker, "upload", lambda *a, **k: "vid1")
+    monkeypatch.setattr(worker, "_upload_captions", lambda *a, **k: None)
+    def boom(*a, **k): raise RuntimeError("comment 403")
+    monkeypatch.setattr(worker, "post_comment", boom)
+    patched = []
+    class C:
+        def post(self, path, *, json=None):
+            return {"job_id": "j1", "access_token": "t", "book_title": "원씽", "category_slug": "book-review"}
+        def get_bytes(self, path):
+            from popory_content.portal_client import PortalError
+            if path.endswith("/thumbnail"): raise PortalError("404", 404)
+            return b"mp4"
+        def patch(self, path, *, json): patched.append((path, json)); return {}
+    assert worker.run_upload_once(C()) is True
+    assert any("youtube-result" in p and j.get("status") == "done" for p, j in patched)
