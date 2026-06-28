@@ -190,8 +190,7 @@ describe("claim-upload 카테고리 토큰 없음 처리", () => {
 
 describe("claim-upload book 필드 반환", () => {
   it("claim-upload 가 book_title·book_author·category_slug 반환", async () => {
-    const YOUTUBE_TOKEN_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
-    const encRefresh = await encrypt("real-refresh-token", YOUTUBE_TOKEN_KEY);
+    const encRefresh = await encrypt("real-refresh-token", env.YOUTUBE_TOKEN_KEY);
     await env.DB.prepare("INSERT OR IGNORE INTO users (sub, email, role, created_at) VALUES ('u1','u1@e.com','member',1)").run();
     await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('cat_br','u1','책','book-review',0,1,1)").run();
     await env.DB.prepare("INSERT INTO category_youtube_tokens (category_id, refresh_token, connected_at) VALUES ('cat_br',?,1)").bind(encRefresh).run();

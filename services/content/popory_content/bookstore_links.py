@@ -13,7 +13,7 @@ def build_purchase_comment(title: str, author: str | None) -> str:
     """4개 서점 검색 링크 + 안내 문구. 저자 있으면 검색어에 포함."""
     label = f"{title} - {author}" if author else title
     keyword = f"{title} {author}" if author else title
-    q = quote(keyword)
+    q = quote(keyword, safe="")
     lines = [f"📚 『{label}』 구매하기 — 작가와 출판사를 응원해 주세요."]
     for name, tmpl in _STORES:
         lines.append(f"· {name}: {tmpl.format(q=q)}")

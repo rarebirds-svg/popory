@@ -1,6 +1,9 @@
 # 서점 구매 링크 댓글 빌더 단위 테스트.
 from urllib.parse import quote
+import pytest
+import responses
 from popory_content.bookstore_links import build_purchase_comment
+from popory_content.youtube_upload import post_comment, UploadError
 
 
 def test_includes_four_stores_with_author():
@@ -26,11 +29,9 @@ def test_title_only_when_no_author():
 def test_empty_author_string_treated_as_none():
     text = build_purchase_comment("원씽", "")
     assert quote("원씽 ") not in text  # 공백 저자 붙지 않음
-
-
-import responses
-import pytest
-from popory_content.youtube_upload import post_comment, UploadError
+    assert quote("원씽") in text  # 제목은 여전히 포함
+    for d in ("kyobobook", "ypbooks", "aladin", "yes24"):
+        assert d in text  # 4개 서점 모두 유지
 
 
 @responses.activate
