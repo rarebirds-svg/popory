@@ -1,4 +1,4 @@
-# 매일 recommend 대기열에서 주제를 골라 영상·쇼츠 잡을 큐잉하는 스케줄러.
+# 매일 recommend 대기열에서 주제를 골라 1주제·3플랫폼 묶음 잡을 큐잉하는 스케줄러.
 import os
 import sys
 from pathlib import Path
@@ -9,19 +9,6 @@ from popory_content.log import append_log
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 AREA = "content-worker"
-
-
-def select_assignments(recs: list[dict]) -> list[tuple[str, dict]]:
-    """오래된 순 recs에서 youtube·shorts·naver-blog 배정. 블로그는 영상과 같은 주제 재활용.
-
-    1건이면 셋 다 같은 주제, 0건이면 빈 리스트. 대기열 소모는 영상·쇼츠 2건만(블로그는 영상 주제 재사용).
-    """
-    if not recs:
-        return []
-    yt = recs[0]
-    sh = recs[1] if len(recs) >= 2 else recs[0]
-    blog = recs[0]
-    return [("youtube", yt), ("shorts", sh), ("naver-blog", blog)]
 
 
 def _client() -> PortalClient:
@@ -46,33 +33,28 @@ def run() -> int:
         return 2
 
     try:
-        data = client.get(f"/api/content/recommendations/service?owner_sub={owner_sub}&limit=2")
+        data = client.get(f"/api/content/recommendations/service?owner_sub={owner_sub}&limit=1")
     except PortalError as e:
         append_log(LOGS_DIR, {"cli": "auto_create", "status": "fetch_fail", "error": str(e)})
         return 3
+
     recs = data.get("recommendations", [])
-    assignments = select_assignments(recs)
-    if not assignments:
+    if not recs:
         append_log(LOGS_DIR, {"cli": "auto_create", "status": "skipped", "reason": "empty"})
         return 0
-
-    created = []
-    errors = 0
-    for platform, rec in assignments:
-        try:
-            out = client.post("/api/content/jobs/service-create", json={
-                "owner_sub": owner_sub,
-                "topic": rec["title"],
-                "platform": platform,
-                "recommendation_id": rec["id"],
-                "category_slug": "book-review",
-            })
-            created.append({"platform": platform, "topic": rec["title"], "job_id": out.get("id")})
-        except PortalError as e:
-            errors += 1
-            append_log(LOGS_DIR, {"cli": "auto_create", "status": "create_fail", "platform": platform, "topic": rec["title"], "error": str(e)})
-    final_status = "partial" if errors else "ok"
-    append_log(LOGS_DIR, {"cli": "auto_create", "status": final_status, "created": created})
+    rec = recs[0]
+    try:
+        out = client.post("/api/content/topics/service-create", json={
+            "owner_sub": owner_sub,
+            "topic": rec["title"],
+            "category_slug": "book-review",
+            "platforms": [{"platform": "naver-blog"}, {"platform": "youtube"}, {"platform": "shorts"}],
+            "recommendation_id": rec["id"],
+        })
+    except PortalError as e:
+        append_log(LOGS_DIR, {"cli": "auto_create", "status": "create_fail", "topic": rec["title"], "error": str(e)})
+        return 0
+    append_log(LOGS_DIR, {"cli": "auto_create", "status": "ok", "topic": rec["title"], "topic_id": out.get("topic_id"), "job_ids": out.get("job_ids")})
     return 0
 
 
