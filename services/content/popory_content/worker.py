@@ -3,6 +3,7 @@ import datetime
 import json
 import os
 import sys
+import threading
 import time
 from io import BytesIO
 from pathlib import Path
@@ -210,6 +211,16 @@ def report_heartbeat(client) -> None:
         client.post(HEARTBEAT_PATH, json=heartbeat_payload())
     except Exception as e:  # noqa: BLE001
         append_log(LOGS_DIR, {"worker": "content", "status": "heartbeat_failed", "error": str(e)[:200]})
+
+
+def heartbeat_loop(client, stop: threading.Event) -> None:
+    """백그라운드 스레드 — 메인 루프가 긴 생성 잡(10분 영상 등)에 블로킹돼도
+    하트비트를 끊김 없이 보낸다. 예전엔 루프 사이에서만 보내 생성 중엔 끊겨
+    포털이 워커를 오프라인으로 오판했다. PortalClient 는 호출마다 새 연결·서명이라
+    메인 스레드와 client 를 공유해도 안전하다."""
+    while not stop.is_set():
+        report_heartbeat(client)
+        stop.wait(HEARTBEAT_INTERVAL_SECONDS)
 
 
 def _try_cloudflare(client, prompt: str) -> bytes | None:
@@ -486,12 +497,10 @@ def run_cycle(client) -> bool:
 def main() -> None:
     client = _build_client()
     append_log(LOGS_DIR, {"worker": "content", "status": "start"})
-    last_hb = 0.0
+    # 하트비트는 별도 데몬 스레드가 보낸다 — 생성 잡이 메인 루프를 오래 잡고 있어도 online 유지.
+    threading.Thread(target=heartbeat_loop, args=(client, threading.Event()), daemon=True).start()
     while True:
         try:
-            if time.monotonic() - last_hb >= HEARTBEAT_INTERVAL_SECONDS:
-                report_heartbeat(client)
-                last_hb = time.monotonic()
             processed = run_cycle(client)
         except PortalError as e:
             append_log(LOGS_DIR, {"worker": "content", "status": "portal_error", "error": str(e)[:300]})
