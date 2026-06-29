@@ -149,12 +149,13 @@ def render_thumbnail(copy: str | None, image_prompt: str | None, out_jpg: Path,
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 90))
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
     d = ImageDraw.Draw(img)
-    font_size = 130 if portrait else 150
+    # 시니어(50대+) 시청자 가독성 위해 카피를 크게 — 폰트 확대 + 줄당 6자로 좁혀 폭 안전 확보
+    font_size = 175 if portrait else 200
     font = ImageFont.truetype(FONT_PATH, font_size)
-    wrap = 8 if portrait else 9
+    wrap = 6
     lines = "\n".join(textwrap.wrap(copy, width=wrap)) or " "
     d.multiline_text((w / 2, h / 2), lines, font=font, fill=(255, 255, 255), anchor="mm",
-                     align="center", spacing=16, stroke_width=8, stroke_fill=(0, 0, 0))
+                     align="center", spacing=16, stroke_width=font_size // 18, stroke_fill=(0, 0, 0))
     img.save(out_jpg, format="JPEG", quality=85)
     return out_jpg
 
