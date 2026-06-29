@@ -10,8 +10,8 @@ STYLE = {
     "watercolor": "watercolor painting",
     "minimal": "minimalist flat design",
 }
-DEFAULTS = {"length": "5", "voice": "male", "image_style": "photo"}
-SHORTS_DEFAULTS = {"length": "30", "voice": "male", "image_style": "photo", "upload_targets": []}
+DEFAULTS = {"length": "10", "voice": "male", "image_style": "photo"}
+SHORTS_DEFAULTS = {"length": "60", "voice": "male", "image_style": "photo", "upload_targets": []}
 
 
 def parse_options(params_json: str | None) -> dict:
