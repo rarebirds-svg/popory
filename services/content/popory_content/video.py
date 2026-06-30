@@ -276,14 +276,14 @@ def _pick_bgm(bgm_dir: Path, job_id: str) -> Path | None:
 def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
     """loudnorm(-14 LUFS) + (BGM 있으면) amix. 비디오는 copy.
     BGM 소스 자체가 작아(mean ~-34dB) 예전 volume=0.15 + amix 기본 normalize(입력당 ÷2)는
-    BGM을 ~-40dB로 묻어 사실상 안 들렸다. normalize=0(내레이션 원음 유지) + volume=2.5로
-    BGM을 갭 기준 ~-17dB(말소리보다 ~4dB 아래)의 또렷한 배경 베드로 올린다.
-    이 이상 키우면 내레이션 명료도를 위협한다."""
+    BGM을 ~-40dB로 묻어 사실상 안 들렸다. normalize=0(내레이션 원음 유지) + volume=3.5로
+    BGM을 갭 기준 ~-15dB(말소리보다 ~2dB 아래)의 강한 배경 베드로 올린다.
+    이 값이 실질 상한 — 더 키우면 BGM이 내레이션보다 커져 말소리가 묻힌다."""
     if bgm:
         cmd = [
             FFMPEG_BIN, "-y", "-i", str(src), "-stream_loop", "-1", "-i", str(bgm),
             "-filter_complex",
-            "[1:a]volume=2.5[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix];"
+            "[1:a]volume=3.5[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix];"
             "[mix]loudnorm=I=-14:TP=-1.5:LRA=11[a]",
             "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", str(out),
         ]
