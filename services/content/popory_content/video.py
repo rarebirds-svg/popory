@@ -166,8 +166,9 @@ def _split_sentences(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-# 문장별 TTS 클립 사이에 넣는 짧은 호흡(무음) 길이(초). 자막 타이밍이 이 값을 그대로 반영한다.
-SENTENCE_GAP = 0.35
+# 문장별 TTS 클립 사이에 넣는 호흡(무음) 길이(초). 자막 타이밍이 이 값을 그대로 반영한다.
+# 0.35는 마침표 뒤 다음 문장이 급하게 시작돼, 차분한 낭독 톤을 위해 0.7로 늘림.
+SENTENCE_GAP = 0.7
 XFADE_TD = 0.4  # 장면 크로스페이드 전이 길이(초). _xfade_graph·자막 오프셋이 공유.
 
 
