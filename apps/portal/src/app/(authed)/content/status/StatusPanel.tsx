@@ -11,7 +11,7 @@ interface Status {
 }
 
 const PLATFORM_LABEL: Record<string, string> = {
-  "naver-blog": "블로그", youtube: "유튜브", shorts: "쇼츠", "instagram-image": "인스타",
+  "naver-blog": "블로그", youtube: "유튜브", shorts: "쇼츠", "instagram-image": "인스타", "youtube-post": "게시물",
 };
 
 export function StatusPanel({ apiBase }: { apiBase: string }) {
