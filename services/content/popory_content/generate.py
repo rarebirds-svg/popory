@@ -8,6 +8,8 @@ from typing import Any, Callable, TypeVar
 
 from popory_content.contract import parse_generation, ContractError
 from popory_content.prompt import build_system_prompt, build_user_message
+from popory_content.youtube_post_prompt import build_youtube_post_system_prompt, build_youtube_post_user_message
+from popory_content.youtube_post_contract import parse_youtube_post
 
 CLAUDE_BIN = "/opt/homebrew/bin/claude"
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -86,5 +88,15 @@ def generate(*, topic: str, sources: list[dict[str, Any]], style_samples: list[s
     um = build_user_message(topic, sources)
     try:
         return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_generation, job_id=job_id, model=model)
+    except ContractError as e:  # 방어적: run_claude_cli 가 이미 GenerateError 로 감쌈
+        raise GenerateError(str(e)) from e
+
+
+def generate_youtube_post(*, topic: str, model: str = DEFAULT_MODEL,
+                          job_id: str = "adhoc") -> tuple[str, dict[str, Any]]:
+    sp = build_youtube_post_system_prompt()
+    um = build_youtube_post_user_message(topic)
+    try:
+        return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_youtube_post, job_id=job_id, model=model)
     except ContractError as e:  # 방어적: run_claude_cli 가 이미 GenerateError 로 감쌈
         raise GenerateError(str(e)) from e

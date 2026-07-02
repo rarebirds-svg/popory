@@ -96,3 +96,21 @@ def test_backoff_respects_cap(harness, monkeypatch):
         run_claude_cli(system_prompt="s", user_msg="u", parse=lambda x: x)
     # 10, 20, 40, 60(상한), 60(상한)
     assert harness["sleeps"] == [10, 20, 40, 60, 60]
+
+
+def test_generate_youtube_post_wires_prompt_and_parser(monkeypatch):
+    captured = {}
+
+    def fake_run(*, system_prompt, user_msg, parse, job_id, model):
+        captured["system_prompt"] = system_prompt
+        captured["user_msg"] = user_msg
+        captured["parse"] = parse
+        return ("게시물 본문", {"quote_verified": False, "book": "책", "author": None})
+
+    monkeypatch.setattr(generate, "run_claude_cli", fake_run)
+    draft, meta = generate.generate_youtube_post(topic="책 - 저자", job_id="j1")
+    assert draft == "게시물 본문"
+    assert meta["book"] == "책"
+    assert captured["parse"] is generate.parse_youtube_post
+    assert "책 - 저자" in captured["user_msg"]
+    assert "post_markdown" in captured["system_prompt"]
