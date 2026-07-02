@@ -24,7 +24,8 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   const youtubeDisabled = present.has("youtube");
   const shortsDisabled = present.has("shorts");
   const instaImageDisabled = present.has("instagram-image");
-  const allPresent = naverDisabled && youtubeDisabled && shortsDisabled && instaImageDisabled;
+  const ytPostDisabled = present.has("youtube-post");
+  const allPresent = naverDisabled && youtubeDisabled && shortsDisabled && instaImageDisabled && ytPostDisabled;
 
   const [styleId, setStyleId] = useState("");
   const [naverBlog, setNaverBlog] = useState(false);
@@ -33,6 +34,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   const [shToYoutube, setShToYoutube] = useState(true);
   const [shToInsta, setShToInsta] = useState(true);
   const [instaImage, setInstaImage] = useState(false);
+  const [ytPost, setYtPost] = useState(false);
 
   const [ytLength, setYtLength] = useState<"3"|"5"|"7"|"10">("5");
   const [ytVoice, setYtVoice] = useState<"female-calm"|"female-bright"|"male">("female-calm");
@@ -43,7 +45,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   const [slideCount, setSlideCount] = useState(7);
 
   const showShorts = shorts;
-  const noneSelected = !naverBlog && !youtube && !shorts && !instaImage;
+  const noneSelected = !naverBlog && !youtube && !shorts && !instaImage && !ytPost;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -62,6 +64,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
         platforms.push({ platform: "shorts", options: { length: shLength, voice: shVoice, image_style: shStyle, upload_targets: targets } });
       }
       if (instaImage) platforms.push({ platform: "instagram-image", options: { slide_count: slideCount } });
+      if (ytPost) platforms.push({ platform: "youtube-post" });
 
       const res = await fetch(`${API_BASE}/api/content/topics/${topicId}/jobs`, {
         method: "POST",
@@ -70,7 +73,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
         body: JSON.stringify({ platforms, style_profile_id: styleId || undefined }),
       });
       if (!res.ok) { setErr(friendlyError(res.status, (await res.text()).slice(0, 200))); return; }
-      setNaverBlog(false); setYoutube(false); setShorts(false); setInstaImage(false);
+      setNaverBlog(false); setYoutube(false); setShorts(false); setInstaImage(false); setYtPost(false);
       startTransition(() => router.refresh());
     } catch (e) {
       setErr({ message: "네트워크 연결을 확인하고 다시 시도해 주세요.", detail: String(e).slice(0, 200), retryable: true });
@@ -116,6 +119,10 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
         <label className={instaImageDisabled ? CHECK_DISABLED : CHECK_LABEL}>
           <input type="checkbox" checked={instaImage} disabled={instaImageDisabled} onChange={(e) => setInstaImage(e.target.checked)} />
           인스타 이미지 (캐러셀){instaImageDisabled && " (이미 있음)"}
+        </label>
+        <label className={ytPostDisabled ? CHECK_DISABLED : CHECK_LABEL}>
+          <input type="checkbox" checked={ytPost} disabled={ytPostDisabled} onChange={(e) => setYtPost(e.target.checked)} />
+          유튜브 게시물{ytPostDisabled ? " (이미 있음)" : <span className="text-popory-muted"> · 오늘의 한 문장</span>}
         </label>
       </div>
 
