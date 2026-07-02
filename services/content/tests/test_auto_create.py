@@ -21,7 +21,7 @@ def test_run_creates_one_grouped_topic(tmp_path, monkeypatch):
     url, body = fc.posted[0]
     assert url == "/api/content/topics/service-create"
     plats = sorted(p["platform"] for p in body["platforms"])
-    assert plats == ["naver-blog", "shorts", "youtube"]
+    assert plats == ["naver-blog", "shorts", "youtube", "youtube-post"]
     assert body["category_slug"] == "book-review"
     assert body["recommendation_id"] == "r1"
     assert body["topic"] == "원씽"

@@ -49,7 +49,7 @@ def run() -> int:
             "topic": rec["title"],
             "author": rec.get("author"),
             "category_slug": "book-review",
-            "platforms": [{"platform": "naver-blog"}, {"platform": "youtube"}, {"platform": "shorts"}],
+            "platforms": [{"platform": "naver-blog"}, {"platform": "youtube"}, {"platform": "shorts"}, {"platform": "youtube-post"}],
             "recommendation_id": rec["id"],
         })
     except PortalError as e:
