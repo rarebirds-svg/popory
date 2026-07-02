@@ -31,6 +31,7 @@ export function NewJobForm({ profiles, initialTopic = "", categories, defaultCat
   const [shToInsta, setShToInsta] = useState(true);
   const [shToFacebook, setShToFacebook] = useState(true);
   const [instaImage, setInstaImage] = useState(false);
+  const [ytPost, setYtPost] = useState(false);
 
   // YouTube 동영상 옵션
   const [ytLength, setYtLength] = useState<"3"|"5"|"7"|"10">("10");
@@ -52,7 +53,7 @@ export function NewJobForm({ profiles, initialTopic = "", categories, defaultCat
   function removeSource(i: number) { setSources((s) => s.filter((_, idx) => idx !== i)); }
 
   const showShorts = shorts;
-  const noneSelected = !naverBlog && !youtube && !shorts && !instaImage;
+  const noneSelected = !naverBlog && !youtube && !shorts && !instaImage && !ytPost;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -77,6 +78,7 @@ export function NewJobForm({ profiles, initialTopic = "", categories, defaultCat
         platforms.push({ platform: "shorts", options: { length: shLength, voice: shVoice, image_style: shStyle, upload_targets: targets } });
       }
       if (instaImage) platforms.push({ platform: "instagram-image", options: { slide_count: slideCount } });
+      if (ytPost) platforms.push({ platform: "youtube-post" });
 
       const res = await fetch(`${API_BASE}/api/content/topics`, {
         method: "POST",
@@ -155,6 +157,10 @@ export function NewJobForm({ profiles, initialTopic = "", categories, defaultCat
           <label className={CHECK_LABEL}>
             <input type="checkbox" checked={instaImage} onChange={(e) => setInstaImage(e.target.checked)} />
             인스타 이미지 (캐러셀)
+          </label>
+          <label className={CHECK_LABEL}>
+            <input type="checkbox" checked={ytPost} onChange={(e) => setYtPost(e.target.checked)} />
+            유튜브 게시물 <span className="text-popory-muted">· 오늘의 한 문장</span>
           </label>
         </div>
       </fieldset>
