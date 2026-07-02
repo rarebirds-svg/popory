@@ -17,7 +17,7 @@ export const ContentJobOptionsSchema = z.object({
 
 export const ContentJobCreateSchema = z.object({
   topic: z.string().min(1).max(200),
-  platform: z.enum(["naver-blog", "youtube", "shorts", "instagram-image"]).default("naver-blog"),
+  platform: z.enum(["naver-blog", "youtube", "shorts", "instagram-image", "youtube-post"]).default("naver-blog"),
   style_profile_id: z.string().max(64).optional(),
   sources: z.array(ContentSourceInputSchema).max(20).optional(),
   options: ContentJobOptionsSchema.optional(),
@@ -28,7 +28,7 @@ export type ContentJobCreate = z.infer<typeof ContentJobCreateSchema>;
 export const JobServiceCreateSchema = z.object({
   owner_sub: z.string().min(1).max(64),
   topic: z.string().min(1).max(200),
-  platform: z.enum(["youtube", "shorts", "naver-blog"]),
+  platform: z.enum(["youtube", "shorts", "naver-blog", "youtube-post"]),
   options: ContentJobOptionsSchema.optional(),
   recommendation_id: z.string().max(64).optional(),
   category_slug: z.string().max(80).optional(),
@@ -57,7 +57,7 @@ export const StyleProfileCreateSchema = z.object({
 export type StyleProfileCreate = z.infer<typeof StyleProfileCreateSchema>;
 
 export const TopicPlatformSchema = z.object({
-  platform: z.enum(["naver-blog", "youtube", "shorts", "instagram-image"]),
+  platform: z.enum(["naver-blog", "youtube", "shorts", "instagram-image", "youtube-post"]),
   options: z.object({
     length: z.enum(["3", "5", "7", "10", "15", "30", "60"]).optional(),
     voice: z.enum(["female-calm", "female-bright", "male"]).optional(),
