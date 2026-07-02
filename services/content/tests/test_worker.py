@@ -55,6 +55,21 @@ def test_success_posts_review(monkeypatch):
     assert body["meta"]["seo"]["score"] == 80
 
 
+def test_youtube_post_branch_reviews(monkeypatch):
+    monkeypatch.setattr(
+        worker, "generate_youtube_post",
+        lambda **kw: ("오늘의 문장 게시물", {"quote_verified": False, "book": "책", "author": None}),
+    )
+    client = FakeClient({"job": {"id": "p1", "topic": "책 - 저자", "platform": "youtube-post"},
+                         "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    path, body = client.patched[0]
+    assert path == "/api/content/jobs/p1/result"
+    assert body["status"] == "review"
+    assert body["draft"] == "오늘의 문장 게시물"
+    assert body["meta"]["book"] == "책"
+
+
 def test_failure_posts_failed(monkeypatch):
     def boom(**kw):
         raise worker.GenerateError("ng")

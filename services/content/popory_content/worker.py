@@ -11,7 +11,7 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-from popory_content.generate import generate, GenerateError
+from popory_content.generate import generate, GenerateError, generate_youtube_post
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
 from popory_content.video import make_video, VideoError, render_thumbnail, TMP
 from popory_content.subtitles import to_srt
@@ -111,6 +111,9 @@ def run_once(client) -> bool:
             client.put_carousel(job_id, images)
             caption = meta.get("caption", "")
             _report(client, job_id, {"status": "review", "draft": caption, "meta": meta}, "review")
+        elif platform == "youtube-post":
+            draft, meta = generate_youtube_post(topic=job["topic"], job_id=job_id)
+            _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
         else:
             draft, meta = generate(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
             _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
