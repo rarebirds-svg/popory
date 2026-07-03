@@ -206,6 +206,40 @@ def test_render_video_counts_missing_images(monkeypatch, tmp_path):
     assert missing == 2 # 'fail' 2개
 
 
+def _render_stub(monkeypatch, tmp_path, video):
+    """render_video 의 무거운 ffmpeg/TTS 호출을 전부 우회하는 공통 monkeypatch."""
+    monkeypatch.setattr(video, "FONT_PATH", str(tmp_path))
+    monkeypatch.setattr(video, "synthesize", lambda text, voice=None: b"AUDIO")
+    monkeypatch.setattr(video, "_run", lambda cmd: None)
+    monkeypatch.setattr(video, "_duration", lambda path: 1.0)
+    monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_render_headline_png", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_render_subtitle_png", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_xfade_graph", lambda durs, td=0.4: ("", "v", "a"))
+
+
+def test_render_video_skips_bgm_when_disabled(monkeypatch, tmp_path):
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "BGM_ENABLED", False)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: "PICKED")  # 꺼지면 호출 결과가 쓰이면 안 됨
+    captured = {}
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm: captured.update(bgm=bgm))
+    video.render_video([{"caption": "a", "narration": "n1"}, {"caption": "b", "narration": "n2"}], job_id="nobgm")
+    assert captured["bgm"] is None
+
+
+def test_render_video_uses_bgm_when_enabled(monkeypatch, tmp_path):
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "BGM_ENABLED", True)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: "PICKED")
+    captured = {}
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm: captured.update(bgm=bgm))
+    video.render_video([{"caption": "a", "narration": "n1"}, {"caption": "b", "narration": "n2"}], job_id="withbgm")
+    assert captured["bgm"] == "PICKED"
+
+
 def test_global_cues_offset_by_scene(monkeypatch):
     # 장면 2개, 각 1문장. 장면 클립 길이를 고정해 전역 cue 오프셋을 검증.
     from popory_content import video as V

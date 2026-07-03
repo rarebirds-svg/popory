@@ -31,6 +31,8 @@ HEAD_COLOR = (255, 255, 255)
 BODY_COLOR = (223, 231, 245)
 TMP = Path("/tmp")
 BGM_DIR = Path(__file__).resolve().parent.parent / "assets" / "bgm"
+# 배경음악 사용 여부. 새 BGM 선정 전까지 꺼둠(2026-07-03 요청). 재활성은 env POPORY_BGM_ENABLED=1 또는 기본값을 "1"로.
+BGM_ENABLED = os.environ.get("POPORY_BGM_ENABLED", "0") == "1"
 
 
 class VideoError(Exception):
@@ -411,7 +413,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         ]
         _run(cmd)
     out = work / "out.mp4"
-    _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id))
+    _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id) if BGM_ENABLED else None)
     offsets = scene_offsets(clip_durations, XFADE_TD)
     cues: list[Cue] = []
     for off, local in zip(offsets, scene_local_cues):
