@@ -22,6 +22,7 @@ from popory_content.options import parse_options, parse_shorts_options, SCENE_CO
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log
+from popory_content.usage import cached_claude_usage
 from popory_content.instagram_image_prompt import build_carousel_system_prompt, build_carousel_user_message
 from popory_content.instagram_image_contract import parse_carousel
 from popory_content.instagram_image_render import render_carousel
@@ -205,6 +206,7 @@ def heartbeat_payload() -> dict:
         "cf_image_exhausted": _cf_exhausted_today(),
         "cf_reset_date": _cf_reset_date(),
         "imagegen_ok": _imagegen_ok(),
+        "usage": cached_claude_usage(),
     }
 
 

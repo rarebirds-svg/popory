@@ -9,18 +9,28 @@ from popory_content import worker
 
 @pytest.fixture(autouse=True)
 def _isolate_logs(tmp_path, monkeypatch):
-    """테스트의 heartbeat 실패 로깅이 실제 services/content/logs/ 를 오염시키지 않도록 격리."""
+    """테스트의 heartbeat 실패 로깅 격리 + 사용량 취득이 실제 keychain·네트워크를 타지 않게 기본 무력화."""
     monkeypatch.setattr(worker, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setattr(worker, "cached_claude_usage", lambda: None)
 
 
 def test_heartbeat_payload_keys(monkeypatch):
     monkeypatch.setattr(worker, "_cf_exhausted_today", lambda: False)
     monkeypatch.setattr(worker, "_imagegen_ok", lambda: True)
+    monkeypatch.setattr(worker, "cached_claude_usage", lambda: None)
     p = worker.heartbeat_payload()
-    assert set(p) == {"cf_image_exhausted", "cf_reset_date", "imagegen_ok"}
+    assert set(p) == {"cf_image_exhausted", "cf_reset_date", "imagegen_ok", "usage"}
     assert p["cf_image_exhausted"] is False
     assert p["cf_reset_date"] is None        # 미소진이면 리셋일 없음
     assert p["imagegen_ok"] is True
+
+
+def test_heartbeat_payload_includes_usage(monkeypatch):
+    monkeypatch.setattr(worker, "_cf_exhausted_today", lambda: False)
+    monkeypatch.setattr(worker, "_imagegen_ok", lambda: True)
+    monkeypatch.setattr(worker, "cached_claude_usage", lambda: {"session": {"percent": 42}})
+    p = worker.heartbeat_payload()
+    assert p["usage"] == {"session": {"percent": 42}}
 
 
 def test_cf_reset_date_is_next_utc_day_when_exhausted(monkeypatch):
