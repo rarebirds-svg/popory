@@ -2,10 +2,14 @@
 // 콘텐츠 생성 상태를 10초마다 폴링해 readiness·트래픽을 표시하는 client 컴포넌트.
 import { useEffect, useState } from "react";
 
+interface UsageItem { percent: number; resets_at: string; severity: string }
+interface ClaudeUsage { session?: UsageItem; weekly_all?: UsageItem; weekly_fable?: UsageItem }
+
 interface Status {
   worker: { online: boolean; reported_at: number | null; age_sec: number | null };
   image_free: { exhausted: boolean; reset_date: string | null };
   imagegen_ok: boolean;
+  claude_usage: ClaudeUsage | null;
   can_generate: boolean;
   traffic: { platform: string; status: string; count: number }[];
 }
@@ -13,6 +17,42 @@ interface Status {
 const PLATFORM_LABEL: Record<string, string> = {
   "naver-blog": "블로그", youtube: "유튜브", shorts: "쇼츠", "instagram-image": "인스타", "youtube-post": "게시물",
 };
+
+const SEV_BAR: Record<string, string> = { normal: "bg-green-500", warning: "bg-yellow-500", critical: "bg-red-500" };
+const SEV_TEXT: Record<string, string> = { normal: "text-green-600", warning: "text-yellow-600", critical: "text-red-600" };
+
+function fmtReset(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch { return iso; }
+}
+
+function UsageRow({ label, item }: { label: string; item?: UsageItem }) {
+  if (!item) {
+    return (
+      <li className="flex justify-between border-b border-popory-muted/20 pb-2">
+        <span className="text-popory-muted">{label}</span>
+        <span className="text-popory-muted">정보 없음</span>
+      </li>
+    );
+  }
+  const pct = Math.max(0, Math.min(100, Math.round(item.percent)));
+  const fill = Math.round(pct / 10);
+  const bar = SEV_BAR[item.severity] ?? "bg-green-500";
+  return (
+    <li className="border-b border-popory-muted/20 pb-2">
+      <div className="flex justify-between">
+        <span className="text-popory-muted">{label}</span>
+        <span className={SEV_TEXT[item.severity] ?? "text-popory-fg"}>{pct}% · {fmtReset(item.resets_at)} 리셋</span>
+      </div>
+      <div className="mt-1 flex gap-0.5">
+        {Array.from({ length: 10 }, (_, i) => (
+          <span key={i} className={`h-1.5 flex-1 rounded-sm ${i < fill ? bar : "bg-popory-muted/20"}`} />
+        ))}
+      </div>
+    </li>
+  );
+}
 
 export function StatusPanel({ apiBase }: { apiBase: string }) {
   const [s, setS] = useState<Status | null>(null);
@@ -79,6 +119,19 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
             <span className="text-popory-fg">Google Chirp3-HD (ko-KR)</span>
           </li>
         </ul>
+      </section>
+
+      <section>
+        <h2 className="text-lg font-semibold text-popory-fg">Claude Code 사용량</h2>
+        {s.claude_usage ? (
+          <ul className="mt-3 space-y-2 text-sm">
+            <UsageRow label="현재 세션 (5시간)" item={s.claude_usage.session} />
+            <UsageRow label="주간 전체 (all models)" item={s.claude_usage.weekly_all} />
+            <UsageRow label="주간 Fable" item={s.claude_usage.weekly_fable} />
+          </ul>
+        ) : (
+          <p className="mt-3 text-sm text-popory-muted">정보 없음</p>
+        )}
       </section>
 
       <section>
