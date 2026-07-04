@@ -11,12 +11,11 @@ if [ -z "$CODEX" ]; then
   exit 1
 fi
 
-INSTRUCTIONS="정확성 버그를 최우선으로, 다음으로 AGENTS.md 규칙 위반(외과적 변경, 단순성, 신규 파일 한국어 헤더 주석)을 검사하라. 각 지적에 심각도(치명/중요/사소)와 파일:라인을 붙여 한국어로 보고하라. 코드를 수정하지 마라."
-
-# 인자 없으면 미커밋 변경, 브랜치명을 주면 해당 베이스 대비 diff를 리뷰한다
+# 인자 없으면 미커밋 변경, 브랜치명을 주면 해당 베이스 대비 diff를 리뷰한다.
+# --uncommitted/--base는 커스텀 프롬프트와 상호 배타라 기본 리뷰 지침을 쓴다 (AGENTS.md는 codex가 네이티브로 읽음).
 BASE="${1:-}"
 if [ -n "$BASE" ]; then
-  exec "$CODEX" exec review --base "$BASE" "$INSTRUCTIONS"
+  exec "$CODEX" exec review --base "$BASE"
 else
-  exec "$CODEX" exec review --uncommitted "$INSTRUCTIONS"
+  exec "$CODEX" exec review --uncommitted
 fi
