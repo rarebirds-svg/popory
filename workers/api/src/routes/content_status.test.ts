@@ -100,4 +100,33 @@ describe("content status", () => {
     // done·review는 트래픽에 없다
     expect(body.traffic.some((t) => t.status === "done" || t.status === "review")).toBe(false);
   });
+
+  it("하트비트 usage 보고 후 status가 claude_usage 반환", async () => {
+    const token = await workerToken();
+    const usage = {
+      session: { percent: 38, resets_at: "2026-07-04T21:19:59+00:00", severity: "normal" },
+      weekly_all: { percent: 50, resets_at: "2026-07-06T15:59:59+00:00", severity: "normal" },
+      weekly_fable: { percent: 21, resets_at: "2026-07-06T15:59:59+00:00", severity: "normal" },
+    };
+    const post = await SELF.fetch("https://example.com/api/content/worker-heartbeat", {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ cf_image_exhausted: false, imagegen_ok: true, usage }),
+    });
+    expect(post.status).toBe(200);
+    const res = await SELF.fetch("https://example.com/api/content/status", { headers: { cookie: await userCookie() } });
+    const body = await res.json<{ claude_usage: typeof usage | null }>();
+    expect(body.claude_usage?.session.percent).toBe(38);
+    expect(body.claude_usage?.weekly_fable.percent).toBe(21);
+  });
+
+  it("usage 없이 하트비트면 claude_usage는 null", async () => {
+    const token = await workerToken();
+    await SELF.fetch("https://example.com/api/content/worker-heartbeat", {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ cf_image_exhausted: false, imagegen_ok: true }),
+    });
+    const res = await SELF.fetch("https://example.com/api/content/status", { headers: { cookie: await userCookie() } });
+    const body = await res.json<{ claude_usage: unknown }>();
+    expect(body.claude_usage).toBe(null);
+  });
 });

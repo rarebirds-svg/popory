@@ -17,20 +17,21 @@ export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>
     const svc = c.get("service")!;
     if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
     const body = (await c.req.json().catch(() => null)) as
-      | { cf_image_exhausted?: unknown; cf_reset_date?: unknown; imagegen_ok?: unknown }
+      | { cf_image_exhausted?: unknown; cf_reset_date?: unknown; imagegen_ok?: unknown; usage?: unknown }
       | null;
     if (!body) return c.text("bad request", 400);
     const exhausted = body.cf_image_exhausted ? 1 : 0;
     const imagegenOk = body.imagegen_ok ? 1 : 0;
     const resetDate = typeof body.cf_reset_date === "string" ? body.cf_reset_date : null;
+    const usageJson = body.usage && typeof body.usage === "object" ? JSON.stringify(body.usage) : null;
     const now = Math.floor(Date.now() / 1000);
     await c.env.DB.prepare(
-      `INSERT INTO worker_heartbeat (id, reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO worker_heartbeat (id, reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok, usage_json)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET reported_at=excluded.reported_at,
          cf_image_exhausted=excluded.cf_image_exhausted, cf_reset_date=excluded.cf_reset_date,
-         imagegen_ok=excluded.imagegen_ok`,
-    ).bind(WORKER_ID, now, exhausted, resetDate, imagegenOk).run();
+         imagegen_ok=excluded.imagegen_ok, usage_json=excluded.usage_json`,
+    ).bind(WORKER_ID, now, exhausted, resetDate, imagegenOk, usageJson).run();
     return c.json({ ok: true });
   });
 
@@ -40,11 +41,14 @@ export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>
     if (unauth) return unauth;
     const now = Math.floor(Date.now() / 1000);
     const hb = await c.env.DB.prepare(
-      "SELECT reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok FROM worker_heartbeat WHERE id=?",
+      "SELECT reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok, usage_json FROM worker_heartbeat WHERE id=?",
     ).bind(WORKER_ID).first<{
       reported_at: number; cf_image_exhausted: number; cf_reset_date: string | null; imagegen_ok: number;
+      usage_json: string | null;
     }>();
     const online = !!hb && now - hb.reported_at < STALE_SEC;
+    let claudeUsage: unknown = null;
+    if (hb?.usage_json) { try { claudeUsage = JSON.parse(hb.usage_json); } catch { claudeUsage = null; } }
     const { results } = await c.env.DB.prepare(
       `SELECT platform, status, COUNT(*) AS count FROM content_jobs
        WHERE status IN ('queued','running') GROUP BY platform, status`,
@@ -53,6 +57,7 @@ export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>
       worker: { online, reported_at: hb?.reported_at ?? null, age_sec: hb ? now - hb.reported_at : null },
       image_free: { exhausted: !!hb && hb.cf_image_exhausted === 1, reset_date: hb?.cf_reset_date ?? null },
       imagegen_ok: !!hb && hb.imagegen_ok === 1,
+      claude_usage: claudeUsage,
       can_generate: online,
       traffic: results,
     });
