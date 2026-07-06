@@ -171,6 +171,9 @@ def _split_sentences(text: str) -> list[str]:
 # 문장별 TTS 클립 사이에 넣는 호흡(무음) 길이(초). 자막 타이밍이 이 값을 그대로 반영한다.
 # 0.35는 마침표 뒤 다음 문장이 급하게 시작돼, 차분한 낭독 톤을 위해 0.7로 늘림.
 SENTENCE_GAP = 0.7
+# 챕터(상단 헤드라인)가 바뀌는 장면 경계에 넣는 호흡(무음) 길이(초). 문장 사이(마침표)보다
+# 길게 둬야 한 챕터가 끝났음이 청각적으로 구분된다 → 마침표 인터벌의 2배.
+CHAPTER_GAP = 2 * SENTENCE_GAP
 XFADE_TD = 0.4  # 장면 크로스페이드 전이 길이(초). _xfade_graph·자막 오프셋이 공유.
 
 
@@ -208,6 +211,15 @@ def _concat_audio_with_gaps(segments: list[Path], gap: float, out: Path) -> None
         inputs += ["-i", str(p)]
     concat = "".join(f"[{i}:a]" for i in range(len(seq))) + f"concat=n={len(seq)}:v=0:a=1[a]"
     _run([FFMPEG_BIN, "-y", *inputs, "-filter_complex", concat, "-map", "[a]", str(out)])
+
+
+def _append_silence(src: Path, seconds: float, out: Path) -> None:
+    """장면 오디오 끝에 seconds 무음을 덧붙인다 — 챕터(상단 헤드라인) 전환 호흡용."""
+    sil = out.with_name(f"{out.stem}_tail.wav")
+    _run([FFMPEG_BIN, "-y", "-f", "lavfi", "-t", f"{seconds:.3f}",
+          "-i", "anullsrc=channel_layout=mono:sample_rate=24000", str(sil)])
+    _run([FFMPEG_BIN, "-y", "-i", str(src), "-i", str(sil),
+          "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[a]", "-map", "[a]", str(out)])
 
 
 def _render_subtitle_png(sentence: str, out_png: Path, portrait: bool = False) -> None:
@@ -366,6 +378,13 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             seg_durs.append(_duration(seg))
         audio = work / f"{i}.mp3"
         _concat_audio_with_gaps(seg_audios, SENTENCE_GAP, audio)
+        # 챕터(상단 헤드라인)가 바뀌는 장면 경계엔 문장 사이보다 긴 호흡을 둔다(마지막 장면 뒤엔
+        # 불필요). 무음은 클립에 포함되므로 dur·clip_durations에 반영돼 cue 오프셋이 자동 정합.
+        # 장면 전환 크로스페이드(XFADE_TD)가 이 무음 끝을 살짝 먹어 실제 정적은 조금 짧게 들린다.
+        if i < len(scenes) - 1:
+            padded = work / f"{i}_chapter.mp3"
+            _append_silence(audio, CHAPTER_GAP, padded)
+            audio = padded
         dur = _duration(audio)
         base_png = work / f"{i}.png"
         _render_card("", "", base_png, bg_image_bytes=bg_bytes, portrait=portrait)
