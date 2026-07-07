@@ -59,6 +59,10 @@ describe("TopicServiceCreateSchema", () => {
   it("platforms 비면 실패", () => {
     expect(TopicServiceCreateSchema.safeParse({ owner_sub: "u1", topic: "t", platforms: [] }).success).toBe(false);
   });
+  it("author=null 허용(저자 없는 추천 주제)", () => {
+    const r = TopicServiceCreateSchema.safeParse({ owner_sub: "u1", topic: "t", author: null, platforms: [{ platform: "youtube" }] });
+    expect(r.success).toBe(true);
+  });
 });
 
 describe("JobServiceCreateSchema", () => {
