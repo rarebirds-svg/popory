@@ -27,6 +27,9 @@ _MIDDOT = re.compile(r"\s*·\s*")                           # 가운뎃점(나�
 _COLON = re.compile(r"(?<!\d)\s*[:;]\s*|\s*[:;]\s*(?!\d)")  # 숫자 사이 아닌 콜론·세미콜론 → 쉼표
 _SLASH = re.compile(r"(?<!\d)\s*/\s*|\s*/\s*(?!\d)")       # 숫자 사이 아닌 슬래시 → 공백
 _AMP = re.compile(r"\s*&\s*")                              # 앰퍼샌드 → 공백
+_HANGUL = re.compile(r"[가-힣]")                            # 한글 음절 포함 여부 판별용
+# 괄호 안이 한글 없는 한자·영어 주석이면 통째 제거 — 한자가 앞말과 같은 한국어 독음으로 다시 읽혀 이중 발음되는 것 방지(예: 구방심(求放心) → 구방심)
+_PAREN_GLOSS = re.compile(r"\s*[(（]([^()（）]*)[)）]")
 _OPEN_PAREN = re.compile(r"\s*[(（]\s*")                    # 여는 괄호 → 공백(앞말과 띄움)
 _CLOSE_PAREN = re.compile(r"\s*[)）]")                      # 닫는 괄호 → 제거(뒤 조사 붙임)
 _SYMBOLS = re.compile(r"[*#`>_|→⇒↔•]")                     # 마크다운·기호 잔여물 → 제거
@@ -46,6 +49,8 @@ def _normalize_for_tts(text: str) -> str:
     text = _COLON.sub(", ", text)
     text = _SLASH.sub(" ", text)
     text = _AMP.sub(" ", text)
+    # 한글 없는 괄호 주석(한자·영어)은 통째 제거, 한글 포함 괄호는 남겨 뒤에서 괄호만 벗김
+    text = _PAREN_GLOSS.sub(lambda m: "" if not _HANGUL.search(m.group(1)) else m.group(0), text)
     text = _OPEN_PAREN.sub(" ", text)
     text = _CLOSE_PAREN.sub("", text)
     text = _SYMBOLS.sub("", text)

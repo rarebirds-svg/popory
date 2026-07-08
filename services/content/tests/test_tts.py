@@ -115,6 +115,16 @@ def test_normalize_strips_quotes_keep_content():
     assert _normalize_for_tts("‘안전마진’이 핵심이다.") == "안전마진이 핵심이다."
 
 
+def test_normalize_strips_non_hangul_paren_gloss():
+    from popory_content.tts import _normalize_for_tts
+    # 한자·영어 괄호 주석은 앞말과 같은 독음으로 다시 읽혀 이중 발음 → 통째 제거(한 번만 읽음)
+    assert _normalize_for_tts("구방심(求放心)을 되찾다.") == "구방심을 되찾다."
+    assert _normalize_for_tts("생어우환(生於憂患).") == "생어우환."
+    assert _normalize_for_tts("인공지능(AI)이 온다.") == "인공지능이 온다."
+    # 한글이 든 괄호는 내용 유지(괄호만 벗김) — 기존 동작 보존
+    assert _normalize_for_tts("그는(웃으며) 말했다.") == "그는 웃으며 말했다."
+
+
 def test_normalize_colon_semicolon_not_between_digits():
     from popory_content.tts import _normalize_for_tts
     assert _normalize_for_tts("결론: 투자하라.") == "결론, 투자하라."
