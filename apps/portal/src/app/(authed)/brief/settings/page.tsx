@@ -8,7 +8,7 @@ import { CustomTopics } from "./CustomTopics";
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
-const CATEGORY_ORDER = ["antitrust", "chaebol", "anticorruption", "sanction", "legal-ai", "realestate", "naver"];
+const CATEGORY_ORDER = ["antitrust", "chaebol", "anticorruption", "sanction", "geopolitics", "legal-ai", "realestate", "naver"];
 
 async function fetchCategories(): Promise<CategoryMeta[]> {
   try {

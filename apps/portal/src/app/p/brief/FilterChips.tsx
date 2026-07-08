@@ -25,6 +25,7 @@ const BADGE_COLORS: Record<string, { bg: string; text: string }> = {
   anticorruption: { bg: "bg-red-100", text: "text-red-700" },
   chaebol: { bg: "bg-yellow-100", text: "text-yellow-800" },
   sanction: { bg: "bg-purple-100", text: "text-purple-700" },
+  geopolitics: { bg: "bg-indigo-100", text: "text-indigo-700" },
   antitrust: { bg: "bg-green-100", text: "text-green-700" },
   "legal-ai": { bg: "bg-sky-100", text: "text-sky-700" },
   naver: { bg: "bg-emerald-100", text: "text-emerald-700" },
