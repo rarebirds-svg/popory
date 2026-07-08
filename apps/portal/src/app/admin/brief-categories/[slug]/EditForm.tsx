@@ -76,6 +76,31 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
     }
   }
 
+  async function onDelete() {
+    if (!confirm(`'${name}' (${slug}) 카테고리를 삭제합니다.\nSKILL.md가 GitHub에서 제거되고 이 카테고리 구독도 정리됩니다. 되돌릴 수 없습니다. 계속할까요?`)) return;
+    setErr(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/brief-categories/${slug}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setErr(`삭제 실패 worker-${res.status}: ${text.slice(0, 400)}`);
+        setSubmitting(false);
+        return;
+      }
+      startTransition(() => {
+        router.push("/admin/brief-categories");
+        router.refresh();
+      });
+    } catch (e) {
+      setErr(`fetch: ${String(e).slice(0, 300)}`);
+      setSubmitting(false);
+    }
+  }
+
   const busy = pending || submitting;
 
   return (
@@ -145,6 +170,14 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
         >
           취소
         </a>
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={busy}
+          className="ml-auto rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
+        >
+          {busy ? "처리 중…" : "삭제"}
+        </button>
       </div>
     </form>
   );
