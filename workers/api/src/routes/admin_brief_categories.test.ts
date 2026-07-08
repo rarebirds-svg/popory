@@ -286,4 +286,45 @@ describe("admin_brief_categories", () => {
     const body = await res.json<{ items: unknown[] }>();
     expect(body.items).toEqual([]);
   });
+
+  it("DELETE 정상 — getFile sha 확보 후 GitHub DELETE + 구독행 정리 + 200", async () => {
+    let deleteBody: any = null;
+    mockGithub({
+      "contents/services/brief/categories/realestate/SKILL.md": async (req) => {
+        if (req.method === "DELETE") {
+          deleteBody = await req.json();
+          return Response.json({ commit: { sha: "del1" }, content: null });
+        }
+        return Response.json({ content: btoa(unescape(encodeURIComponent(SKILL_REALESTATE))), sha: "f1", path: "services/brief/categories/realestate/SKILL.md" });
+      },
+    });
+    const ck = await makeAdminCookie();
+    await env.DB.prepare("INSERT OR REPLACE INTO area_subscriptions (sub, area, enabled_at) VALUES (?, 'brief-realestate', 1)").bind(ADMIN_SUB).run();
+    const res = await SELF.fetch("https://example.com/api/admin/brief-categories/realestate", {
+      method: "DELETE",
+      headers: { cookie: ck },
+    });
+    expect(res.status).toBe(200);
+    const out = await res.json<{ deleted: string }>();
+    expect(out.deleted).toBe("realestate");
+    expect(deleteBody.sha).toBe("f1");
+    expect(deleteBody.message).toContain(ADMIN_EMAIL);
+    const remaining = await env.DB.prepare("SELECT COUNT(*) AS n FROM area_subscriptions WHERE area='brief-realestate'").first<{ n: number }>();
+    expect(remaining?.n).toBe(0);
+  });
+
+  it("DELETE 존재하지 않는 slug → 404", async () => {
+    mockGithub({
+      "contents/services/brief/categories/nope/SKILL.md": () => new Response(JSON.stringify({ message: "Not Found" }), { status: 404 }),
+    });
+    const ck = await makeAdminCookie();
+    const res = await SELF.fetch("https://example.com/api/admin/brief-categories/nope", { method: "DELETE", headers: { cookie: ck } });
+    expect(res.status).toBe(404);
+  });
+
+  it("DELETE 비admin → 401/403", async () => {
+    const ck = await makeMemberCookie();
+    const res = await SELF.fetch("https://example.com/api/admin/brief-categories/realestate", { method: "DELETE", headers: { cookie: ck } });
+    expect([401, 403]).toContain(res.status);
+  });
 });

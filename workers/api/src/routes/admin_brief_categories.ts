@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { requireAdmin, type AppVars } from "../middleware/session";
 import { parseSkillMd, serializeSkillMd, validateFields, type SkillFields } from "../lib/skill_md";
-import { getDir, getFile, putFile, GitHubApiError } from "../lib/github_contents";
+import { getDir, getFile, putFile, deleteFile, GitHubApiError } from "../lib/github_contents";
 
 const CATEGORIES_PATH = "services/brief/categories";
 
@@ -165,5 +165,31 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
       if (e instanceof GitHubApiError) return c.text(`github: ${e.message}`, 502);
       throw e;
     }
+  });
+
+  // DELETE 단건 — SKILL.md 삭제 커밋 + 해당 area 구독행 정리
+  app.delete("/api/admin/brief-categories/:slug", async (c) => {
+    const denied = requireAdmin(c); if (denied) return denied;
+    const slug = c.req.param("slug");
+    const user = c.get("user")!;
+    const token = c.env.BRIEF_CATEGORIES_GITHUB_TOKEN;
+    const path = `${CATEGORIES_PATH}/${slug}/SKILL.md`;
+    try {
+      const file = await getFile(token, path); // 현재 sha 확보 (없으면 404)
+      await deleteFile(token, {
+        path,
+        message: `chore(brief): delete categories/${slug}/SKILL.md via portal admin (by ${user.email})`,
+        sha: file.sha,
+      });
+    } catch (e) {
+      if (e instanceof GitHubApiError) {
+        if (e.status === 404) return c.text("not found", 404);
+        return c.text(`github: ${e.message}`, 502);
+      }
+      throw e;
+    }
+    // 구독행 정리 (best-effort — GitHub 삭제가 이미 성공했으므로 실패해도 200)
+    await c.env.DB.prepare("DELETE FROM area_subscriptions WHERE area = ?").bind(`brief-${slug}`).run().catch(() => {});
+    return c.json({ deleted: slug });
   });
 }

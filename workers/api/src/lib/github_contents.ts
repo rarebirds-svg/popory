@@ -75,6 +75,29 @@ export async function putFile(token: string, input: PutFileInput): Promise<{ sha
   return { sha: data.content.sha };
 }
 
+export interface DeleteFileInput {
+  path: string;
+  message: string;
+  sha: string; // 삭제 대상 파일의 현재 blob sha (필수)
+}
+
+export async function deleteFile(token: string, input: DeleteFileInput): Promise<void> {
+  const url = `${API}/repos/${REPO}/contents/${encodeURIComponent(input.path).replace(/%2F/g, "/")}`;
+  const body = JSON.stringify({
+    message: input.message,
+    sha: input.sha,
+    branch: BRANCH,
+    committer: { name: "popory-portal-admin", email: "noreply@popory.local" },
+    author: { name: "popory-portal-admin", email: "noreply@popory.local" },
+  });
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { ...COMMON_HEADERS(token), "Content-Type": "application/json" },
+    body,
+  });
+  if (!res.ok) throw new GitHubApiError(res.status, `deleteFile ${input.path} ${res.status}: ${await res.text()}`);
+}
+
 function base64FromUtf8(s: string): string {
   // Cloudflare Workers는 Uint8Array를 직접 btoa 인자로 받지 못한다 → ascii 변환 후 btoa
   const bytes = new TextEncoder().encode(s);
