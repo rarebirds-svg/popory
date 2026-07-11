@@ -1,5 +1,5 @@
 #!/bin/bash
-# launchd 가 매일 호출하는 유튜브 서점 링크 댓글 백필 entry. secrets source 후 1회 실행.
+# launchd 가 매일 호출하는 유튜브 댓글 잡 entry. 서점 링크 백필과 답글 초안 생성을 순차 실행한다.
 set -euo pipefail
 CONTENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_PY="${CONTENT_DIR}/.venv/bin/python"
