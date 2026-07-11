@@ -22,6 +22,7 @@ import { mountContentStyleProfiles } from "./routes/content_style_profiles";
 import { mountContentAiImage } from "./routes/content_ai_image";
 import { mountContentYoutube } from "./routes/content_youtube";
 import { mountContentYoutubeUpload } from "./routes/content_youtube_upload";
+import { mountContentYoutubeComments } from "./routes/content_youtube_comments";
 import { mountContentMediaToken } from "./routes/content_media_token";
 import { mountContentInstagram } from "./routes/content_instagram";
 import { mountContentInstagramUpload } from "./routes/content_instagram_upload";
@@ -74,6 +75,7 @@ export function createApp() {
   mountContentAiImage(app);
   mountContentYoutube(app);
   mountContentYoutubeUpload(app);
+  mountContentYoutubeComments(app);
   mountAreas(app);
   mountAreasSubscribers(app);
   mountBriefPreferences(app);
