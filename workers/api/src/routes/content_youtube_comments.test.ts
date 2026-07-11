@@ -242,6 +242,28 @@ describe("POST comments/:id/approve", () => {
     expect(res.status).toBe(400);
   });
 
+  it("서비스 토큰으로는 승인할 수 없고 게시도 일어나지 않는다", async () => {
+    await seedDoneVideo("vid1", "cat_br", 1);
+    await seedComment("y1", "c1", "pending", "초안입니다.");
+    const ytFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ access_token: "test-access-token" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ id: "reply_1" }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const tok = await workerToken();
+    vi.spyOn(globalThis, "fetch").mockImplementation(ytFetch);
+    const res = await SELF.fetch("https://e.com/api/content/youtube/comments/y1/approve", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ text: "답글" }),
+    });
+    expect(res.status).toBe(401);
+    expect(ytFetch).not.toHaveBeenCalled();
+    const row = await env.DB.prepare("SELECT status, reply_id FROM youtube_comments WHERE id='y1'").first<{ status: string; reply_id: string | null }>();
+    expect(row?.status).toBe("pending");
+    expect(row?.reply_id).toBeNull();
+  });
+
   it("빈 본문이면 400", async () => {
     await seedDoneVideo("vid1", "cat_br", 1);
     await seedComment("y1", "c1", "pending", "초안입니다.");
