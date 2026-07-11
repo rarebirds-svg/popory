@@ -35,4 +35,39 @@ export function mountContentYoutubeComments(app: Hono<{ Bindings: Env; Variables
     }
     return c.json({ items });
   });
+
+  app.post("/api/content/youtube/comments/ingest", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const body = (await c.req.json().catch(() => null)) as {
+      items?: { comment_id: string; category_id: string; video_id: string; author_name?: string; text: string; published_at?: string }[];
+    } | null;
+    const now = Math.floor(Date.now() / 1000);
+    const fresh: { id: string; comment_id: string; video_id: string; text: string }[] = [];
+    for (const it of body?.items ?? []) {
+      const id = crypto.randomUUID();
+      // comment_id UNIQUE 가 중복 수집을 막는다. 이미 있으면 changes=0 이라 초안 생성 대상에서 빠진다.
+      const r = await c.env.DB.prepare(
+        `INSERT OR IGNORE INTO youtube_comments
+           (id, comment_id, category_id, video_id, author_name, text, published_at, status, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?, 'pending', ?, ?)`,
+      ).bind(id, it.comment_id, it.category_id, it.video_id, it.author_name ?? null, it.text, it.published_at ?? null, now, now).run();
+      if (r.meta.changes) fresh.push({ id, comment_id: it.comment_id, video_id: it.video_id, text: it.text });
+    }
+    return c.json({ items: fresh });
+  });
+
+  app.patch("/api/content/youtube/comments/:id/draft", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const id = c.req.param("id");
+    const body = (await c.req.json().catch(() => null)) as { draft?: string; skip?: boolean } | null;
+    const now = Math.floor(Date.now() / 1000);
+    if (body?.skip) {
+      await c.env.DB.prepare("UPDATE youtube_comments SET status='dismissed', updated_at=? WHERE id=?").bind(now, id).run();
+    } else {
+      await c.env.DB.prepare("UPDATE youtube_comments SET draft_reply=?, updated_at=? WHERE id=?").bind(body?.draft ?? null, now, id).run();
+    }
+    return c.json({ ok: true });
+  });
 }

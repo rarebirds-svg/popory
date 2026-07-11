@@ -99,3 +99,68 @@ describe("GET comment-scan", () => {
     expect(body.items).toHaveLength(0);
   });
 });
+
+async function seedComment(id: string, commentId: string, status = "pending", draft: string | null = null) {
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare(
+    "INSERT INTO youtube_comments (id, comment_id, category_id, video_id, author_name, text, published_at, status, draft_reply, created_at, updated_at) VALUES (?,?,'cat_br','vid1','시청자','좋은 영상이네요','2026-07-10T00:00:00Z',?,?,?,?)",
+  ).bind(id, commentId, status, draft, now, now).run();
+}
+
+describe("POST comments/ingest", () => {
+  it("새 댓글만 삽입하고 새 행만 반환", async () => {
+    const tok = await workerToken();
+    const payload = {
+      items: [
+        { comment_id: "c1", category_id: "cat_br", video_id: "vid1", author_name: "시청자", text: "좋았어요", published_at: "2026-07-10T00:00:00Z" },
+        { comment_id: "c2", category_id: "cat_br", video_id: "vid1", author_name: "독자", text: "질문 있어요", published_at: "2026-07-10T01:00:00Z" },
+      ],
+    };
+    const first = await SELF.fetch("https://e.com/api/content/youtube/comments/ingest", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify(payload),
+    });
+    expect(first.status).toBe(200);
+    const b1 = await first.json() as { items: { comment_id: string; id: string; text: string }[] };
+    expect(b1.items.map((i) => i.comment_id).sort()).toEqual(["c1", "c2"]);
+
+    // 같은 페이로드 재전송 → 중복이라 새 행 0건.
+    const second = await SELF.fetch("https://e.com/api/content/youtube/comments/ingest", {
+      method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify(payload),
+    });
+    const b2 = await second.json() as { items: unknown[] };
+    expect(b2.items).toHaveLength(0);
+
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM youtube_comments").first<{ n: number }>();
+    expect(row?.n).toBe(2);
+  });
+
+  it("미서비스면 401", async () => {
+    const res = await SELF.fetch("https://e.com/api/content/youtube/comments/ingest", { method: "POST" });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("PATCH comments/:id/draft", () => {
+  it("draft 저장 시 pending 유지", async () => {
+    await seedComment("y1", "c1");
+    const tok = await workerToken();
+    const res = await SELF.fetch("https://e.com/api/content/youtube/comments/y1/draft", {
+      method: "PATCH", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ draft: "읽어주셔서 고맙습니다." }),
+    });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT status, draft_reply FROM youtube_comments WHERE id='y1'").first<{ status: string; draft_reply: string }>();
+    expect(row?.status).toBe("pending");
+    expect(row?.draft_reply).toBe("읽어주셔서 고맙습니다.");
+  });
+
+  it("skip 이면 dismissed", async () => {
+    await seedComment("y2", "c2");
+    const tok = await workerToken();
+    const res = await SELF.fetch("https://e.com/api/content/youtube/comments/y2/draft", {
+      method: "PATCH", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ skip: true }),
+    });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT status FROM youtube_comments WHERE id='y2'").first<{ status: string }>();
+    expect(row?.status).toBe("dismissed");
+  });
+});
