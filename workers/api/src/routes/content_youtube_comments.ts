@@ -1,7 +1,7 @@
 // 유튜브 댓글 수집·답글 초안·승인 게시 라우트.
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { type AppVars } from "../middleware/session";
+import { requireAuth, type AppVars } from "../middleware/session";
 import { requireService, type ServiceVars } from "../middleware/service_auth";
 import { mintCategoryAccessToken } from "./content_youtube_upload";
 
@@ -68,6 +68,62 @@ export function mountContentYoutubeComments(app: Hono<{ Bindings: Env; Variables
     } else {
       await c.env.DB.prepare("UPDATE youtube_comments SET draft_reply=?, updated_at=? WHERE id=?").bind(body?.draft ?? null, now, id).run();
     }
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/content/youtube/comments", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const status = c.req.query("status") ?? "pending";
+    const { results } = await c.env.DB.prepare(
+      `SELECT y.id, y.comment_id, y.video_id, y.author_name, y.text, y.published_at,
+              y.status, y.draft_reply, y.reply_id, y.error, j.topic AS topic
+         FROM youtube_comments y
+         LEFT JOIN content_jobs j ON j.youtube_video_id = y.video_id
+        WHERE y.status = ?
+        GROUP BY y.id
+        ORDER BY y.created_at DESC`,
+    ).bind(status).all();
+    return c.json({ items: results });
+  });
+
+  app.post("/api/content/youtube/comments/:id/approve", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const id = c.req.param("id");
+    const body = (await c.req.json().catch(() => null)) as { text?: string } | null;
+    const text = (body?.text ?? "").trim();
+    if (!text) return c.text("empty reply", 400);
+    const row = await c.env.DB.prepare("SELECT comment_id, category_id, status FROM youtube_comments WHERE id=?")
+      .bind(id).first<{ comment_id: string; category_id: string; status: string }>();
+    if (!row) return c.text("not found", 404);
+    // 재게시 방지. failed 는 재시도 허용.
+    if (row.status !== "pending" && row.status !== "failed") return c.text("not approvable", 400);
+    const now = Math.floor(Date.now() / 1000);
+    const token = await mintCategoryAccessToken(c.env, row.category_id);
+    if (!token) {
+      await c.env.DB.prepare("UPDATE youtube_comments SET status='failed', error='카테고리 유튜브 미연결', updated_at=? WHERE id=?").bind(now, id).run();
+      return c.text("youtube not connected", 502);
+    }
+    const res = await fetch("https://www.googleapis.com/youtube/v3/comments?part=snippet", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ snippet: { parentId: row.comment_id, textOriginal: text } }),
+    });
+    if (!res.ok) {
+      const err = `유튜브 ${res.status}: ${(await res.text()).slice(0, 150)}`;
+      await c.env.DB.prepare("UPDATE youtube_comments SET status='failed', error=?, updated_at=? WHERE id=?").bind(err, now, id).run();
+      return c.text(err, 502);
+    }
+    const replyId = ((await res.json()) as { id?: string }).id ?? null;
+    await c.env.DB.prepare("UPDATE youtube_comments SET status='posted', draft_reply=?, reply_id=?, error=NULL, updated_at=? WHERE id=?")
+      .bind(text, replyId, now, id).run();
+    return c.json({ ok: true, reply_id: replyId });
+  });
+
+  app.post("/api/content/youtube/comments/:id/dismiss", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const id = c.req.param("id");
+    const now = Math.floor(Date.now() / 1000);
+    await c.env.DB.prepare("UPDATE youtube_comments SET status='dismissed', updated_at=? WHERE id=?").bind(now, id).run();
     return c.json({ ok: true });
   });
 }
