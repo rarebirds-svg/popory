@@ -43,8 +43,8 @@ CREATE TABLE youtube_comments (
   draft_reply TEXT,
   reply_id TEXT,                         -- 게시된 답글의 유튜브 comment id
   error TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  created_at INTEGER NOT NULL,   -- 유닉스 초. content_jobs 규약을 따른다
+  updated_at INTEGER NOT NULL
 );
 CREATE INDEX idx_youtube_comments_status ON youtube_comments(status, created_at);
 ```
@@ -122,7 +122,7 @@ python -m popory_content.reply_drafts        # 신규. 댓글 수집 + 답글 �
 
 대기 목록에 영상 제목, 작성자, 원 댓글, 초안 텍스트박스를 한 카드로 보여준다. 버튼은 승인과 버림 둘. 초안은 그 자리에서 수정한 뒤 승인한다. 액션 후 `router.refresh()`로 서버 컴포넌트를 재검증한다. 게시 실패한 건은 에러와 함께 상단에 보여 재시도할 수 있게 한다.
 
-`/content` 카테고리 목록 상단에 대기 건수 배지를 걸어 진입점을 만든다.
+`/content` 콘텐츠 홈의 nav에 `댓글 답글` 링크를 넣어 진입점을 만든다.
 
 ## 에러 처리
 
