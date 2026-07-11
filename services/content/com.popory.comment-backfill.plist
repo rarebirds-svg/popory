@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.popory.comment-backfill</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/daegong/projects/popory/services/content/run_backfill.sh</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/daegong/projects/popory/services/content</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>LANG</key>
+		<string>ko_KR.UTF-8</string>
+		<key>LC_ALL</key>
+		<string>ko_KR.UTF-8</string>
+	</dict>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>21</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/Users/daegong/projects/popory/services/content/logs/launchd-backfill.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/daegong/projects/popory/services/content/logs/launchd-backfill.stderr.log</string>
+</dict>
+</plist>

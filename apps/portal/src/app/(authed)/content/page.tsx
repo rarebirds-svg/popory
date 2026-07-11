@@ -35,6 +35,7 @@ export default async function ContentHome() {
           </div>
         </div>
         <nav className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-sm text-popory-muted">
+          <Link href="/content/comments" className="hover:text-popory-fg">댓글 답글</Link>
           <Link href="/content/status" className="hover:text-popory-fg">생성 상태</Link>
           <Link href="/content/styles" className="hover:text-popory-fg">스타일 프로필</Link>
           <Link href="/content/youtube" className="hover:text-popory-fg">YouTube</Link>

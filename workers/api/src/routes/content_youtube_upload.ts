@@ -8,7 +8,7 @@ import { decrypt } from "../lib/secretbox";
 const WORKER_AREA = "content-worker";
 
 // 카테고리 유튜브 refresh_token 으로 access_token 발급(없거나 실패면 null).
-async function mintCategoryAccessToken(env: Env, categoryId: string): Promise<string | null> {
+export async function mintCategoryAccessToken(env: Env, categoryId: string): Promise<string | null> {
   const conn = await env.DB.prepare("SELECT refresh_token FROM category_youtube_tokens WHERE category_id=?").bind(categoryId).first<{ refresh_token: string }>();
   if (!conn) return null;
   try {

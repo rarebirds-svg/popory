@@ -10,6 +10,8 @@ from popory_content.contract import parse_generation, ContractError
 from popory_content.prompt import build_system_prompt, build_user_message
 from popory_content.youtube_post_prompt import build_youtube_post_system_prompt, build_youtube_post_user_message
 from popory_content.youtube_post_contract import parse_youtube_post
+from popory_content.reply_prompt import build_reply_system_prompt, build_reply_user_message
+from popory_content.reply_contract import parse_reply
 
 CLAUDE_BIN = "/opt/homebrew/bin/claude"
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -100,3 +102,12 @@ def generate_youtube_post(*, topic: str, model: str = DEFAULT_MODEL,
         return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_youtube_post, job_id=job_id, model=model)
     except ContractError as e:  # 방어적: run_claude_cli 가 이미 GenerateError 로 감쌈
         raise GenerateError(str(e)) from e
+
+
+def generate_reply(*, comment_text: str, topic: str, model: str = DEFAULT_MODEL,
+                   job_id: str = "adhoc") -> dict:
+    """댓글 하나에 대한 답글 초안 또는 스킵 판정. 짧은 호출이라 타임아웃·툴을 줄인다."""
+    sp = build_reply_system_prompt()
+    um = build_reply_user_message(comment_text, topic)
+    return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_reply, job_id=job_id,
+                          model=model, timeout_seconds=180, allowed_tools=())
