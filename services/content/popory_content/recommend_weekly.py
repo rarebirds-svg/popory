@@ -68,6 +68,12 @@ def build_user_msg(known_titles: list[str]) -> str:
     )
 
 
+def generate_items(known_titles: list[str]) -> list[dict]:
+    """claude CLI로 추천 목록을 생성한다. 프롬프트·파싱·건수 규약을 auto_create 폴백과 공유한다."""
+    return run_claude_cli(system_prompt=SYSTEM_PROMPT, user_msg=build_user_msg(known_titles),
+                          parse=_parse, job_id="recommend")
+
+
 def run() -> int:
     try:
         client = _client()
@@ -88,9 +94,8 @@ def run() -> int:
     except PortalError as e:
         append_log(LOGS_DIR, {"cli": "recommend_weekly", "status": "known_fetch_fail", "error": str(e)})
         known = []
-    user_msg = build_user_msg(known)
     try:
-        items = run_claude_cli(system_prompt=SYSTEM_PROMPT, user_msg=user_msg, parse=_parse, job_id="recommend")
+        items = generate_items(known)
     except GenerateError as e:
         append_log(LOGS_DIR, {"cli": "recommend_weekly", "status": "claude_fail", "error": str(e)[:300]})
         return 0

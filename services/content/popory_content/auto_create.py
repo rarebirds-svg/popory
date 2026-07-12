@@ -3,9 +3,11 @@ import os
 import sys
 from pathlib import Path
 
+from popory_content.generate import GenerateError
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log
+from popory_content.recommend_weekly import generate_items
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 AREA = "content-worker"
@@ -21,6 +23,24 @@ def _client() -> PortalClient:
     )
 
 
+def _pending(client: PortalClient, owner_sub: str) -> list[dict]:
+    """대기 중인 추천 1건을 조회한다."""
+    data = client.get(f"/api/content/recommendations/service?owner_sub={owner_sub}&limit=1")
+    return data.get("recommendations", [])
+
+
+def _recommend_now(client: PortalClient, owner_sub: str) -> dict:
+    """주간 잡과 같은 프롬프트·중복 방지로 즉석 추천을 만들어 대기열에 넣는다.
+    known-titles 조회가 실패하면 중복 추천 위험이 있으므로 폴백 자체를 실패시킨다."""
+    known = client.get(f"/api/content/recommendations/known-titles?owner_sub={owner_sub}").get("titles", [])
+    items = generate_items(known)
+    return client.post("/api/content/recommendations/service-bulk", json={
+        "owner_sub": owner_sub,
+        "items": items,
+        "category_slug": "book-review",
+    })
+
+
 def run() -> int:
     owner_sub = os.environ.get("POPORY_RECOMMEND_OWNER")
     if not owner_sub:
@@ -33,15 +53,26 @@ def run() -> int:
         return 2
 
     try:
-        data = client.get(f"/api/content/recommendations/service?owner_sub={owner_sub}&limit=1")
+        recs = _pending(client, owner_sub)
     except PortalError as e:
         append_log(LOGS_DIR, {"cli": "auto_create", "status": "fetch_fail", "error": str(e)})
         return 3
 
-    recs = data.get("recommendations", [])
+    # 대기열이 비면 그 자리에서 추천을 만들어 큐에 넣고, 다시 조회해 기존 경로로 진행한다
+    # (used 표시·중복 처리 같은 상태 전이를 그대로 태우기 위함).
     if not recs:
-        append_log(LOGS_DIR, {"cli": "auto_create", "status": "skipped", "reason": "empty"})
-        return 0
+        try:
+            out = _recommend_now(client, owner_sub)
+            append_log(LOGS_DIR, {"cli": "auto_create", "status": "fallback_recommended",
+                                  "added": out.get("added"), "skipped": out.get("skipped")})
+            recs = _pending(client, owner_sub)
+        except (PortalError, GenerateError) as e:
+            append_log(LOGS_DIR, {"cli": "auto_create", "status": "fallback_fail", "error": str(e)[:300]})
+            return 4
+        if not recs:
+            append_log(LOGS_DIR, {"cli": "auto_create", "status": "fallback_fail",
+                                  "error": "추천 생성 후에도 대기열이 비어 있습니다 (전량 중복)"})
+            return 4
     rec = recs[0]
     try:
         out = client.post("/api/content/topics/service-create", json={
