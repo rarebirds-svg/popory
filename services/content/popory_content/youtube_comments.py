@@ -4,6 +4,10 @@ import requests
 from popory_content.youtube_upload import COMMENT_LIST_URL, UploadError
 
 
+class VideoUnavailable(UploadError):
+    """삭제(404)·비공개(403) 영상. 재시도해도 소용없으므로 실패가 아니라 대상 제외로 센다."""
+
+
 def list_comment_threads(access_token: str, video_id: str) -> list[dict]:
     """영상의 최상위 댓글 스레드(답글 포함)를 최대 100건 조회. 실패 시 UploadError."""
     resp = requests.get(
@@ -18,6 +22,8 @@ def list_comment_threads(access_token: str, video_id: str) -> list[dict]:
         headers={"Authorization": f"Bearer {access_token}"},
         timeout=30,
     )
+    if resp.status_code in (403, 404):
+        raise VideoUnavailable(f"commentThreads {resp.status_code}: {resp.text[:200]}")
     if resp.status_code != 200:
         # 조회 실패를 "댓글 없음"으로 오해하면 안 되므로 예외로 올린다.
         raise UploadError(f"commentThreads {resp.status_code}: {resp.text[:200]}")

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
-from popory_content.youtube_comments import list_comment_threads, collect_new_comments
+from popory_content.youtube_comments import list_comment_threads, collect_new_comments, VideoUnavailable
 from popory_content.generate import generate_reply
 from popory_content.telegram import send_telegram, TelegramError
 from popory_content.log import append_log
@@ -48,12 +48,17 @@ def run() -> int:
         append_log(LOGS_DIR, {"cli": "reply_drafts", "status": "fetch_fail", "error": str(e)})
         return 3
 
-    drafted = skipped = failed = 0
+    drafted = skipped = failed = unavailable = 0
     for it in data.get("items", []):
         video_id = it["video_id"]
         try:
             threads = list_comment_threads(it["access_token"], video_id)
             fresh = collect_new_comments(threads, it["channel_id"])
+        except VideoUnavailable as e:
+            # 삭제·비공개 영상. 매일 반복되는 정상 상태이므로 failed 로 세지 않는다.
+            unavailable += 1
+            append_log(LOGS_DIR, {"cli": "reply_drafts", "status": "video_unavailable", "video": video_id, "error": str(e)[:200]})
+            continue
         except Exception as e:  # noqa: BLE001 — 한 영상 실패는 건너뛰고 계속.
             failed += 1
             append_log(LOGS_DIR, {"cli": "reply_drafts", "status": "item_fail", "video": video_id, "error": str(e)[:200]})
@@ -80,7 +85,7 @@ def run() -> int:
                 failed += 1
                 append_log(LOGS_DIR, {"cli": "reply_drafts", "status": "draft_fail", "comment": row.get("id"), "error": str(e)[:200]})
 
-    append_log(LOGS_DIR, {"cli": "reply_drafts", "status": "done", "drafted": drafted, "skipped": skipped, "failed": failed})
+    append_log(LOGS_DIR, {"cli": "reply_drafts", "status": "done", "drafted": drafted, "skipped": skipped, "failed": failed, "unavailable": unavailable})
     if drafted:
         _notify(f"유튜브 답글 초안 {drafted}건 대기 중입니다. https://poporyfamily.com/content/comments")
     return 0

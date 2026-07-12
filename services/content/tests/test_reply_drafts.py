@@ -1,4 +1,5 @@
 # reply_drafts 오케스트레이션(수집→ingest→초안→저장) 단위 테스트.
+import json
 from pathlib import Path
 
 import popory_content.reply_drafts as rd
@@ -99,3 +100,22 @@ def test_video_fetch_failure_does_not_abort(monkeypatch, tmp_path):
 
     assert rd.run() == 0   # 한 영상 실패해도 나머지는 처리한다.
     assert len(client.patched) == 1
+
+
+def test_unavailable_video_is_not_counted_as_failure(monkeypatch, tmp_path):
+    client = FakeClient([{**_scan_item(), "video_id": "vid_gone"}], [])
+    monkeypatch.setattr(rd, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(rd, "_client", lambda: client)
+
+    def fake_list(tok, vid):
+        raise rd.VideoUnavailable("commentThreads 404: not found")
+
+    monkeypatch.setattr(rd, "list_comment_threads", fake_list)
+    monkeypatch.setattr(rd, "_notify", lambda text: None)
+
+    assert rd.run() == 0
+    log_file = next(iter(tmp_path.glob("*.log")))
+    lines = [json.loads(l) for l in log_file.read_text().splitlines()]
+    assert [l["status"] for l in lines] == ["video_unavailable", "done"]
+    done = lines[-1]
+    assert done["unavailable"] == 1 and done["failed"] == 0

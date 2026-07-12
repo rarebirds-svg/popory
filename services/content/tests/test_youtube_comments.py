@@ -2,7 +2,7 @@
 import pytest
 import responses
 
-from popory_content.youtube_comments import list_comment_threads, collect_new_comments
+from popory_content.youtube_comments import list_comment_threads, collect_new_comments, VideoUnavailable
 from popory_content.youtube_upload import UploadError
 
 CH = "UC_mine"
@@ -69,3 +69,29 @@ def test_list_comment_threads_error_raises():
     )
     with pytest.raises(UploadError):
         list_comment_threads("tok", "vid1")
+
+
+@pytest.mark.parametrize("status", [403, 404])
+@responses.activate
+def test_private_or_deleted_video_raises_video_unavailable(status):
+    responses.add(
+        responses.GET,
+        "https://www.googleapis.com/youtube/v3/commentThreads",
+        body="unavailable",
+        status=status,
+    )
+    with pytest.raises(VideoUnavailable):
+        list_comment_threads("tok", "vid1")
+
+
+@responses.activate
+def test_server_error_is_not_video_unavailable():
+    responses.add(
+        responses.GET,
+        "https://www.googleapis.com/youtube/v3/commentThreads",
+        body="boom",
+        status=500,
+    )
+    with pytest.raises(UploadError) as e:
+        list_comment_threads("tok", "vid1")
+    assert not isinstance(e.value, VideoUnavailable)
