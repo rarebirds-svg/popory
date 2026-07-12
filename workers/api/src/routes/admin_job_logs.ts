@@ -32,7 +32,7 @@ export function mountAdminJobLogs(app: Hono<{ Bindings: Env; Variables: Vars }>)
     const service = c.req.query("service");
     const status = c.req.query("status");
     const since = Number(c.req.query("since")) || Math.floor(Date.now() / 1000) - DEFAULT_WINDOW_SECONDS;
-    const limit = Math.min(Number(c.req.query("limit")) || 100, 500);
+    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 100, 1), 500);
     const where = ["created_at >= ?"];
     const binds: unknown[] = [since];
     if (service) { where.push("service = ?"); binds.push(service); }

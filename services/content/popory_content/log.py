@@ -12,10 +12,22 @@ AREA = "content-worker"
 SHIP_PATH = "/api/admin/job-logs"
 SHIP_TIMEOUT_SECONDS = 3
 
+# 접미사 규칙에 안 걸리지만 실패인 status. auth_failure_exit 은 claude 인증이 끊겨 워커가 죽는 고신호 이벤트다.
+# portal_error 는 포털이 죽은 상황이라 전송해도 실패하므로 넣지 않는다.
+EXTRA_FAILURE_STATUSES = ("failed", "error", "auth_failure_exit")
+
+# 하위 프로세스 원본 출력을 담는 키. 키 파일 경로·claude CLI 원본 출력이 섞여 들어오므로 포털로는 보내지 않는다.
+REDACTED_DETAIL_KEYS = ("stderr", "stdout")
+
 
 def is_failure(status: str) -> bool:
     """실패 성격의 status 인가. video_unavailable·skipped·done 같은 정상 상태는 제외한다."""
-    return status in ("failed", "error") or status.endswith(("_fail", "_failed"))
+    return status in EXTRA_FAILURE_STATUSES or status.endswith(("_fail", "_failed"))
+
+
+def _redacted(record: dict) -> dict:
+    """포털 전송용 사본. 하위 프로세스 원본 출력 키를 마스킹한다 (원문은 같은 머신의 로컬 파일 로그에만 남는다)."""
+    return {k: ("<redacted>" if k in REDACTED_DETAIL_KEYS else v) for k, v in record.items()}
 
 
 def _portal_target() -> tuple[str, str] | None:
@@ -47,7 +59,7 @@ def _ship(record: dict, ts: int) -> None:
             "status": str(record.get("status", "")),
             "job_id": record.get("job_id") or record.get("job"),
             "owner_sub": record.get("owner_sub"),
-            "detail": json.dumps(record, ensure_ascii=False),
+            "detail": json.dumps(_redacted(record), ensure_ascii=False),
             "ts": ts,
         },
         timeout=SHIP_TIMEOUT_SECONDS,

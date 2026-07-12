@@ -135,4 +135,15 @@ describe("GET /api/admin/job-logs", () => {
     const res = await SELF.fetch("https://example.com/api/admin/job-logs", { headers: { cookie: ck } });
     expect(res.status).toBe(403);
   });
+
+  it("음수 limit 은 1 로 클램프한다 (SQLite LIMIT -1 은 무제한이다)", async () => {
+    const ck = await adminCookie();
+    const now = Math.floor(Date.now() / 1000);
+    await seed("old_fail", now - 100);
+    await seed("new_fail", now - 10);
+    const res = await SELF.fetch("https://example.com/api/admin/job-logs?limit=-1", { headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const b = (await res.json()) as { items: { status: string }[] };
+    expect(b.items.map((i) => i.status)).toEqual(["new_fail"]);
+  });
 });

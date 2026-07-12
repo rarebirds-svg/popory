@@ -50,6 +50,40 @@ def test_is_failure():
     assert not log.is_failure("video_unavailable")
 
 
+def test_auth_failure_exit_is_a_failure():
+    """claude 인증이 끊겨 워커가 죽는 고신호 이벤트다. 접미사 규칙에 안 걸리므로 명시적으로 포함한다."""
+    assert log.is_failure("auth_failure_exit")
+
+
+def test_portal_error_is_not_shipped(monkeypatch, tmp_path):
+    """포털이 죽은 상황이라 전송해봐야 실패한다. 보내지 않는다."""
+    post = _install(monkeypatch, FakePost())
+    log.append_log(tmp_path, {"worker": "content", "status": "portal_error", "error": "boom"})
+
+    assert post.calls == []
+
+
+def test_subprocess_output_is_redacted_from_shipped_detail(monkeypatch, tmp_path):
+    """stderr·stdout 에는 키 파일 경로와 CLI 원본 출력이 섞인다. 포털 detail 에는 절대 실리면 안 된다."""
+    post = _install(monkeypatch, FakePost())
+    secret = "POPORY_BRIEF_KEY_FILE 미설정 또는 파일 없음: /Users/x/.secrets/brief.key"
+    log.append_log(tmp_path, {"worker": "brief", "status": "error", "topic_id": "t1",
+                              "stderr": secret, "stdout": "raw claude output"})
+
+    detail_raw = post.calls[0]["body"]["detail"]
+    assert secret not in detail_raw
+    assert "raw claude output" not in detail_raw
+    detail = json.loads(detail_raw)
+    assert detail["stderr"] == "<redacted>"
+    assert detail["stdout"] == "<redacted>"
+    assert detail["topic_id"] == "t1"   # 나머지 필드는 그대로 남는다.
+
+    # 로컬 파일 로그에는 원문이 그대로 남는다 (키와 같은 머신이라 디버깅용으로 필요하다).
+    row = _lines(tmp_path)[0]
+    assert row["stderr"] == secret
+    assert row["stdout"] == "raw claude output"
+
+
 def test_failure_is_shipped(monkeypatch, tmp_path):
     post = _install(monkeypatch, FakePost())
     log.append_log(tmp_path, {"cli": "reply_drafts", "status": "item_fail", "video": "v1", "job_id": "j1"})
