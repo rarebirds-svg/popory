@@ -1,4 +1,5 @@
 // 사용자 목록과 역할·차단 UI.
+import Link from "next/link";
 import { headers } from "next/headers";
 import { API_BASE } from "@/lib/env";
 import { changeRole, toggleBlock } from "./actions";
@@ -19,7 +20,9 @@ export default async function UsersPage() {
         <tbody>
           {items.map((u) => (
             <tr key={u.sub} className="border-b border-popory-border">
-              <td className="py-2 text-sm text-popory-fg">{u.email}</td>
+              <td className="py-2 text-sm text-popory-fg">
+                <Link href={`/admin/users/${u.sub}`} className="text-popory-accent">{u.email}</Link>
+              </td>
               <td className="py-2 text-sm text-popory-fg">
                 <form action={changeRole}>
                   <input type="hidden" name="sub" value={u.sub} />
