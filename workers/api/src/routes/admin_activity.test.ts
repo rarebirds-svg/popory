@@ -91,6 +91,35 @@ describe("GET /api/admin/activity", () => {
     expect(b.items.map((i) => i.title)).toEqual(["옛날 잡"]);
   });
 
+  it("같은 ts 를 가진 항목이 페이지 경계에서 유실되지 않는다", async () => {
+    await seedUsers();
+    const ck = await adminCookie();
+    // 같은 초에 3건(브리핑 일괄 발행·audit_log 연속 기록 등) + 더 오래된 1건.
+    await seedJob("j1", "u1", "동시 1", "done", 5000);
+    await seedJob("j2", "u1", "동시 2", "done", 5000);
+    await seedJob("j3", "u1", "동시 3", "done", 5000);
+    await seedJob("j4", "u1", "옛날", "done", 1000);
+
+    const p1 = await SELF.fetch("https://example.com/api/admin/activity?limit=2", { headers: { cookie: ck } });
+    expect(p1.status).toBe(200);
+    const b1 = (await p1.json()) as { items: { id: string; ts: number; title: string }[] };
+    expect(b1.items).toHaveLength(2);
+
+    // 1페이지 마지막 항목의 (ts, id) 를 커서로 2페이지를 받는다.
+    const cur = b1.items[b1.items.length - 1]!;
+    const p2 = await SELF.fetch(
+      `https://example.com/api/admin/activity?limit=2&before=${cur.ts}&before_id=${encodeURIComponent(cur.id)}`,
+      { headers: { cookie: ck } },
+    );
+    expect(p2.status).toBe(200);
+    const b2 = (await p2.json()) as { items: { id: string; ts: number; title: string }[] };
+
+    // 두 페이지를 합치면 4건 전부가 중복 없이 나와야 한다.
+    const merged = [...b1.items, ...b2.items];
+    expect(new Set(merged.map((i) => i.id)).size).toBe(4);
+    expect(merged.map((i) => i.title).sort()).toEqual(["동시 1", "동시 2", "동시 3", "옛날"]);
+  });
+
   it("limit 은 kind 를 가로질러 전체 상위 N 을 준다", async () => {
     await seedUsers();
     const ck = await adminCookie();
