@@ -91,6 +91,40 @@ describe("GET /api/admin/activity", () => {
     expect(b.items.map((i) => i.title)).toEqual(["옛날 잡"]);
   });
 
+  it("limit 은 kind 를 가로질러 전체 상위 N 을 준다", async () => {
+    await seedUsers();
+    const ck = await adminCookie();
+    // kind 별 쿼리에 각각 LIMIT 을 걸고 메모리에서 합쳐 자르므로, ts 가 kind 를
+    // 가로질러 교차하도록 시딩해 전체 상위 2건이 서로 다른 kind 에서 나오게 한다.
+    await seedJob("j1", "u1", "옛날 잡", "done", 1000);
+    await seedJob("j2", "u1", "최신 잡", "done", 6000);
+    await env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at) VALUES ('t1','u1','옛날 주제',2000)").run();
+    await env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at) VALUES ('t2','u1','최신 주제',5000)").run();
+    await env.DB.prepare("INSERT INTO audit_log (actor_sub, action, created_at) VALUES ('u1','역할 변경',3000)").run();
+    await env.DB.prepare("INSERT INTO youtube_connections (sub, channel_id, refresh_token, connected_at) VALUES ('u1','UC1','rt',4000)").run();
+
+    const res = await SELF.fetch("https://example.com/api/admin/activity?limit=2", { headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const b = (await res.json()) as { items: { ts: number; kind: string; title: string }[] };
+    expect(b.items.map((i) => [i.kind, i.title])).toEqual([
+      ["content_job", "최신 잡"],
+      ["topic", "최신 주제"],
+    ]);
+  });
+
+  it("음수 limit 이 무제한이 되지 않는다", async () => {
+    await seedUsers();
+    const ck = await adminCookie();
+    for (let i = 1; i <= 5; i++) await seedJob(`j${i}`, "u1", `잡 ${i}`, "done", i * 1000);
+
+    // 클램프가 없으면 SQL LIMIT -3 은 무제한이고 slice(0, -3) 은 "마지막 3건만 뺀 전부"라
+    // 5건 중 2건이 새어 나온다. 1 로 클램프되어야 한다.
+    const res = await SELF.fetch("https://example.com/api/admin/activity?limit=-3", { headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const b = (await res.json()) as { items: { title: string }[] };
+    expect(b.items.map((i) => i.title)).toEqual(["잡 5"]);
+  });
+
   it("member 는 403, 비로그인은 401", async () => {
     await seedUsers();
     const ck = await memberCookie();

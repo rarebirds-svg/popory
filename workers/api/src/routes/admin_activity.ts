@@ -57,7 +57,7 @@ export function mountAdminActivity(app: Hono<{ Bindings: Env; Variables: AppVars
     const sub = c.req.query("sub");
     const kind = c.req.query("kind");
     const before = Number(c.req.query("before")) || null;
-    const limit = Math.min(Number(c.req.query("limit")) || 50, 200);
+    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 50, 1), 200);
 
     const picked = kind && KINDS.includes(kind) ? [kind] : KINDS;
 
