@@ -30,6 +30,9 @@ def _key_path() -> Path:
     p = os.environ.get("POPORY_BRIEF_KEY_FILE")
     if not p or not Path(p).exists():
         print(f"error: POPORY_BRIEF_KEY_FILE 미설정 또는 파일 없음: {p}", file=sys.stderr)
+        # 키 파일 경로는 로그에 남기지 않는다 (자격증명 위치).
+        append_log(LOGS_DIR, {"cli": "publish_to_portal", "status": "init_fail",
+                              "error": "POPORY_BRIEF_KEY_FILE 미설정 또는 파일 없음"})
         sys.exit(2)
     return Path(p)
 
@@ -38,6 +41,8 @@ def _portal_base() -> str:
     v = os.environ.get("POPORY_PORTAL_API_BASE")
     if not v:
         print("error: POPORY_PORTAL_API_BASE 미설정", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "publish_to_portal", "status": "init_fail",
+                              "error": "POPORY_PORTAL_API_BASE 미설정"})
         sys.exit(2)
     return v
 
@@ -81,6 +86,8 @@ def main() -> None:
                        replace_same_day=args.replace_same_day)
     except PortalError as e:
         print(f"error: {e}", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "publish_to_portal", "status": "publish_fail",
+                              "area": args.area, "error": str(e)[:200]})
         sys.exit(e.exit_code)
     ts = datetime.now(KST).isoformat(timespec="seconds")
     append_log(LOGS_DIR, {

@@ -42,12 +42,17 @@ def main() -> None:
 
     if not Path(CLAUDE_BIN).exists():
         print(f"error: claude CLI not found at {CLAUDE_BIN}", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "init_fail",
+                              "category": args.category,
+                              "error": f"claude CLI not found at {CLAUDE_BIN}"[:200]})
         sys.exit(2)
 
     try:
         category = load_category(args.category)
     except KeyError as e:
         print(f"error: {e}", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "init_fail",
+                              "category": args.category, "error": str(e)[:200]})
         sys.exit(2)
 
     if args.date:
@@ -96,6 +101,9 @@ def main() -> None:
                 )
             except subprocess.TimeoutExpired:
                 print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
+                append_log(LOGS_DIR, {"cli": "generate_brief", "status": "claude_fail",
+                                      "category": category.slug, "date": date_str,
+                                      "error": f"claude CLI timeout after {TIMEOUT_SECONDS}s"})
                 sys.exit(5)
 
             if result.returncode == 0:
@@ -120,7 +128,16 @@ def main() -> None:
                 # 백오프로 못 흡수한 장시간 한도. reset epoch를 stdout에 알리고 exit 6.
                 reset_epoch = limit_detect.reset_epoch_or_fallback(combined, datetime.datetime.now(KST))
                 print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+                append_log(LOGS_DIR, {"cli": "generate_brief", "status": "limit_fail",
+                                      "category": category.slug, "date": date_str,
+                                      "reset_epoch": reset_epoch,
+                                      "error": "claude 사용량 한도 — retry 잡 대기"})
                 sys.exit(6)
+            # claude CLI 원본 출력은 남기지 않는다 (인증 메시지가 섞일 수 있다). 요약만 기록.
+            append_log(LOGS_DIR, {"cli": "generate_brief", "status": "claude_fail",
+                                  "category": category.slug, "date": date_str,
+                                  "error": f"claude CLI exit {result.returncode} "
+                                           f"(limit={is_limit}, overload={is_overload})"[:200]})
             sys.exit(5)
     finally:
         sys_prompt_path.unlink(missing_ok=True)
@@ -132,6 +149,9 @@ def main() -> None:
     if not body_m or not meta_m:
         print("error: claude 응답에서 body_markdown/meta_json 태그를 찾지 못함", file=sys.stderr)
         print("--- response last 1000 chars ---\n" + final_text[-1000:], file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "parse_fail",
+                              "category": category.slug, "date": date_str,
+                              "error": "claude 응답에서 body_markdown/meta_json 태그를 찾지 못함"})
         sys.exit(4)
 
     body = body_m.group(1).strip()
@@ -140,6 +160,9 @@ def main() -> None:
     except json.JSONDecodeError as e:
         print(f"error: meta_json 파싱 실패: {e}", file=sys.stderr)
         print(meta_m.group(1), file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "parse_fail",
+                              "category": category.slug, "date": date_str,
+                              "error": f"meta_json 파싱 실패: {e}"[:200]})
         sys.exit(4)
 
     body_path = Path(f"/tmp/brief_{category.slug}_{date_str}.md")
