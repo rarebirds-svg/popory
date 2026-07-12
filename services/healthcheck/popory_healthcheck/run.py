@@ -11,7 +11,8 @@ from popory_healthcheck.telegram import send_telegram, TelegramError
 KST = timezone(timedelta(hours=9))
 PORTAL = "https://poporyfamily.com"
 API = "https://api.poporyfamily.com/health"
-BRIEF = "https://poporyfamily.com/p/brief-realestate/"
+BRIEF_URL_TEMPLATE = "https://poporyfamily.com/p/brief-{slug}/"
+BRIEF_CATEGORY_DIR = "/Users/daegong/projects/popory/services/brief/categories"
 WORKER_LOG_DIR = "/Users/daegong/projects/popory/services/content/logs"
 STATE_FILE = str(Path(__file__).resolve().parent.parent / "state" / "last.json")
 
@@ -45,13 +46,31 @@ def _recent_log_path() -> str:
     return str(today)
 
 
+def _brief_categories() -> list[tuple[str, str]]:
+    """브리핑 카테고리 SKILL.md 프론트매터에서 (slug, 한글 이름)을 읽는다 — enabled: false는 제외."""
+    out = []
+    for skill in sorted(Path(BRIEF_CATEGORY_DIR).glob("*/SKILL.md")):
+        meta = {}
+        for line in skill.read_text(encoding="utf-8").splitlines()[1:]:
+            if line.strip() == "---":
+                break
+            if ":" in line:
+                k, v = line.split(":", 1)
+                meta[k.strip()] = v.strip()
+        if meta.get("enabled") == "false":
+            continue
+        if meta.get("slug") and meta.get("name"):
+            out.append((meta["slug"], meta["name"]))
+    return out
+
+
 def gather() -> list[tuple[str, str, str]]:
     log_text = _read_log(_yesterday()) + "\n" + _read_log(_today())
     log_path = _recent_log_path()
     out = []
     out.append(("포털", *checks.check_http("포털", PORTAL)))
     out.append(("API", *checks.check_http("API", API)))
-    out.append(("브리핑", *checks.check_brief_published(BRIEF, _today())))
+    out.append(("브리핑", *checks.check_briefs_published(BRIEF_URL_TEMPLATE, _brief_categories(), _today())))
     out.append(("워커데몬", *checks.check_daemon("com.popory.content-worker")))
     out.append(("이미지데몬", *checks.check_daemon("com.popory.imagegen")))
     out.append(("워커로그", *checks.check_log_freshness(log_path, 24 * 3600)))

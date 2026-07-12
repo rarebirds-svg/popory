@@ -69,6 +69,39 @@ def test_read_log_returns_empty_when_missing(tmp_path, monkeypatch):
     assert runmod._read_log("2026-06-27") == ""
 
 
+# ── 브리핑 카테고리 목록 로딩 ──
+
+def _write_skill(root, slug, name, enabled="true"):
+    d = root / slug
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        f"---\nslug: {slug}\nname: {name}\ndelivery_mode: bundled\nenabled: {enabled}\n---\n본문\n",
+        encoding="utf-8",
+    )
+
+
+def test_brief_categories_reads_slug_and_name(tmp_path, monkeypatch):
+    """카테고리 디렉토리의 SKILL.md 프론트매터에서 (slug, name)을 읽는다."""
+    _write_skill(tmp_path, "realestate", "부동산")
+    _write_skill(tmp_path, "naver", "네이버")
+    monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(tmp_path))
+    assert runmod._brief_categories() == [("naver", "네이버"), ("realestate", "부동산")]
+
+
+def test_brief_categories_skips_disabled(tmp_path, monkeypatch):
+    """enabled: false 카테고리는 점검 대상에서 제외한다."""
+    _write_skill(tmp_path, "realestate", "부동산")
+    _write_skill(tmp_path, "naver", "네이버", enabled="false")
+    monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(tmp_path))
+    assert runmod._brief_categories() == [("realestate", "부동산")]
+
+
+def test_brief_categories_empty_when_dir_missing(tmp_path, monkeypatch):
+    """디렉토리가 없으면 빈 목록을 반환한다."""
+    monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(tmp_path / "none"))
+    assert runmod._brief_categories() == []
+
+
 def test_gather_uses_yesterday_auto_create_in_morning(tmp_path, monkeypatch):
     """오전 10:00 시나리오: 오늘 로그 없음, 어제 18:00 auto_create ok → 콘텐츠루틴 ok."""
     monkeypatch.setattr(runmod, "WORKER_LOG_DIR", str(tmp_path))

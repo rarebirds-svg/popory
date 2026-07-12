@@ -100,3 +100,90 @@ def test_log_freshness_warn_when_stale(tmp_path):
     os.utime(str(p), (old, old))
     status, _ = checks.check_log_freshness(str(p), 600)
     assert status == "warn"
+
+
+# ── 카테고리별 브리핑 점검: 미확인 카테고리 이름을 메시지에 담는다 ──
+
+TPL = "https://x.test/p/brief-{slug}/"
+CATS = [("realestate", "부동산"), ("naver", "네이버"), ("antitrust", "공정거래·기업집단")]
+
+
+def _brief_page(slug: str, body: str, status: int = 200):
+    responses.add(responses.GET, f"https://x.test/p/brief-{slug}/", body=body, status=status)
+
+
+@responses.activate
+def test_briefs_ok_when_all_categories_present():
+    for slug, _ in CATS:
+        _brief_page(slug, "<li>2026-07-12 오늘자</li>")
+    status, msg = checks.check_briefs_published(TPL, CATS, "2026-07-12")
+    assert status == "ok"
+    assert "3" in msg
+
+
+@responses.activate
+def test_briefs_warn_names_single_missing_category():
+    _brief_page("realestate", "<li>2026-07-12 오늘자</li>")
+    _brief_page("naver", "<li>2026-07-11 어제자</li>")
+    _brief_page("antitrust", "<li>2026-07-12 오늘자</li>")
+    status, msg = checks.check_briefs_published(TPL, CATS, "2026-07-12")
+    assert status == "warn"
+    assert "네이버" in msg
+    assert "부동산" not in msg
+    assert "2026-07-12" in msg
+
+
+@responses.activate
+def test_briefs_warn_names_all_missing_categories():
+    for slug, _ in CATS:
+        _brief_page(slug, "<li>2026-07-11 어제자</li>")
+    status, msg = checks.check_briefs_published(TPL, CATS, "2026-07-12")
+    assert status == "warn"
+    assert "부동산" in msg
+    assert "네이버" in msg
+    assert "공정거래·기업집단" in msg
+
+
+@responses.activate
+def test_briefs_fail_names_category_whose_page_errors():
+    _brief_page("realestate", "<li>2026-07-12 오늘자</li>")
+    _brief_page("naver", "boom", status=500)
+    _brief_page("antitrust", "<li>2026-07-11 어제자</li>")
+    status, msg = checks.check_briefs_published(TPL, CATS, "2026-07-12")
+    assert status == "fail"
+    assert "네이버" in msg          # 조회 실패 카테고리
+    assert "공정거래·기업집단" in msg  # 미확인 카테고리도 함께 보고
+
+
+def test_briefs_warn_when_no_categories():
+    status, msg = checks.check_briefs_published(TPL, [], "2026-07-12")
+    assert status == "warn"
+    assert "카테고리" in msg
+
+
+# ── 자원 한도: 어떤 자원이 걸렸는지 이름을 메시지에 담는다 ──
+
+def test_scan_markers_names_claude_session_limit():
+    status, msg = checks.scan_log_markers("You've hit your session limit · resets 11:10am")
+    assert status == "warn"
+    assert "Claude 세션 한도" in msg
+
+
+def test_scan_markers_names_image_generation():
+    status, msg = checks.scan_log_markers('{"worker": "content", "status": "image_failed", "job": "j1"}')
+    assert status == "warn"
+    assert "이미지 생성" in msg
+
+
+def test_scan_markers_names_multiple_resources_with_counts():
+    log = (
+        "session limit\n"
+        '{"status": "image_failed"}\n'
+        '{"status": "image_failed"}\n'
+        '{"cli": "recommend_weekly", "status": "claude_fail"}\n'
+    )
+    status, msg = checks.scan_log_markers(log)
+    assert status == "warn"
+    assert "Claude 세션 한도 1건" in msg
+    assert "이미지 생성 실패 2건" in msg
+    assert "Claude 호출 실패 1건" in msg
