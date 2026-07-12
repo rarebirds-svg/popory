@@ -41,6 +41,9 @@ def load_credentials() -> Credentials:
     if not TOKEN_FILE.exists():
         print(f"error: token.json not found at {TOKEN_FILE}. Run auth_setup.py first.",
               file=sys.stderr)
+        # token.json 경로는 로그에 남기지 않는다 (자격증명 위치).
+        append_log(LOGS_DIR, {"cli": "send_gmail", "status": "auth_fail",
+                              "error": "token.json not found — auth_setup.py 필요"})
         sys.exit(2)
     creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
     if creds.expired and creds.refresh_token:
@@ -49,9 +52,14 @@ def load_credentials() -> Credentials:
             TOKEN_FILE.write_text(creds.to_json())
         except Exception as e:
             print(f"error: token refresh failed ({e}). Re-run auth_setup.py.", file=sys.stderr)
+            # 예외 메시지에 토큰 교환 응답이 섞일 수 있어 예외 타입만 남긴다.
+            append_log(LOGS_DIR, {"cli": "send_gmail", "status": "auth_fail",
+                                  "error": f"token refresh failed: {type(e).__name__}"})
             sys.exit(3)
     if not creds.valid:
         print("error: credentials invalid. Re-run auth_setup.py.", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "send_gmail", "status": "auth_fail",
+                              "error": "credentials invalid — auth_setup.py 필요"})
         sys.exit(3)
     return creds
 
@@ -119,11 +127,17 @@ def main() -> None:
         body_text = e.content.decode("utf-8", errors="replace") if hasattr(e, "content") else str(e)
         if isinstance(status, int) and 400 <= status < 500:
             print(f"error: Gmail API {status}: {body_text}", file=sys.stderr)
+            append_log(LOGS_DIR, {"cli": "send_gmail", "status": "send_fail", "to": args.to,
+                                  "error": f"Gmail API {status}: {body_text}"[:200]})
             sys.exit(4)
         print(f"error: Gmail API {status} after retry: {body_text}", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "send_gmail", "status": "send_fail", "to": args.to,
+                              "error": f"Gmail API {status} after retry: {body_text}"[:200]})
         sys.exit(5)
     except Exception as e:
         print(f"error: unexpected: {e}", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "send_gmail", "status": "send_fail", "to": args.to,
+                              "error": f"unexpected: {e}"[:200]})
         sys.exit(5)
 
     ts = datetime.now(KST).isoformat(timespec="seconds")

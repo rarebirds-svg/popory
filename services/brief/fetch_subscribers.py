@@ -27,9 +27,14 @@ def _key_path() -> Path:
     p = os.environ.get("POPORY_BRIEF_KEY_FILE")
     if not p:
         print("error: POPORY_BRIEF_KEY_FILE 미설정", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "fetch_subscribers", "status": "init_fail",
+                              "error": "POPORY_BRIEF_KEY_FILE 미설정"})
         sys.exit(2)
     if not Path(p).exists():
         print(f"error: key file not found: {p}", file=sys.stderr)
+        # 키 파일 경로는 로그에 남기지 않는다 (자격증명 위치).
+        append_log(LOGS_DIR, {"cli": "fetch_subscribers", "status": "init_fail",
+                              "error": "key file not found"})
         sys.exit(2)
     return Path(p)
 
@@ -38,6 +43,8 @@ def _portal_base() -> str:
     v = os.environ.get("POPORY_PORTAL_API_BASE")
     if not v:
         print("error: POPORY_PORTAL_API_BASE 미설정", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "fetch_subscribers", "status": "init_fail",
+                              "error": "POPORY_PORTAL_API_BASE 미설정"})
         sys.exit(2)
     return v
 
@@ -59,6 +66,8 @@ def main() -> None:
         body = fetch(area=args.area)
     except PortalError as e:
         print(f"error: {e}", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "fetch_subscribers", "status": "fetch_fail",
+                              "area": args.area, "error": str(e)[:200]})
         sys.exit(e.exit_code)
     count = len(body.get("subscribers", []))
     append_log(LOGS_DIR, {"cli": "fetch_subscribers", "status": "ok",
