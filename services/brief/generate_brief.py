@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 from popory_brief.categories import load_category
-from popory_brief.log import append_log, KST
+from popory_brief.log import append_log, safe_error, KST
 from popory_brief import limit_detect
 
 LOGS_DIR = Path(__file__).resolve().parent / "logs"
@@ -185,5 +185,15 @@ def main() -> None:
     }, ensure_ascii=False))
 
 
+def run() -> None:
+    """엔트리포인트. 비처리 예외도 로그로 남긴 뒤 그대로 다시 raise 한다 (traceback·exit code 유지)."""
+    try:
+        main()
+    except Exception as e:   # SystemExit 은 Exception 이 아니라 여기 안 걸린다 (명시적 실패 경로 이중 기록 방지).
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "unexpected_fail",
+                              "error": safe_error(e)})
+        raise
+
+
 if __name__ == "__main__":
-    main()
+    run()

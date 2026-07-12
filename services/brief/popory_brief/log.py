@@ -1,6 +1,7 @@
 # JSONL · KST · 메타만 적는 단일 로그 writer (모든 CLI 공용). 실패 레코드는 포털로도 전송한다.
 import json
 import os
+import subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -11,11 +12,23 @@ SERVICE = "brief"
 AREA = "brief"
 SHIP_PATH = "/api/admin/job-logs"
 SHIP_TIMEOUT_SECONDS = 3
+ERROR_MAX_CHARS = 300
+
+# 메시지에 파일 경로가 그대로 박히는 예외 계열. OSError 는 filename 을(키 파일·token.json 위치),
+# SubprocessError 는 실행 커맨드 전체를 담는다. 자격증명 위치는 로그에 남기지 않는다 (타입 이름만).
+PATH_BEARING_EXCEPTIONS = (OSError, subprocess.SubprocessError)
 
 
 def is_failure(status: str) -> bool:
     """실패 성격의 status 인가. done·ok·skipped 같은 정상 상태는 제외한다."""
     return status in ("failed", "error") or status.endswith(("_fail", "_failed"))
+
+
+def safe_error(e: BaseException) -> str:
+    """예외를 로그의 error 필드용 문자열로. 경로가 섞이는 타입은 타입 이름만 남기고 나머지는 300자로 자른다."""
+    if isinstance(e, PATH_BEARING_EXCEPTIONS):
+        return type(e).__name__
+    return f"{type(e).__name__}: {e}"[:ERROR_MAX_CHARS]
 
 
 def _portal_target() -> tuple[str, str] | None:
