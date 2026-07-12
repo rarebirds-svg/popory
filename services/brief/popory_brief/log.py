@@ -85,4 +85,4 @@ def append_log(logs_dir: Path, record: dict) -> None:
     try:
         _ship(record, int(now.timestamp()))
     except Exception as e:  # noqa: BLE001 — 전송 실패가 잡을 죽이면 안 된다.
-        append_log(logs_dir, {"cli": record.get("cli"), "status": "ship_fail", "error": str(e)[:200]})
+        append_log(logs_dir, {"cli": record.get("cli"), "status": "ship_fail", "error": safe_error(e)})
