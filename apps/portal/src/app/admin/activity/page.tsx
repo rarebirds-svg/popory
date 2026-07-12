@@ -45,7 +45,9 @@ export default async function ActivityPage({
   const { items } = (await actRes.json()) as { items: ActivityRow[] };
   const { items: users } = (await userRes.json()) as { items: UserRow[] };
 
-  const last = items.length ? items[items.length - 1]!.ts : null;
+  // 한 장이 꽉 찼을 때만 다음 장이 있다. 워커의 기본 limit 과 같은 값이다.
+  const PAGE = 50;
+  const last = items.length === PAGE ? items[items.length - 1]!.ts : null;
   const nextQs = new URLSearchParams(qs);
   if (last) nextQs.set("before", String(last));
 
