@@ -96,7 +96,8 @@ def is_failure(status: str) -> bool:
 `workers/api/src/routes/admin_job_logs.ts` — `mountAdminJobLogs(app)`.
 
 - `GET /api/admin/job-logs?service=&status=&since=&limit=100` — `requireAdmin`. `since` 기본값은 7일 전.
-- `POST /api/admin/job-logs` — **`requireService` + area `content-worker`**. body `{ service, cli, status, job_id?, owner_sub?, detail, ts }`. 사람이 아니라 로컬 잡이 부르는 유일한 엔드포인트다.
+- `POST /api/admin/job-logs` — **`requireService`**. body `{ service, cli, status, job_id?, owner_sub?, detail, ts }`. 사람이 아니라 로컬 잡이 부르는 유일한 엔드포인트다.
+  area는 고정 게이트를 걸지 않는다. content는 `content-worker` 고정이지만 brief는 카테고리 슬러그별로 area를 바꿔가며 서명하기 때문이다(`services/brief/publish_to_portal.py`). `requireService`가 우리 JWKS로 서명된 토큰만 통과시키므로 이걸로 충분하다. 대신 body의 `service`는 `content`·`brief` 둘 중 하나여야 하고 아니면 400이다.
 
 ### 3. 포털 화면
 
@@ -119,7 +120,7 @@ def is_failure(status: str) -> bool:
 
 워커.
 - admin 아닌 유저의 `/api/admin/activity` → 403, 비로그인 → 401
-- `POST /api/admin/job-logs` 를 유저 세션 쿠키로 부르면 401 (서비스 area 토큰만 허용)
+- `POST /api/admin/job-logs` 를 유저 세션 쿠키로 부르면 401 (서비스 토큰만 허용). `service`가 `content`·`brief`가 아니면 400
 - UNION 결과가 `ts DESC`로 정렬되고 `before` 커서가 그 이전 것만 돌려준다
 - `sub` 필터가 다른 사용자의 행을 걸러낸다
 - `GET /api/admin/job-logs` 의 `since` 기본 7일 컷
