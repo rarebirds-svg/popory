@@ -5,6 +5,7 @@ import { API_BASE } from "@/lib/env";
 
 interface ActivityRow {
   ts: number;
+  id: string;
   kind: "content_job" | "topic" | "account" | "publish";
   user_sub: string | null;
   user_email: string | null;
@@ -29,7 +30,7 @@ function fmt(ts: number): string {
 export default async function ActivityPage({
   searchParams,
 }: {
-  searchParams: Promise<{ sub?: string; kind?: string; before?: string }>;
+  searchParams: Promise<{ sub?: string; kind?: string; before?: string; before_id?: string }>;
 }) {
   const sp = await searchParams;
   const cookie = (await headers()).get("cookie") ?? "";
@@ -37,6 +38,7 @@ export default async function ActivityPage({
   if (sp.sub) qs.set("sub", sp.sub);
   if (sp.kind) qs.set("kind", sp.kind);
   if (sp.before) qs.set("before", sp.before);
+  if (sp.before_id) qs.set("before_id", sp.before_id);
 
   const [actRes, userRes] = await Promise.all([
     fetch(`${API_BASE}/api/admin/activity?${qs}`, { headers: { cookie }, cache: "no-store" }),
@@ -47,9 +49,13 @@ export default async function ActivityPage({
 
   // 한 장이 꽉 찼을 때만 다음 장이 있다. 워커의 기본 limit 과 같은 값이다.
   const PAGE = 50;
-  const last = items.length === PAGE ? items[items.length - 1]!.ts : null;
+  // 커서는 (ts, id) 쌍이다. ts 만 쓰면 같은 초에 걸친 항목이 페이지 경계에서 사라진다.
+  const last = items.length === PAGE ? items[items.length - 1]! : null;
   const nextQs = new URLSearchParams(qs);
-  if (last) nextQs.set("before", String(last));
+  if (last) {
+    nextQs.set("before", String(last.ts));
+    nextQs.set("before_id", last.id);
+  }
 
   return (
     <main>
@@ -76,8 +82,8 @@ export default async function ActivityPage({
       ) : (
         <table className="mt-6 w-full text-sm">
           <tbody>
-            {items.map((it, i) => (
-              <tr key={`${it.ts}-${i}`} className="border-b border-popory-border">
+            {items.map((it) => (
+              <tr key={it.id} className="border-b border-popory-border">
                 <td className="py-2 text-xs text-popory-muted">{fmt(it.ts)}</td>
                 <td className="py-2 text-xs">
                   {it.user_sub ? (

@@ -84,6 +84,35 @@ def test_subprocess_output_is_redacted_from_shipped_detail(monkeypatch, tmp_path
     assert row["stdout"] == "raw claude output"
 
 
+def test_claude_cli_output_is_stripped_from_shipped_error(monkeypatch, tmp_path):
+    """generate.py 는 GenerateError 에 claude CLI 원본 출력 tail 을 붙인다.
+    그게 str(e) 로 error 필드에 실려 포털 D1 까지 간다. 사유만 남기고 tail 은 떼어낸다."""
+    post = _install(monkeypatch, FakePost())
+    raw = ("claude CLI exit 1 (시도 4): Invalid API key · Please run /login "
+           "|| stdout: raw claude output with auth details")
+    log.append_log(tmp_path, {"cli": "recommend_weekly", "status": "claude_fail", "error": raw})
+
+    detail = json.loads(post.calls[0]["body"]["detail"])
+    assert "Invalid API key" not in detail["error"]
+    assert "raw claude output" not in detail["error"]
+    assert "|| stdout:" not in detail["error"]
+    assert detail["error"] == "claude CLI exit 1 (시도 4)"   # 사유는 남는다.
+
+    # 로컬 파일 로그에는 원문이 그대로 남는다.
+    assert _lines(tmp_path)[0]["error"] == raw
+
+
+def test_shipped_error_is_capped(monkeypatch, tmp_path):
+    """tail 표식이 없는 error 도 300자로 자른다."""
+    post = _install(monkeypatch, FakePost())
+    long_err = "가" * 500
+    log.append_log(tmp_path, {"cli": "auto_create", "status": "failed", "error": long_err})
+
+    detail = json.loads(post.calls[0]["body"]["detail"])
+    assert detail["error"] == "가" * 300
+    assert _lines(tmp_path)[0]["error"] == long_err
+
+
 def test_failure_is_shipped(monkeypatch, tmp_path):
     post = _install(monkeypatch, FakePost())
     log.append_log(tmp_path, {"cli": "reply_drafts", "status": "item_fail", "video": "v1", "job_id": "j1"})

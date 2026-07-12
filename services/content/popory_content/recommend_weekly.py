@@ -92,7 +92,7 @@ def run() -> int:
     try:
         items = run_claude_cli(system_prompt=SYSTEM_PROMPT, user_msg=user_msg, parse=_parse, job_id="recommend")
     except GenerateError as e:
-        append_log(LOGS_DIR, {"cli": "recommend_weekly", "status": "claude_fail", "error": str(e)[-300:]})
+        append_log(LOGS_DIR, {"cli": "recommend_weekly", "status": "claude_fail", "error": str(e)[:300]})
         return 0
 
     try:
