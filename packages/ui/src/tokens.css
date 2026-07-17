@@ -10,6 +10,13 @@
   --popory-card: #ffffff;
   --popory-border: #e9ecf1;
   --popory-radius: 12px;
+  /* 상태색. accent 와 구분되는 성공/주의/실패 시그널 */
+  --popory-success: #1e7a3c;
+  --popory-success-soft: #e3f2e8;
+  --popory-warn: #8a6116;
+  --popory-warn-soft: #f7efdb;
+  --popory-danger: #c92a2a;
+  --popory-danger-soft: #fbe4e4;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -21,6 +28,12 @@
     --popory-accent-soft: #16203a;
     --popory-card: #131922;
     --popory-border: #232c38;
+    --popory-success: #66bb7f;
+    --popory-success-soft: #14291c;
+    --popory-warn: #d9a94f;
+    --popory-warn-soft: #2b2413;
+    --popory-danger: #ef7070;
+    --popory-danger-soft: #331a1a;
   }
 }
 
@@ -34,6 +47,12 @@
   --popory-accent-soft: #f1e7df;
   --popory-card: #fffdf8;
   --popory-border: #d6cdba;
+  --popory-success: #3d6b46;
+  --popory-success-soft: #e6ecdb;
+  --popory-warn: #8f6a12;
+  --popory-warn-soft: #f2e8cd;
+  --popory-danger: #b3261e;
+  --popory-danger-soft: #f4ded6;
 }
 @media (prefers-color-scheme: dark) {
   .ledger {
@@ -45,5 +64,11 @@
     --popory-accent-soft: #2a2418;
     --popory-card: #1f1c14;
     --popory-border: #34301f;
+    --popory-success: #93b98a;
+    --popory-success-soft: #202617;
+    --popory-warn: #d3b269;
+    --popory-warn-soft: #2c2514;
+    --popory-danger: #e08273;
+    --popory-danger-soft: #34201a;
   }
 }
