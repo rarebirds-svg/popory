@@ -2,6 +2,13 @@
 import Link from "next/link";
 import { headers } from "next/headers";
 import { API_BASE } from "@/lib/env";
+import { Table } from "../_components/Table";
+import { Badge } from "../_components/Badge";
+import { EmptyState } from "../_components/EmptyState";
+import { FilterBar, FilterField } from "../_components/FilterBar";
+import { COMPACT_INPUT_CLASS } from "../_components/field";
+import { formatKst } from "../_lib/format";
+import { statusLabel, statusIntent } from "../_lib/labels";
 
 interface ActivityRow {
   ts: number;
@@ -23,10 +30,6 @@ const KIND_LABEL: Record<string, string> = {
   publish: "브리핑 발행",
 };
 
-function fmt(ts: number): string {
-  return new Date(ts * 1000).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
-}
-
 export default async function ActivityPage({
   searchParams,
 }: {
@@ -44,6 +47,8 @@ export default async function ActivityPage({
     fetch(`${API_BASE}/api/admin/activity?${qs}`, { headers: { cookie }, cache: "no-store" }),
     fetch(`${API_BASE}/api/admin/users`, { headers: { cookie }, cache: "no-store" }),
   ]);
+  if (!actRes.ok) throw new Error(`activity ${actRes.status}`);
+  if (!userRes.ok) throw new Error(`users ${userRes.status}`);
   const { items } = (await actRes.json()) as { items: ActivityRow[] };
   const { items: users } = (await userRes.json()) as { items: UserRow[] };
 
@@ -61,48 +66,49 @@ export default async function ActivityPage({
     <main>
       <h1 className="text-xl font-semibold">활동 이력</h1>
 
-      <form className="mt-4 flex gap-2 text-sm">
-        <select name="sub" defaultValue={sp.sub ?? ""} className="rounded-md border border-popory-border bg-popory-card px-2 py-1">
-          <option value="">전체 사용자</option>
-          {users.map((u) => (
-            <option key={u.sub} value={u.sub}>{u.email}</option>
-          ))}
-        </select>
-        <select name="kind" defaultValue={sp.kind ?? ""} className="rounded-md border border-popory-border bg-popory-card px-2 py-1">
-          <option value="">전체 종류</option>
-          {Object.entries(KIND_LABEL).map(([k, label]) => (
-            <option key={k} value={k}>{label}</option>
-          ))}
-        </select>
-        <button type="submit" className="rounded-md bg-popory-accent px-3 py-1 text-white">필터</button>
-      </form>
+      <FilterBar>
+        <FilterField label="사용자">
+          <select name="sub" defaultValue={sp.sub ?? ""} className={COMPACT_INPUT_CLASS}>
+            <option value="">전체 사용자</option>
+            {users.map((u) => (
+              <option key={u.sub} value={u.sub}>{u.email}</option>
+            ))}
+          </select>
+        </FilterField>
+        <FilterField label="종류">
+          <select name="kind" defaultValue={sp.kind ?? ""} className={COMPACT_INPUT_CLASS}>
+            <option value="">전체 종류</option>
+            {Object.entries(KIND_LABEL).map(([k, label]) => (
+              <option key={k} value={k}>{label}</option>
+            ))}
+          </select>
+        </FilterField>
+      </FilterBar>
 
       {items.length === 0 ? (
-        <p className="mt-8 text-sm text-popory-muted">활동이 없습니다.</p>
+        <EmptyState>활동이 없습니다.</EmptyState>
       ) : (
-        <table className="mt-6 w-full text-sm">
-          <tbody>
-            {items.map((it) => (
-              <tr key={it.id} className="border-b border-popory-border">
-                <td className="py-2 text-xs text-popory-muted">{fmt(it.ts)}</td>
-                <td className="py-2 text-xs">
-                  {it.user_sub ? (
-                    <Link href={`/admin/users/${it.user_sub}`} className="text-popory-accent">{it.user_email ?? it.user_sub}</Link>
-                  ) : (
-                    <span className="text-popory-muted">—</span>
-                  )}
-                </td>
-                <td className="py-2 text-xs text-popory-muted">{KIND_LABEL[it.kind] ?? it.kind}</td>
-                <td className="py-2">
-                  {it.href ? <Link href={it.href} className="text-popory-accent">{it.title}</Link> : it.title}
-                </td>
-                <td className={`py-2 text-xs ${it.status === "failed" ? "text-red-600" : "text-popory-muted"}`}>
-                  {it.status ?? ""}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <Table head={["시각", "사용자", "종류", "내용", "상태"]}>
+          {items.map((it) => (
+            <tr key={it.id} className="border-b border-popory-border">
+              <td className="py-2 pr-4 text-xs text-popory-muted">{formatKst(it.ts)}</td>
+              <td className="py-2 pr-4 text-xs">
+                {it.user_sub ? (
+                  <Link href={`/admin/users/${it.user_sub}`} className="text-popory-accent">{it.user_email ?? it.user_sub}</Link>
+                ) : (
+                  <span className="text-popory-muted">—</span>
+                )}
+              </td>
+              <td className="py-2 pr-4 text-xs text-popory-muted">{KIND_LABEL[it.kind] ?? it.kind}</td>
+              <td className="py-2 pr-4">
+                {it.href ? <Link href={it.href} className="text-popory-accent">{it.title}</Link> : it.title}
+              </td>
+              <td className="py-2 text-xs">
+                {it.status ? <Badge intent={statusIntent(it.status)}>{statusLabel(it.status)}</Badge> : ""}
+              </td>
+            </tr>
+          ))}
+        </Table>
       )}
 
       {last && (
