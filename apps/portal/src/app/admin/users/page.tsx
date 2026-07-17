@@ -23,7 +23,7 @@ export default async function UsersPage() {
       {items.length === 0 ? (
         <EmptyState>사용자가 없습니다.</EmptyState>
       ) : (
-        <Table head={["이메일", "역할", "상태", ""]}>
+        <Table head={["이메일", "역할", "상태", <span key="actions" className="sr-only">동작</span>]}>
           {items.map((u) => (
             <tr key={u.sub} className="border-b border-popory-border">
               <td className="py-2 pr-4">

@@ -135,9 +135,9 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
           <table className="mt-3 w-full text-sm">
             <thead>
               <tr className="text-left text-popory-muted">
-                <th className="py-1 font-normal">유형</th>
-                <th className="py-1 font-normal">생성 중</th>
-                <th className="py-1 font-normal">대기</th>
+                <th scope="col" className="py-1 font-normal">유형</th>
+                <th scope="col" className="py-1 font-normal">생성 중</th>
+                <th scope="col" className="py-1 font-normal">대기</th>
               </tr>
             </thead>
             <tbody>

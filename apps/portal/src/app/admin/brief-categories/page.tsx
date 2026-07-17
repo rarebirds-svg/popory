@@ -42,7 +42,7 @@ export default async function BriefCategoriesPage() {
       {items.length === 0 ? (
         <EmptyState>카테고리가 없습니다. 첫 카테고리를 추가해 보세요.</EmptyState>
       ) : (
-        <Table head={["slug", "이름", "모드", "활성", "sha", ""]}>
+        <Table head={["slug", "이름", "모드", "활성", "sha", <span key="actions" className="sr-only">동작</span>]}>
           {items.map((c) => (
             <tr key={c.slug} className="border-b border-popory-border">
               <td className="py-2 pr-4 font-mono text-xs text-popory-fg">{c.slug}</td>

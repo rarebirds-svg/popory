@@ -6,7 +6,7 @@ export function FilterBar({ children }: { children: ReactNode }) {
   return (
     <form className="mt-4 flex flex-wrap items-end gap-2 text-sm">
       {children}
-      <Button type="submit" variant="primary" className="px-3 py-1">필터</Button>
+      <Button type="submit" variant="primary">필터</Button>
     </form>
   );
 }
