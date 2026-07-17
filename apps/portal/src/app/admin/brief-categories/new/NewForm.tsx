@@ -3,8 +3,9 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
+import { INPUT_CLASS as INPUT } from "../../_components/field";
+import { Button } from "../../_components/Button";
 
-const INPUT = "w-full rounded-md border border-popory-border bg-popory-card px-3 py-2 text-sm text-popory-fg";
 const SLUG_PATTERN = "[a-z][a-z0-9-]{1,30}";
 
 const DEFAULT_SUBJECT = "[{name} 이슈 브리핑] {date}";
@@ -98,8 +99,8 @@ export function NewForm() {
   return (
     <form onSubmit={onSubmit} className="mt-6 space-y-4">
       {err && (
-        <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          <div className="font-semibold">생성 실패</div>
+        <div className="rounded-md border border-popory-danger bg-popory-danger-soft px-4 py-3 text-sm text-popory-fg">
+          <div className="font-semibold text-popory-danger">생성 실패</div>
           <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{err}</pre>
         </div>
       )}
@@ -172,13 +173,9 @@ export function NewForm() {
       </Field>
 
       <div className="flex gap-3">
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-md bg-popory-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
+        <Button type="submit" variant="primary" disabled={busy}>
           {busy ? "생성 중…" : "생성 (GitHub commit)"}
-        </button>
+        </Button>
         <a
           href="/admin/brief-categories"
           className="rounded-md border border-popory-border px-4 py-2 text-sm"
