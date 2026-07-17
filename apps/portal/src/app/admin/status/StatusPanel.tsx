@@ -1,6 +1,8 @@
 "use client";
 // 콘텐츠 생성 상태를 10초마다 폴링해 readiness·트래픽을 표시하는 client 컴포넌트.
 import { useEffect, useState } from "react";
+import { platformLabel } from "../_lib/labels";
+import { formatKstIso } from "../_lib/format";
 
 interface UsageItem { percent: number; resets_at: string; severity: string }
 interface ClaudeUsage { session?: UsageItem; weekly_all?: UsageItem; weekly_fable?: UsageItem }
@@ -14,18 +16,8 @@ interface Status {
   traffic: { platform: string; status: string; count: number }[];
 }
 
-const PLATFORM_LABEL: Record<string, string> = {
-  "naver-blog": "블로그", youtube: "유튜브", shorts: "쇼츠", "instagram-image": "인스타", "youtube-post": "게시물",
-};
-
-const SEV_BAR: Record<string, string> = { normal: "bg-green-500", warning: "bg-yellow-500", critical: "bg-red-500" };
-const SEV_TEXT: Record<string, string> = { normal: "text-green-600", warning: "text-yellow-600", critical: "text-red-600" };
-
-function fmtReset(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  } catch { return iso; }
-}
+const SEV_BAR: Record<string, string> = { normal: "bg-popory-success", warning: "bg-popory-warn", critical: "bg-popory-danger" };
+const SEV_TEXT: Record<string, string> = { normal: "text-popory-success", warning: "text-popory-warn", critical: "text-popory-danger" };
 
 function UsageRow({ label, item }: { label: string; item?: UsageItem }) {
   if (!item) {
@@ -38,12 +30,12 @@ function UsageRow({ label, item }: { label: string; item?: UsageItem }) {
   }
   const pct = Math.max(0, Math.min(100, Math.round(item.percent)));
   const fill = Math.round(pct / 10);
-  const bar = SEV_BAR[item.severity] ?? "bg-green-500";
+  const bar = SEV_BAR[item.severity] ?? "bg-popory-success";
   return (
     <li className="border-b border-popory-muted/20 pb-2">
       <div className="flex justify-between">
         <span className="text-popory-muted">{label}</span>
-        <span className={SEV_TEXT[item.severity] ?? "text-popory-fg"}>{pct}% · {fmtReset(item.resets_at)} 리셋</span>
+        <span className={SEV_TEXT[item.severity] ?? "text-popory-fg"}>{pct}% · {formatKstIso(item.resets_at)} 리셋</span>
       </div>
       <div className="mt-1 flex gap-0.5">
         {Array.from({ length: 10 }, (_, i) => (
@@ -75,7 +67,7 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
     return () => { alive = false; clearInterval(id); };
   }, [apiBase]);
 
-  if (err && !s) return <p className="mt-8 text-sm text-red-500">상태를 불러오지 못했습니다.</p>;
+  if (err && !s) return <p className="mt-8 text-sm text-popory-danger">상태를 불러오지 못했습니다.</p>;
   if (!s) return <p className="mt-8 text-sm text-popory-muted">불러오는 중…</p>;
 
   const byPlatform = new Map<string, { queued: number; running: number }>();
@@ -92,25 +84,25 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
     <div className="mt-8 space-y-8">
       <section>
         <h2 className="text-lg font-semibold text-popory-fg">생성 가능 여부</h2>
-        <div className={`mt-3 rounded-lg px-4 py-3 text-sm font-medium ${s.can_generate ? "bg-green-500/15 text-green-600" : "bg-red-500/15 text-red-600"}`}>
+        <div className={`mt-3 rounded-lg px-4 py-3 text-sm font-medium ${s.can_generate ? "bg-popory-success-soft text-popory-success" : "bg-popory-danger-soft text-popory-danger"}`}>
           {s.can_generate ? "🟢 지금 콘텐츠 생성 가능" : "🔴 생성 불가 — 워커 오프라인"}
         </div>
         <ul className="mt-3 space-y-2 text-sm">
           <li className="flex justify-between border-b border-popory-muted/20 pb-2">
             <span className="text-popory-muted">워커</span>
-            <span className={s.worker.online ? "text-green-600" : "text-red-600"}>
+            <span className={s.worker.online ? "text-popory-success" : "text-popory-danger"}>
               {s.worker.online ? `온라인 · ${s.worker.age_sec}초 전 보고` : "오프라인"}
             </span>
           </li>
           <li className="flex justify-between border-b border-popory-muted/20 pb-2">
             <span className="text-popory-muted">무료 이미지(Cloudflare · FLUX.1 schnell)</span>
-            <span className={s.image_free.exhausted ? "text-yellow-600" : "text-green-600"}>
+            <span className={s.image_free.exhausted ? "text-popory-warn" : "text-popory-success"}>
               {s.image_free.exhausted ? `오늘 소진 · ${s.image_free.reset_date} 09:00(KST) 리셋 → 로컬 폴백` : "사용 가능"}
             </span>
           </li>
           <li className="flex justify-between border-b border-popory-muted/20 pb-2">
             <span className="text-popory-muted">로컬 이미지(imagegen · RealVisXL SDXL)</span>
-            <span className={s.imagegen_ok ? "text-green-600" : "text-popory-muted"}>
+            <span className={s.imagegen_ok ? "text-popory-success" : "text-popory-muted"}>
               {s.imagegen_ok ? "응답" : "무응답"}
             </span>
           </li>
@@ -151,7 +143,7 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
             <tbody>
               {[...byPlatform.entries()].map(([p, e]) => (
                 <tr key={p} className="border-t border-popory-muted/20">
-                  <td className="py-2 text-popory-fg">{PLATFORM_LABEL[p] ?? p}</td>
+                  <td className="py-2 text-popory-fg">{platformLabel(p)}</td>
                   <td className="py-2 text-popory-fg">{e.running}</td>
                   <td className="py-2 text-popory-fg">{e.queued}</td>
                 </tr>
