@@ -141,6 +141,21 @@ def test_normalize_slash_not_between_digits():
     assert _normalize_for_tts("2024/06/21 발표") == "2024/06/21 발표"
 
 
+def test_normalize_percent_to_hangul():
+    from popory_content.tts import _normalize_for_tts
+    # 퍼센트 기호는 '퍼센트'로, 앞 공백은 흡수해 숫자에 붙인다(뒤 숫자 변환이 매끄럽게 이어짐)
+    assert _normalize_for_tts("12.3% 상승") == "12.3퍼센트 상승"
+    assert _normalize_for_tts("50 % 확신") == "50퍼센트 확신"
+
+
+def test_percent_decimal_reads_full_hangul():
+    from popory_content.tts import _prep_text, _to_ssml
+    # 사용자 보고 회귀: 12.3% → 십이점삼퍼센트 로 정확히 읽어야 한다
+    assert _to_ssml(_prep_text("이익률 12.3% 상승")) == "<speak>이익률 십이점삼퍼센트 상승</speak>"
+    assert _to_ssml(_prep_text("3.5% 하락")) == "<speak>삼점오퍼센트 하락</speak>"
+    assert _to_ssml(_prep_text("50% 확신")) == "<speak>오십퍼센트 확신</speak>"
+
+
 def test_normalize_middot_and_ampersand():
     from popory_content.tts import _normalize_for_tts
     assert _normalize_for_tts("투자·금융 시장") == "투자, 금융 시장"
@@ -222,18 +237,23 @@ def test_to_ssml_converts_sentence_final_integer():
     assert "천구백칠십육." in out
 
 
-def test_to_ssml_skips_decimal():
+def test_to_ssml_converts_decimal():
     from popory_content.tts import _to_ssml
-    # 소수는 변환하지 않고 모델에 맡긴다(삼점오)
-    out = _to_ssml("3.5% 상승")
-    assert out == "<speak>3.5% 상승</speak>"
+    # 소수(점 1개)는 '정수부 점 소수부(자리별)'로 변환 — 12.3 → 십이점삼, 3.5 → 삼점오
+    assert _to_ssml("3.5 상승") == "<speak>삼점오 상승</speak>"
+    assert _to_ssml("이익률 12.3 증가") == "<speak>이익률 십이점삼 증가</speak>"
+    # 정수부 0·여러 자리 소수부
+    assert _to_ssml("0.5") == "<speak>영점오</speak>"
+    assert _to_ssml("3.14") == "<speak>삼점일사</speak>"
 
 
-def test_to_ssml_skips_time_and_date():
+def test_to_ssml_skips_time_date_and_version():
     from popory_content.tts import _to_ssml
-    # 시간(3:00)·날짜(2024/06/21) 형식은 숫자 가드로 건드리지 않고 원문 유지
+    # 시간(3:00)·슬래시 날짜(2024/06/21)·점 여러 개(날짜·버전)는 모델에 맡겨 원문 유지
     assert "3:00" in _to_ssml("오후 3:00에 만난다.")
     assert "2024/06/21" in _to_ssml("2024/06/21 발표")
+    assert "2024.06.21" in _to_ssml("2024.06.21 발표")
+    assert "1.2.3" in _to_ssml("버전 1.2.3")
 
 
 def test_to_ssml_converts_date_components():

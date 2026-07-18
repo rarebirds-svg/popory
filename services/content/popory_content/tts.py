@@ -27,6 +27,7 @@ _MIDDOT = re.compile(r"\s*·\s*")                           # 가운뎃점(나�
 _COLON = re.compile(r"(?<!\d)\s*[:;]\s*|\s*[:;]\s*(?!\d)")  # 숫자 사이 아닌 콜론·세미콜론 → 쉼표
 _SLASH = re.compile(r"(?<!\d)\s*/\s*|\s*/\s*(?!\d)")       # 숫자 사이 아닌 슬래시 → 공백
 _AMP = re.compile(r"\s*&\s*")                              # 앰퍼샌드 → 공백
+_PERCENT = re.compile(r"\s*[%％]")                          # 퍼센트 기호 → '퍼센트'(앞 공백 흡수해 숫자에 붙임)
 _HANGUL = re.compile(r"[가-힣]")                            # 한글 음절 포함 여부 판별용
 # 괄호 안이 한글 없는 한자·영어 주석이면 통째 제거 — 한자가 앞말과 같은 한국어 독음으로 다시 읽혀 이중 발음되는 것 방지(예: 구방심(求放心) → 구방심)
 _PAREN_GLOSS = re.compile(r"\s*[(（]([^()（）]*)[)）]")
@@ -49,6 +50,7 @@ def _normalize_for_tts(text: str) -> str:
     text = _COLON.sub(", ", text)
     text = _SLASH.sub(" ", text)
     text = _AMP.sub(" ", text)
+    text = _PERCENT.sub("퍼센트", text)
     # 한글 없는 괄호 주석(한자·영어)은 통째 제거, 한글 포함 괄호는 남겨 뒤에서 괄호만 벗김
     text = _PAREN_GLOSS.sub(lambda m: "" if not _HANGUL.search(m.group(1)) else m.group(0), text)
     text = _OPEN_PAREN.sub(" ", text)
@@ -62,7 +64,8 @@ def _normalize_for_tts(text: str) -> str:
 
 
 # 숫자 토큰 = 정수, 또는 .:/로 이어진 복합수(소수 3.5·시간 3:00·날짜 2024/06).
-# 토큰에 .:/가 섞였으면 소수·시간·날짜이므로 모델에 맡기고, 순수 정수만 카디널로 감싼다.
+# 순수 정수와 점 1개 소수(12.3→십이점삼)는 한자어 수사로 변환하고,
+# 시간(:)·슬래시 날짜(/)·점 여러 개(날짜·버전)는 모델에 맡긴다.
 # (구분자가 숫자 사이일 때만 토큰에 포함되므로 문장 끝 마침표 "1976."은 정수로 인식.)
 _NUM_TOKEN = re.compile(r"\d+(?:[.:/]\d+)*")
 
@@ -115,12 +118,21 @@ def _sino_korean(n: int) -> str:
     return "".join(parts)
 
 
+def _read_decimal(tok: str) -> str:
+    """소수 토큰(점 1개)을 '정수부 점 소수부(자리별)'로 — 12.3→십이점삼, 0.5→영점오."""
+    head, frac = tok.split(".")
+    return _sino_korean(int(head)) + "점" + "".join(_SINO_DIGITS[int(c)] for c in frac)
+
+
 def _read_number(m: "re.Match[str]") -> str:
     """숫자 토큰을 한자어 수사 평문으로 치환. say-as 경계가 없어 뒤 글자와 끊기지 않는다.
-    소수·시간·날짜(. : /)와 변환기 범위 밖은 원문 유지(모델 정규화에 맡김)."""
+    정수와 점 1개 소수(12.3→십이점삼)는 변환하고, 시간·날짜·버전(: / 점 여러 개)과
+    변환기 범위 밖은 원문 유지(모델 정규화에 맡김)."""
     tok = m.group()
-    if any(c in tok for c in ".:/"):
+    if ":" in tok or "/" in tok:      # 시간(3:00)·슬래시 날짜(2024/06) → 모델에 맡김
         return tok
+    if "." in tok:                     # 점 1개면 소수, 여러 개면 날짜·버전(모델에 맡김)
+        return _read_decimal(tok) if tok.count(".") == 1 else tok
     try:
         n = int(tok)
     except ValueError:
