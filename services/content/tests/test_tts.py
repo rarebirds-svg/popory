@@ -148,11 +148,13 @@ def test_normalize_percent_to_hangul():
     assert _normalize_for_tts("50 % 확신") == "50퍼센트 확신"
 
 
-def test_percent_decimal_reads_full_hangul():
+def test_percent_reads_as_hangul():
     from popory_content.tts import _prep_text, _to_ssml
-    # 사용자 보고 회귀: 12.3% → 십이점삼퍼센트 로 정확히 읽어야 한다
-    assert _to_ssml(_prep_text("이익률 12.3% 상승")) == "<speak>이익률 십이점삼퍼센트 상승</speak>"
-    assert _to_ssml(_prep_text("3.5% 하락")) == "<speak>삼점오퍼센트 하락</speak>"
+    # 사용자 보고: 12.3% 가 리터럴 %로 오독 → % 를 '퍼센트'로 치환.
+    # 소수부는 숫자 그대로 두어 모델이 "십이점삼퍼센트"로 읽게 한다(41.8%도 정확).
+    assert _to_ssml(_prep_text("이익률 12.3% 상승")) == "<speak>이익률 12.3퍼센트 상승</speak>"
+    assert _to_ssml(_prep_text("41.8% 늘었다")) == "<speak>41.8퍼센트 늘었다</speak>"
+    # 정수 퍼센트는 정수만 한자어로 변환 + 퍼센트
     assert _to_ssml(_prep_text("50% 확신")) == "<speak>오십퍼센트 확신</speak>"
 
 
@@ -237,19 +239,17 @@ def test_to_ssml_converts_sentence_final_integer():
     assert "천구백칠십육." in out
 
 
-def test_to_ssml_converts_decimal():
+def test_to_ssml_skips_decimal():
     from popory_content.tts import _to_ssml
-    # 소수(점 1개)는 '정수부 점 소수부(자리별)'로 변환 — 12.3 → 십이점삼, 3.5 → 삼점오
-    assert _to_ssml("3.5 상승") == "<speak>삼점오 상승</speak>"
-    assert _to_ssml("이익률 12.3 증가") == "<speak>이익률 십이점삼 증가</speak>"
-    # 정수부 0·여러 자리 소수부
-    assert _to_ssml("0.5") == "<speak>영점오</speak>"
-    assert _to_ssml("3.14") == "<speak>삼점일사</speak>"
+    # 소수는 숫자 그대로 두고 모델 내장 정규화에 맡긴다 — 모델이 "삼점오"로 정확히 읽음.
+    # (한글로 바꾸면 41.8 같은 값에서 "점"이 뭉개져 "사십일 팔"로 들리는 회귀 발생.)
+    assert _to_ssml("3.5 상승") == "<speak>3.5 상승</speak>"
+    assert _to_ssml("이익률 41.8 증가") == "<speak>이익률 41.8 증가</speak>"
 
 
 def test_to_ssml_skips_time_date_and_version():
     from popory_content.tts import _to_ssml
-    # 시간(3:00)·슬래시 날짜(2024/06/21)·점 여러 개(날짜·버전)는 모델에 맡겨 원문 유지
+    # 시간(3:00)·슬래시 날짜(2024/06/21)·점 날짜·버전은 모델에 맡겨 원문 유지
     assert "3:00" in _to_ssml("오후 3:00에 만난다.")
     assert "2024/06/21" in _to_ssml("2024/06/21 발표")
     assert "2024.06.21" in _to_ssml("2024.06.21 발표")
