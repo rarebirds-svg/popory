@@ -150,10 +150,9 @@ def test_normalize_percent_to_hangul():
 
 def test_percent_reads_as_hangul():
     from popory_content.tts import _prep_text, _to_ssml
-    # 사용자 보고: 12.3% 가 리터럴 %로 오독 → % 를 '퍼센트'로 치환.
-    # 소수부는 숫자 그대로 두어 모델이 "십이점삼퍼센트"로 읽게 한다(41.8%도 정확).
-    assert _to_ssml(_prep_text("이익률 12.3% 상승")) == "<speak>이익률 12.3퍼센트 상승</speak>"
-    assert _to_ssml(_prep_text("41.8% 늘었다")) == "<speak>41.8퍼센트 늘었다</speak>"
+    # % 를 '퍼센트'로 치환하고, 소수부는 붙인 한글로 변환 → 십이점삼퍼센트/이십구점이퍼센트.
+    assert _to_ssml(_prep_text("이익률 12.3% 상승")) == "<speak>이익률 십이점삼퍼센트 상승</speak>"
+    assert _to_ssml(_prep_text("29.2% 늘었다")) == "<speak>이십구점이퍼센트 늘었다</speak>"
     # 정수 퍼센트는 정수만 한자어로 변환 + 퍼센트
     assert _to_ssml(_prep_text("50% 확신")) == "<speak>오십퍼센트 확신</speak>"
 
@@ -242,12 +241,14 @@ def test_to_ssml_converts_sentence_final_integer():
     assert "천구백칠십육." in out
 
 
-def test_to_ssml_skips_decimal():
+def test_to_ssml_converts_decimal():
     from popory_content.tts import _to_ssml
-    # 소수는 숫자 그대로 두고 모델 내장 정규화에 맡긴다 — 모델이 "삼점오"로 정확히 읽음.
-    # (한글로 바꾸면 41.8 같은 값에서 "점"이 뭉개져 "사십일 팔"로 들리는 회귀 발생.)
-    assert _to_ssml("3.5 상승") == "<speak>3.5 상승</speak>"
-    assert _to_ssml("이익률 41.8 증가") == "<speak>이익률 41.8 증가</speak>"
+    # 소수(점 1개)는 붙인 한글로 변환 — 숫자로 두면 Chirp3-HD가 29.2를 "이십구 이"로
+    # 소수점을 흘려 읽어(귀 확인) 한글로 고정. 41.8→사십일점팔, 29.2→이십구점이.
+    assert _to_ssml("3.5 상승") == "<speak>삼점오 상승</speak>"
+    assert _to_ssml("이익률 41.8 증가") == "<speak>이익률 사십일점팔 증가</speak>"
+    assert _to_ssml("수익률 29.2") == "<speak>수익률 이십구점이</speak>"
+    assert _to_ssml("0.5") == "<speak>영점오</speak>"
 
 
 def test_to_ssml_skips_time_date_and_version():

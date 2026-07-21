@@ -64,8 +64,9 @@ def _normalize_for_tts(text: str) -> str:
 
 
 # 숫자 토큰 = 정수, 또는 .:/로 이어진 복합수(소수 3.5·시간 3:00·날짜 2024/06).
-# 토큰에 .:/가 섞였으면 소수·시간·날짜이므로 모델 내장 정규화에 맡기고(소수 41.8은
-# 모델이 "사십일점팔"로 정확히 읽음 — 한글로 바꾸면 "점"이 뭉개짐), 순수 정수만 변환.
+# 정수와 점 1개 소수(29.2→이십구점이)는 붙인 한글로 변환한다 — 숫자로 두면 Chirp3-HD가
+# 값에 따라(29.2 등) 소수점을 흘려 "이십구 이"로 읽는 오류가 있어(2026-07 귀 확인) 한글로 고정.
+# 시간(:)·슬래시 날짜(/)·점 여러 개(날짜·버전)는 모델에 맡긴다.
 # (구분자가 숫자 사이일 때만 토큰에 포함되므로 문장 끝 마침표 "1976."은 정수로 인식.)
 _NUM_TOKEN = re.compile(r"\d+(?:[.:/]\d+)*")
 
@@ -118,12 +119,22 @@ def _sino_korean(n: int) -> str:
     return "".join(parts)
 
 
+def _read_decimal(tok: str) -> str:
+    """소수 토큰(점 1개)을 '정수부 점 소수부(자리별)' 붙인 한글로 — 29.2→이십구점이, 0.5→영점오.
+    붙여야 Chirp3-HD가 소수점을 안 흘린다(숫자로 두면 29.2를 "이십구 이"로 읽음)."""
+    head, frac = tok.split(".")
+    return _sino_korean(int(head)) + "점" + "".join(_SINO_DIGITS[int(c)] for c in frac)
+
+
 def _read_number(m: "re.Match[str]") -> str:
     """숫자 토큰을 한자어 수사 평문으로 치환. say-as 경계가 없어 뒤 글자와 끊기지 않는다.
-    소수·시간·날짜(. : /)와 변환기 범위 밖은 원문 유지(모델 정규화에 맡김)."""
+    정수와 점 1개 소수(29.2→이십구점이)는 변환하고, 시간·날짜·버전(: / 점 여러 개)과
+    변환기 범위 밖은 원문 유지(모델 정규화에 맡김)."""
     tok = m.group()
-    if any(c in tok for c in ".:/"):
+    if ":" in tok or "/" in tok:      # 시간(3:00)·슬래시 날짜(2024/06) → 모델에 맡김
         return tok
+    if "." in tok:                     # 점 1개면 소수(붙인 한글), 여러 개면 날짜·버전(모델에 맡김)
+        return _read_decimal(tok) if tok.count(".") == 1 else tok
     try:
         n = int(tok)
     except ValueError:
