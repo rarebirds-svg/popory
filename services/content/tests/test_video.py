@@ -65,6 +65,27 @@ def test_spans_from_durations_single():
     assert _spans_from_durations([5.0], 0.5) == [(0.0, 5.0)]
 
 
+def test_master_audio_copies_video_without_scale(tmp_path, monkeypatch):
+    # scale 없으면 비디오는 copy(기존 동작 유지)
+    cmds = []
+    monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
+    _video._master_audio(tmp_path / "in.mp4", tmp_path / "out.mp4", None)
+    cmd = cmds[0]
+    assert "copy" in cmd and "libx264" not in cmd
+    assert not any("scale=" in str(a) for a in cmd)
+
+
+def test_master_audio_portrait_scales_to_half(tmp_path, monkeypatch):
+    # portrait 출력은 540×960으로 다운스케일 재인코딩(쇼츠 절반 크기)
+    cmds = []
+    monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
+    _video._master_audio(tmp_path / "in.mp4", tmp_path / "out.mp4", None,
+                         scale=(_video.PORTRAIT_OUT_W, _video.PORTRAIT_OUT_H))
+    graph = cmds[0][cmds[0].index("-filter_complex") + 1]
+    assert "scale=540:960" in graph
+    assert "libx264" in cmds[0] and "copy" not in cmds[0]
+
+
 def test_deepen_voice_disabled_returns_original(tmp_path, monkeypatch):
     monkeypatch.setattr(_video, "VOICE_DEEPEN_SEMITONES", 0.0)
     p = tmp_path / "0.mp3"
@@ -191,7 +212,7 @@ def test_render_video_counts_missing_images(monkeypatch, tmp_path):
     monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
     monkeypatch.setattr(video, "_render_headline_png", lambda *a, **k: None)
     monkeypatch.setattr(video, "_render_subtitle_png", lambda *a, **k: None)
-    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm: None)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
     monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
     monkeypatch.setattr(video, "_xfade_graph", lambda durs, td=0.4: ("", "v", "a"))
     scenes = [
@@ -224,7 +245,7 @@ def test_render_video_skips_bgm_when_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(video, "BGM_ENABLED", False)
     monkeypatch.setattr(video, "_pick_bgm", lambda d, j: "PICKED")  # 꺼지면 호출 결과가 쓰이면 안 됨
     captured = {}
-    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm: captured.update(bgm=bgm))
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: captured.update(bgm=bgm))
     video.render_video([{"caption": "a", "narration": "n1"}, {"caption": "b", "narration": "n2"}], job_id="nobgm")
     assert captured["bgm"] is None
 
@@ -235,7 +256,7 @@ def test_render_video_uses_bgm_when_enabled(monkeypatch, tmp_path):
     monkeypatch.setattr(video, "BGM_ENABLED", True)
     monkeypatch.setattr(video, "_pick_bgm", lambda d, j: "PICKED")
     captured = {}
-    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm: captured.update(bgm=bgm))
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: captured.update(bgm=bgm))
     video.render_video([{"caption": "a", "narration": "n1"}, {"caption": "b", "narration": "n2"}], job_id="withbgm")
     assert captured["bgm"] == "PICKED"
 

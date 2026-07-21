@@ -24,6 +24,7 @@ SAY_VOICE = "Yuna"
 FONT_PATH = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
 LANDSCAPE_W, LANDSCAPE_H = 1920, 1080
 PORTRAIT_W, PORTRAIT_H = 1080, 1920
+PORTRAIT_OUT_W, PORTRAIT_OUT_H = 540, 960   # 쇼츠 최종 출력 크기 — 렌더는 1080×1920, 출력만 절반으로 다운스케일(파일 축소)
 THUMB_W, THUMB_H = 1280, 720
 THUMB_PW, THUMB_PH = 1080, 1920
 BG = (11, 31, 58)
@@ -288,25 +289,34 @@ def _pick_bgm(bgm_dir: Path, job_id: str) -> Path | None:
     return files[zlib.crc32(job_id.encode()) % len(files)]
 
 
-def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
-    """loudnorm(-14 LUFS) + (BGM 있으면) amix. 비디오는 copy.
+def _master_audio(src: Path, out: Path, bgm: Path | None, scale: tuple[int, int] | None = None) -> None:
+    """loudnorm(-14 LUFS) + (BGM 있으면) amix. 비디오는 기본 copy.
+    scale=(w,h)면 그 크기로 비디오를 다운스케일 재인코딩한다 — 쇼츠(portrait) 출력을
+    절반(540×960)으로 줄일 때 사용. 렌더는 1080×1920 기준 그대로라 레이아웃·자막 비율은
+    보존되고 최종 프레임만 축소된다.
     BGM 소스 자체가 작아(mean ~-34dB) 예전 volume=0.15 + amix 기본 normalize(입력당 ÷2)는
     BGM을 ~-40dB로 묻어 사실상 안 들렸다. normalize=0(내레이션 원음 유지) + volume=3.5로
     BGM을 갭 기준 ~-15dB(말소리보다 ~2dB 아래)의 강한 배경 베드로 올린다.
     이 값이 실질 상한 — 더 키우면 BGM이 내레이션보다 커져 말소리가 묻힌다."""
+    if scale:
+        vfilt = f"[0:v]scale={scale[0]}:{scale[1]}:flags=bicubic,format=yuv420p[v]"
+        vmap, vcodec = "[v]", ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    else:
+        vfilt, vmap, vcodec = None, "0:v", ["-c:v", "copy"]
     if bgm:
+        afilt = ("[1:a]volume=3.5[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix];"
+                 "[mix]loudnorm=I=-14:TP=-1.5:LRA=11[a]")
         cmd = [
             FFMPEG_BIN, "-y", "-i", str(src), "-stream_loop", "-1", "-i", str(bgm),
-            "-filter_complex",
-            "[1:a]volume=3.5[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix];"
-            "[mix]loudnorm=I=-14:TP=-1.5:LRA=11[a]",
-            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", str(out),
+            "-filter_complex", f"{afilt};{vfilt}" if vfilt else afilt,
+            "-map", vmap, "-map", "[a]", *vcodec, "-c:a", "aac", "-shortest", str(out),
         ]
     else:
+        afilt = "[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[a]"
         cmd = [
             FFMPEG_BIN, "-y", "-i", str(src),
-            "-filter_complex", "[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[a]",
-            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", str(out),
+            "-filter_complex", f"{afilt};{vfilt}" if vfilt else afilt,
+            "-map", vmap, "-map", "[a]", *vcodec, "-c:a", "aac", str(out),
         ]
     _run(cmd)
 
@@ -432,7 +442,8 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         ]
         _run(cmd)
     out = work / "out.mp4"
-    _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id) if BGM_ENABLED else None)
+    _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id) if BGM_ENABLED else None,
+                  scale=(PORTRAIT_OUT_W, PORTRAIT_OUT_H) if portrait else None)
     offsets = scene_offsets(clip_durations, XFADE_TD)
     cues: list[Cue] = []
     for off, local in zip(offsets, scene_local_cues):
