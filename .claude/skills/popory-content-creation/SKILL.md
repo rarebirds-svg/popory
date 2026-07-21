@@ -27,11 +27,17 @@ popory `services/content`가 한 주제로 4개 채널(블로그·유튜브 동�
 
 | 채널 | 구독/좋아요/팔로우 유도 | 마무리 |
 |------|------------------------|--------|
-| 유튜브·쇼츠 | **절대 금지** (내레이션·마무리·description 모두) | description 마지막 줄에 정확히 `포포리 책방 — 한 권의 책에서 길어올린 인생의 지혜.` |
+| 유튜브·쇼츠 | 내레이션·마무리엔 **절대 금지**. **description엔 구독 CTA 허용**(2026-07 구독 성장 위해 완화) | description은 요약만 생성 → `parse_video`가 구독 링크(정확한 채널 ID)+브랜딩을 **결정적 append** |
 | 블로그 | 해당 없음 | 출처 표기·SEO 우선 |
 | 인스타 캐러셀 | **팔로우 유도 OK** (첫·마지막 슬라이드) | caption 해시태그 포함 |
 
-영상 description은 내용 2~3문장(쇼츠는 1~2문장) 요약 뒤 브랜딩 한 줄로 끝낸다.
+영상 description은 내용 2~3문장(쇼츠는 1~2문장) 요약만 생성한다. 구독 링크·브랜딩 줄은 프롬프트가 아니라 `video_contract.parse_video`가 `append_description_cta`로 붙인다(LLM이 URL을 지어내 깨지는 것 방지). 구독 URL은 `video_prompt.CHANNEL_SUB_URL`(`?sub_confirmation=1`).
+
+**제목(title)은 훅을 앞, 책 제목을 뒤에** 둔다(`{훅} — {책제목}`, 앞 15자 훅). 예 `140억을 만든 한 문장 — 피터 린치`. (2026-07 CTR 개선. 이전엔 형식 규칙 없어 책 제목이 앞서곤 했다.)
+
+**데일리 주제 큐레이션은 투자·돈·경제 ~60% 비중**(`recommend_weekly.py`). 채널에서 투자 주제 조회수가 1위라 가중.
+
+**업로드 영상은 주제별 재생목록 자동 분류**(`youtube_playlist.py`). 제목·태그 키워드로 4버킷(투자·경제 / 자기계발·습관 / 인문·철학 / 시·에세이, 미분류는 기본) → find-or-create → 추가. `run_upload_once`에서 호출, `POPORY_YOUTUBE_PLAYLISTS=0`으로 끔. 실패해도 업로드 done 유지.
 
 ## 채널별 규칙
 
