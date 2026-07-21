@@ -48,13 +48,32 @@ def test_system_prompt_demands_consistent_style_suffix():
     assert "watercolor painting" in sp
 
 
-def test_prompts_brand_and_no_subscribe_cta():
-    """description에 포포리 책방 브랜딩 + 구독·좋아요 유도 금지(내레이션·설명 모두)."""
+def test_narration_still_bans_subscribe_cta():
+    """내레이션엔 여전히 구독 요청 금지(브랜딩 유지). 설명란 CTA는 파싱 단계에서 append."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
     for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
-        assert "포포리 책방" in sp        # 채널 브랜딩
-        assert "구독" in sp               # 구독 요청 금지 지시가 명시됨
-        assert "넣지 않습니다" in sp       # 금지 형태
+        assert "구독" in sp and "절대 넣지 않습니다" in sp   # 내레이션 CTA 금지 유지
+        # 설명란은 요약만 시키고 브랜딩/구독은 자동 append (프롬프트에서 강제 브랜딩 줄 제거)
+        assert "자동으로 덧붙" in sp
+
+
+def test_title_rule_hook_first():
+    """제목은 훅을 앞에, 책 제목을 뒤에 배치하도록 지시."""
+    from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
+    for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
+        assert "훅을 앞" in sp
+        assert "책 제목은 뒤" in sp
+
+
+def test_append_description_cta():
+    """설명란 요약 뒤에 구독 링크·브랜딩을 붙이고, 멱등(중복 append 안 함)."""
+    from popory_content.video_prompt import append_description_cta, CHANNEL_SUB_URL, BRAND_LINE
+    out = append_description_cta("책 요약입니다.")
+    assert "책 요약입니다." in out
+    assert CHANNEL_SUB_URL in out and "sub_confirmation=1" in out
+    assert BRAND_LINE in out
+    assert append_description_cta(out) == out          # 멱등
+    assert append_description_cta("") .startswith("매일")  # 빈 설명도 CTA는 붙음
 
 
 def test_video_and_shorts_prompts_allow_natural_faces():

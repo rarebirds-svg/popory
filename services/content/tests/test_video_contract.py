@@ -21,6 +21,10 @@ def test_parses_scenes_and_meta():
     assert meta["tags"] == ["책", "사피엔스"]
     assert scenes[0]["image_prompt"].startswith("ancient")
     assert scenes[1]["image_prompt"]  # 모든 장면에 image_prompt 필수
+    # 설명란에 구독 CTA·브랜딩이 자동 append 된다(요약은 보존)
+    assert "책 요약 영상" in meta["description"]
+    assert "sub_confirmation=1" in meta["description"]
+    assert "포포리 책방" in meta["description"]
 
 
 def test_missing_tags_raises():

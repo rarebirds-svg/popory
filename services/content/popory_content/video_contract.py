@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from popory_content.contract import ContractError
+from popory_content.video_prompt import append_description_cta
 
 
 def parse_video(text: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -23,4 +24,5 @@ def parse_video(text: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             raise ContractError("scene 에 caption/narration 누락")
         if not s.get("image_prompt"):
             raise ContractError("scene 에 image_prompt 누락")
+    meta["description"] = append_description_cta(meta.get("description", ""))  # 구독 CTA·브랜딩 결정적 append
     return scenes, meta

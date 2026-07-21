@@ -1,6 +1,25 @@
 # claude CLI 에 줄 YouTube 영상 대본 system/user 프롬프트. 장면 배열 + 메타를 출력시킨다.
 from typing import Any
 
+# 채널 식별자·브랜딩. 구독 링크는 LLM이 지어내면 깨지므로 파싱 단계에서 결정적으로 append 한다.
+CHANNEL_ID = "UCMbHbpCaIONuzHqklo_grTA"
+CHANNEL_SUB_URL = f"https://www.youtube.com/channel/{CHANNEL_ID}?sub_confirmation=1"
+BRAND_LINE = "포포리 책방 — 한 권의 책에서 길어올린 인생의 지혜."
+# 설명란 끝에 붙이는 구독 CTA 블록(요약 뒤 자동 append). 내레이션엔 CTA를 넣지 않는다(브랜딩 유지).
+DESCRIPTION_CTA = (
+    "매일 한 권의 책에서 길어올린 인생의 지혜를 전합니다. 구독하시면 다음 이야기를 놓치지 않아요.\n"
+    f"▶ 구독 {CHANNEL_SUB_URL}\n"
+    f"{BRAND_LINE}"
+)
+
+
+def append_description_cta(description: str) -> str:
+    """설명란 요약 뒤에 구독 CTA·브랜딩을 결정적으로 붙인다(멱등 — 이미 있으면 그대로)."""
+    desc = (description or "").rstrip()
+    if CHANNEL_SUB_URL in desc:
+        return desc
+    return f"{desc}\n\n{DESCRIPTION_CTA}" if desc else DESCRIPTION_CTA
+
 
 def _rules(scene_count: int, image_style_kw: str) -> str:
     return f"""당신은 한국어 YouTube 영상 대본 작가입니다. 주제로 슬라이드쇼형 영상의 대본을 만듭니다.
@@ -22,7 +41,8 @@ def _rules(scene_count: int, image_style_kw: str) -> str:
 
 ## 3. 출력 (반드시 마지막 응답에 두 태그를 정확히 포함)
 - 태그 안에는 코드 블록 표시(```)를 쓰지 말고 내용만 넣습니다.
-- description은 영상 내용을 2~3문장으로 요약한 뒤, **마지막 줄에 정확히 다음 브랜딩 한 줄을 그대로 넣습니다**: `포포리 책방 — 한 권의 책에서 길어올린 인생의 지혜.` 구독·좋아요·팔로우 요청 문구는 description에도 넣지 않습니다.
+- description은 영상 내용을 2~3문장으로 요약만 합니다. 구독 링크·브랜딩 줄은 시스템이 자동으로 덧붙이므로 직접 넣지 마세요.
+- **title은 궁금증을 유발하는 훅을 앞에 두고 책 제목은 뒤에 배치합니다.** 형식: `{{훅}} — {{책 제목}}` (앞 15자 안에 호기심·결과·숫자 훅). 예: `140억을 만든 한 문장 — 피터 린치`. 책 제목을 앞세우지 마세요.
 <scenes_json>
 [{{"caption": "...", "narration": "...", "image_prompt": "english description"}}, ...]
 </scenes_json>
@@ -80,7 +100,8 @@ def _shorts_rules(scene_count: int, image_style_kw: str) -> str:
 
 ## 3. 출력 (반드시 마지막 응답에 두 태그를 정확히 포함)
 - 태그 안에는 코드 블록 표시(```)를 쓰지 않습니다.
-- description은 영상 내용을 1~2문장으로 요약한 뒤 **마지막 줄에 정확히** `포포리 책방 — 한 권의 책에서 길어올린 인생의 지혜.` 를 그대로 넣습니다. 구독·좋아요·팔로우 문구는 넣지 않습니다.
+- description은 영상 내용을 1~2문장으로 요약만 합니다. 구독 링크·브랜딩 줄은 시스템이 자동으로 덧붙이므로 직접 넣지 마세요.
+- **title은 궁금증을 유발하는 훅을 앞에 두고 책 제목은 뒤에 배치합니다.** 형식: `{{훅}} — {{책 제목}}` (앞 15자 안에 호기심·결과·숫자 훅). 책 제목을 앞세우지 마세요.
 <scenes_json>
 [{{"caption": "...", "narration": "...", "image_prompt": "english description"}}, ...]
 </scenes_json>

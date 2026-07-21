@@ -8,6 +8,13 @@ def test_empty_known_returns_base_only():
     assert "겹치" not in msg  # 목록 없으면 회피 지시 없음
 
 
+def test_investment_weighting_in_prompts():
+    """조회수 높은 투자·돈 주제 비중을 높이도록 지시(데일리·주간 공유)."""
+    from popory_content.recommend_weekly import SYSTEM_PROMPT, build_user_msg
+    assert "투자·돈·경제" in SYSTEM_PROMPT and "60%" in SYSTEM_PROMPT
+    assert "60%" in build_user_msg([])
+
+
 def test_known_titles_injected_with_avoid_instruction():
     msg = build_user_msg(["원씽", "사피엔스", "부의 추월 차선"])
     assert "절대 제안하지 마라" in msg

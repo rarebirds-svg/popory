@@ -17,7 +17,10 @@ RECOMMEND_MAX = 15
 SYSTEM_PROMPT = (
     "너는 한국어 독서·자기계발 콘텐츠 기획자다. 이미 다룬 책 목록을 줄 테니, "
     "겹치지 않으면서 같은 독자층(투자·자기계발·인문 교양)이 좋아할 실제 출간된 책을 "
-    f"{RECOMMEND_MIN}~{RECOMMEND_MAX}건 제안하라. 각 줄은 '제목 - 저자' 형식으로, 실제 저자를 반드시 포함하라. "
+    f"{RECOMMEND_MIN}~{RECOMMEND_MAX}건 제안하라. "
+    "채널에서 투자·돈·경제(가치투자·재테크·부·금융·경제사) 주제가 조회수가 가장 높으니, "
+    "추천의 약 60%는 투자·돈·경제 분야로, 나머지는 자기계발·인문 교양으로 구성하라. "
+    "각 줄은 '제목 - 저자' 형식으로, 실제 저자를 반드시 포함하라. "
     "가공의 책이나 저자 없는 주제는 제안하지 마라. 설명·번호·불릿 없이 목록만. "
     "반드시 <recommendations>와 </recommendations> 태그로 감싸라."
 )
@@ -56,7 +59,7 @@ def _parse(output: str) -> list[dict]:
 
 def build_user_msg(known_titles: list[str]) -> str:
     """기존 제목 목록을 받아 '겹치지 마라' 지시를 담은 user 메시지를 만든다."""
-    base = "투자·자기계발·인문 교양 분야의 새로운 책 후보를 제안하라."
+    base = "투자·자기계발·인문 교양 분야의 새로운 책 후보를 제안하라. 투자·돈·경제 분야를 약 60% 비중으로 우선하라."
     if not known_titles:
         return base
     listed = ", ".join(known_titles)
