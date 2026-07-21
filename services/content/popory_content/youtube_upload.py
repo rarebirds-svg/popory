@@ -7,11 +7,38 @@ CAPTION_URL = "https://www.googleapis.com/upload/youtube/v3/captions?part=snippe
 THUMBNAIL_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
 COMMENT_URL = "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet"
 COMMENT_LIST_URL = "https://www.googleapis.com/youtube/v3/commentThreads"
+VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 _STORE_MARKERS = ("aladin.co.kr", "kyobobook.co.kr", "yes24.com", "ypbooks.co.kr")
 
 
 class UploadError(Exception):
     """업로드 실패."""
+
+
+def get_snippet(access_token: str, video_id: str) -> dict:
+    """영상의 현재 snippet(제목·설명·categoryId·태그) 반환. 실패 시 UploadError."""
+    resp = requests.get(
+        VIDEOS_URL, params={"part": "snippet", "id": video_id},
+        headers={"Authorization": f"Bearer {access_token}"}, timeout=30,
+    )
+    if resp.status_code != 200:
+        raise UploadError(f"videos.list {resp.status_code}: {resp.text[:200]}")
+    items = resp.json().get("items", [])
+    if not items:
+        raise UploadError(f"video {video_id} not found")
+    return items[0]["snippet"]
+
+
+def update_description(access_token: str, video_id: str, snippet: dict, description: str) -> None:
+    """description만 교체해 videos.update. snippet PUT은 전체 교체라 title·categoryId·태그는 보존한다."""
+    keep = {k: snippet[k] for k in ("title", "categoryId", "tags", "defaultLanguage", "defaultAudioLanguage") if k in snippet}
+    resp = requests.put(
+        VIDEOS_URL, params={"part": "snippet"},
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={"id": video_id, "snippet": {**keep, "description": description}}, timeout=30,
+    )
+    if resp.status_code != 200:
+        raise UploadError(f"videos.update {resp.status_code}: {resp.text[:200]}")
 
 
 def comment_exists(access_token: str, video_id: str) -> bool:

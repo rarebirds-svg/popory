@@ -76,6 +76,16 @@ def test_append_description_cta():
     assert append_description_cta("") .startswith("매일")  # 빈 설명도 CTA는 붙음
 
 
+def test_append_subscribe_cta_no_brand_dup():
+    """소급용은 구독 CTA만 붙이고 브랜드 줄은 중복시키지 않는다(옛 영상은 이미 브랜드 줄 보유)."""
+    from popory_content.video_prompt import append_subscribe_cta, CHANNEL_SUB_URL, BRAND_LINE
+    old = "책 요약입니다.\n포포리 책방 — 한 권의 책에서 길어올린 인생의 지혜."
+    out = append_subscribe_cta(old)
+    assert CHANNEL_SUB_URL in out
+    assert out.count(BRAND_LINE) == 1        # 브랜드 줄 중복 없음
+    assert append_subscribe_cta(out) == out  # 멱등
+
+
 def test_video_and_shorts_prompts_allow_natural_faces():
     """SDXL은 얼굴을 잘 그리므로 얼굴 허용 — 단 자연스러운 표정·정상 인체로 유도."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt

@@ -5,20 +5,29 @@ from typing import Any
 CHANNEL_ID = "UCMbHbpCaIONuzHqklo_grTA"
 CHANNEL_SUB_URL = f"https://www.youtube.com/channel/{CHANNEL_ID}?sub_confirmation=1"
 BRAND_LINE = "포포리 책방 — 한 권의 책에서 길어올린 인생의 지혜."
-# 설명란 끝에 붙이는 구독 CTA 블록(요약 뒤 자동 append). 내레이션엔 CTA를 넣지 않는다(브랜딩 유지).
-DESCRIPTION_CTA = (
+# 구독 유도 + 링크(브랜드 줄 없음). 내레이션엔 CTA를 넣지 않는다(브랜딩 유지).
+SUBSCRIBE_CTA = (
     "매일 한 권의 책에서 길어올린 인생의 지혜를 전합니다. 구독하시면 다음 이야기를 놓치지 않아요.\n"
-    f"▶ 구독 {CHANNEL_SUB_URL}\n"
-    f"{BRAND_LINE}"
+    f"▶ 구독 {CHANNEL_SUB_URL}"
 )
+# 신규 영상용(요약만 생성되므로 브랜드 줄까지 포함해 붙인다).
+DESCRIPTION_CTA = f"{SUBSCRIBE_CTA}\n{BRAND_LINE}"
 
 
 def append_description_cta(description: str) -> str:
-    """설명란 요약 뒤에 구독 CTA·브랜딩을 결정적으로 붙인다(멱등 — 이미 있으면 그대로)."""
+    """신규 영상 설명란(요약) 뒤에 구독 CTA+브랜딩을 붙인다(멱등 — 링크 있으면 그대로)."""
     desc = (description or "").rstrip()
     if CHANNEL_SUB_URL in desc:
         return desc
     return f"{desc}\n\n{DESCRIPTION_CTA}" if desc else DESCRIPTION_CTA
+
+
+def append_subscribe_cta(description: str) -> str:
+    """기존 영상 소급용 — 구독 CTA만 붙인다(브랜드 줄은 이미 있으므로 중복 안 시킴). 멱등."""
+    desc = (description or "").rstrip()
+    if CHANNEL_SUB_URL in desc:
+        return desc
+    return f"{desc}\n\n{SUBSCRIBE_CTA}" if desc else SUBSCRIBE_CTA
 
 
 def _rules(scene_count: int, image_style_kw: str) -> str:
