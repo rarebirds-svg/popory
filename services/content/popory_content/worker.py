@@ -28,10 +28,13 @@ from popory_content.instagram_image_contract import parse_carousel
 from popory_content.instagram_image_render import render_carousel
 from popory_content.instagram_upload import upload_reels, upload_carousel, InstagramUploadError
 from popory_content.facebook_upload import upload_reels as fb_upload_reels
+from popory_content.youtube_playlist import assign_to_playlist
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
 SUB_LANGS = ("ko", "en", "zh", "ja")
+# 업로드한 영상을 주제별 재생목록에 자동 분류(끄려면 0). 실패해도 업로드 done 은 유지.
+PLAYLIST_ENABLED = os.environ.get("POPORY_YOUTUBE_PLAYLISTS", "1") != "0"
 
 
 def _generate_carousel(*, topic: str, sources: list, style_samples: list, job_id: str, slide_count: int):
@@ -383,6 +386,13 @@ def run_upload_once(client) -> bool:
                     append_log(LOGS_DIR, {"worker": "content", "status": "comment_skipped_no_valid_links", "job": job_id})
             except Exception as e:  # noqa: BLE001 — 댓글 실패는 업로드 done 유지.
                 append_log(LOGS_DIR, {"worker": "content", "status": "comment_failed", "job": job_id, "error": str(e)[:200]})
+        if PLAYLIST_ENABLED:
+            try:
+                name = assign_to_playlist(data["access_token"], video_id,
+                                          data.get("title", ""), data.get("tags", []))
+                append_log(LOGS_DIR, {"worker": "content", "status": "playlist_added", "job": job_id, "playlist": name})
+            except Exception as e:  # noqa: BLE001 — 재생목록 실패는 업로드 done 유지.
+                append_log(LOGS_DIR, {"worker": "content", "status": "playlist_failed", "job": job_id, "error": str(e)[:200]})
         client.patch(f"/api/content/jobs/{job_id}/youtube-result", json={"status": "done", "video_id": video_id})
         append_log(LOGS_DIR, {"worker": "content", "status": "uploaded", "job": job_id, "video": video_id})
     except Exception as e:  # noqa: BLE001 — 업로드 실패는 result 에 기록하고 계속
