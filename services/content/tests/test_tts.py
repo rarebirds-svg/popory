@@ -161,7 +161,10 @@ def test_percent_reads_as_hangul():
 def test_normalize_middot_and_ampersand():
     from popory_content.tts import _normalize_for_tts
     assert _normalize_for_tts("투자·금융 시장") == "투자, 금융 시장"
-    assert _normalize_for_tts("리스크 & 리턴") == "리스크 리턴"
+    # 앰퍼샌드는 지우지 않고 '앤'으로 읽는다(S&P→에스앤피). 공백은 흡수해 붙여 읽음.
+    assert _normalize_for_tts("리스크 & 리턴") == "리스크앤리턴"
+    assert _normalize_for_tts("S&P 500 지수") == "S앤P 500 지수"
+    assert _normalize_for_tts("R&D 투자") == "R앤D 투자"
 
 
 def test_normalize_tilde_range_and_plain():

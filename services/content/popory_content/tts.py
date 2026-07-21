@@ -26,7 +26,7 @@ _TILDE = re.compile(r"[~〜]")                              # 그 외 틸드 →
 _MIDDOT = re.compile(r"\s*·\s*")                           # 가운뎃점(나열) → 쉼표
 _COLON = re.compile(r"(?<!\d)\s*[:;]\s*|\s*[:;]\s*(?!\d)")  # 숫자 사이 아닌 콜론·세미콜론 → 쉼표
 _SLASH = re.compile(r"(?<!\d)\s*/\s*|\s*/\s*(?!\d)")       # 숫자 사이 아닌 슬래시 → 공백
-_AMP = re.compile(r"\s*&\s*")                              # 앰퍼샌드 → 공백
+_AMP = re.compile(r"\s*&\s*")                              # 앰퍼샌드 → '앤'(S&P→에스앤피, R&D→알앤디). 공백 흡수해 약어가 이어 읽히게
 _PERCENT = re.compile(r"\s*[%％]")                          # 퍼센트 기호 → '퍼센트'(앞 공백 흡수해 숫자에 붙임)
 _HANGUL = re.compile(r"[가-힣]")                            # 한글 음절 포함 여부 판별용
 # 괄호 안이 한글 없는 한자·영어 주석이면 통째 제거 — 한자가 앞말과 같은 한국어 독음으로 다시 읽혀 이중 발음되는 것 방지(예: 구방심(求放心) → 구방심)
@@ -49,7 +49,7 @@ def _normalize_for_tts(text: str) -> str:
     text = _MIDDOT.sub(", ", text)
     text = _COLON.sub(", ", text)
     text = _SLASH.sub(" ", text)
-    text = _AMP.sub(" ", text)
+    text = _AMP.sub("앤", text)
     text = _PERCENT.sub("퍼센트", text)
     # 한글 없는 괄호 주석(한자·영어)은 통째 제거, 한글 포함 괄호는 남겨 뒤에서 괄호만 벗김
     text = _PAREN_GLOSS.sub(lambda m: "" if not _HANGUL.search(m.group(1)) else m.group(0), text)
