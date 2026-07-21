@@ -68,3 +68,12 @@ def test_apply_updates_when_missing_and_skips_when_present(monkeypatch):
     assert len(puts) == 1                                   # v1만 업데이트, v2 스킵
     put_body = puts[0].request.body
     assert bd.CHANNEL_SUB_URL in (put_body if isinstance(put_body, str) else put_body.decode())
+
+
+@responses.activate
+def test_quota_exhaustion_returns_retry_code(monkeypatch):
+    # 쿼터 403이면 rc=4(재시도 필요), 아니면 0(완료)로 구분 — 스케줄 자체 제거 판단에 사용
+    responses.add(responses.GET, yu.VIDEOS_URL,
+                  json={"error": {"code": 403, "message": "exceeded your quota"}}, status=403)
+    rc = _run_with(monkeypatch, [{"video_id": "v1", "access_token": "tok", "topic": "책"}], apply=True)
+    assert rc == 4

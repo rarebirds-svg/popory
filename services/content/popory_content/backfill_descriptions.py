@@ -39,6 +39,7 @@ def run(apply: bool) -> int:
         return 3
     items = data.get("items", [])
     updated = skipped = failed = 0
+    quota_hit = False
     for it in items:
         try:
             snippet = get_snippet(it["access_token"], it["video_id"])
@@ -56,12 +57,15 @@ def run(apply: bool) -> int:
             updated += 1
         except (UploadError, KeyError) as e:  # 개별 실패는 건너뛰고 계속
             failed += 1
+            if "quota" in str(e).lower():
+                quota_hit = True
             append_log(LOGS_DIR, {"cli": "backfill_descriptions", "status": "item_fail",
                                   "video": it.get("video_id"), "error": str(e)[:200]})
     append_log(LOGS_DIR, {"cli": "backfill_descriptions", "status": "done", "mode": mode,
-                          "updated": updated, "skipped": skipped, "failed": failed, "total": len(items)})
-    print(f"[{mode}] total={len(items)} updated={updated} skipped={skipped} failed={failed}")
-    return 0
+                          "updated": updated, "skipped": skipped, "failed": failed,
+                          "total": len(items), "quota_hit": quota_hit})
+    print(f"[{mode}] total={len(items)} updated={updated} skipped={skipped} failed={failed} quota_hit={quota_hit}")
+    return 4 if quota_hit else 0   # 4=쿼터로 미완(재시도 필요), 0=완료(남은 실패는 삭제된 영상뿐)
 
 
 if __name__ == "__main__":
