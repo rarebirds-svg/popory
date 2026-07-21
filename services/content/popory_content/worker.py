@@ -132,10 +132,15 @@ def run_once(client) -> bool:
 
 
 def _report(client, job_id: str, body: dict, status_label: str) -> None:
-    """결과 회신. 회신 자체가 실패해도 poll 루프를 죽이지 않는다(작업은 running 으로 남음)."""
+    """결과 회신. 회신 자체가 실패해도 poll 루프를 죽이지 않는다(작업은 running 으로 남음).
+    실패 회신의 error 는 append_log 에도 실어 로컬 로그·job_logs 에 남긴다 —
+    content_jobs.error 는 retry 가 NULL 로 지우므로 원문 유실을 막으려 이중화한다."""
     try:
         client.patch(f"/api/content/jobs/{job_id}/result", json=body)
-        append_log(LOGS_DIR, {"worker": "content", "status": status_label, "job": job_id})
+        record = {"worker": "content", "status": status_label, "job": job_id}
+        if body.get("error"):
+            record["error"] = body["error"]
+        append_log(LOGS_DIR, record)
     except Exception as e:  # noqa: BLE001 — 회신 실패는 로그만 남긴다
         append_log(LOGS_DIR, {"worker": "content", "status": "report_failed", "job": job_id, "error": str(e)[:300]})
 

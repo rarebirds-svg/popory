@@ -82,6 +82,21 @@ def test_failure_posts_failed(monkeypatch):
     assert "ng" in body["error"]
 
 
+def test_failure_logs_error_durably(monkeypatch, tmp_path):
+    # 실패 에러 원문을 로컬 로그(및 job_logs)에도 남긴다 — retry 가 content_jobs.error 를
+    # NULL 로 덮어써도 원문이 유실되지 않도록 이중화.
+    def boom(**kw):
+        raise worker.GenerateError("boom-detail-xyz")
+    monkeypatch.setattr(worker, "generate", boom)
+    client = FakeClient({"job": {"id": "j9", "topic": "t"}, "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    logs = list((tmp_path / "logs").glob("*.log"))
+    assert logs, "로그 파일이 생성돼야 한다"
+    content = logs[0].read_text(encoding="utf-8")
+    assert "boom-detail-xyz" in content  # 에러 원문이 append-only 로그에 남는다
+    assert '"status": "failed"' in content
+
+
 def test_is_claude_auth_failure():
     assert worker._is_claude_auth_failure("claude CLI exit 1: || stdout: Not logged in · Please run /login") is True
     assert worker._is_claude_auth_failure("Please run /login") is True
