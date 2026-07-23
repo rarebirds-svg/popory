@@ -84,6 +84,7 @@ popory `services/content`가 한 주제로 4개 채널(블로그·유튜브 동�
 - 켄번스 줌인(2x 슈퍼샘플로 떨림 제거, 줌을 장면 전체로 분산), 장면 전환 크로스페이드(xfade/acrossfade).
 - 라이선스-프리 BGM 패드 + 음량 정규화(loudnorm) 마스터 패스.
 - 자막은 문장 단위 타이밍, 헤드라인 단일 자막.
+- **인코딩 용량 상한** — scene/join 인코딩에 `_X264_Q`(`-crf 28 -maxrate 1200k -bufsize 2400k`) 적용. 가로형 유튜브 영상이 기본 CRF면 긴 영상은 100MB를 넘어 **포털 업로드가 413(Cloudflare 엣지 본문 한도)** 로 실패한다. 슬라이드쇼라 CRF 28에서도 화질 충분(14분 124MB→69MB). 쇼츠는 540×960 다운스케일이라 애초에 작다. `POPORY_VIDEO_CRF`·`POPORY_VIDEO_MAXRATE`로 튜닝.
 
 ## 신뢰성 / 작업 상태
 - claude CLI 일시 실패(parse 실패 등)에 재시도 내성.
