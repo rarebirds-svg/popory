@@ -26,6 +26,10 @@ LANDSCAPE_W, LANDSCAPE_H = 1920, 1080
 PORTRAIT_W, PORTRAIT_H = 1080, 1920
 PORTRAIT_OUT_W, PORTRAIT_OUT_H = 540, 960   # 쇼츠 최종 출력 크기 — 렌더는 1080×1920, 출력만 절반으로 다운스케일(파일 축소)
 THUMB_W, THUMB_H = 1280, 720
+# H.264 품질/용량 상한. 슬라이드쇼(정지+느린 줌)는 CRF 28에서도 화질 충분하고, maxrate로
+# 비트레이트 상한을 둬 긴 영상도 Cloudflare 업로드 한도(100MB)를 넘지 않게 한다. env로 튜닝.
+_X264_Q = ["-crf", os.environ.get("POPORY_VIDEO_CRF", "28"),
+           "-maxrate", os.environ.get("POPORY_VIDEO_MAXRATE", "1200k"), "-bufsize", "2400k"]
 THUMB_PW, THUMB_PH = 1080, 1920
 BG = (11, 31, 58)
 HEAD_COLOR = (255, 255, 255)
@@ -421,7 +425,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             FFMPEG_BIN, "-y", *inputs,
             "-filter_complex", graph,
             "-map", f"[{prev}]", "-map", "1:a",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-t", f"{dur:.3f}",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_X264_Q, "-t", f"{dur:.3f}",
             "-c:a", "aac", "-shortest", str(clip),
         ])
         clips.append(clip)
@@ -438,7 +442,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         cmd += [
             "-filter_complex", graph,
             "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", str(joined),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_X264_Q, "-c:a", "aac", str(joined),
         ]
         _run(cmd)
     out = work / "out.mp4"

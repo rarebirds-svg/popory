@@ -227,6 +227,27 @@ def test_render_video_counts_missing_images(monkeypatch, tmp_path):
     assert missing == 2 # 'fail' 2개
 
 
+def test_render_video_encodes_with_bitrate_cap(monkeypatch, tmp_path):
+    # scene/join 인코딩에 CRF·maxrate 상한이 실려 파일 용량이 Cloudflare 100MB 한도 아래로 유지된다
+    from popory_content import video
+    cmds = []
+    monkeypatch.setattr(video, "FONT_PATH", str(tmp_path))
+    monkeypatch.setattr(video, "synthesize", lambda text, voice=None: b"AUDIO")
+    monkeypatch.setattr(video, "_run", lambda cmd: cmds.append(cmd))
+    monkeypatch.setattr(video, "_duration", lambda path: 1.0)
+    monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_render_headline_png", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_render_subtitle_png", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    scenes = [{"caption": "a", "narration": "n1", "image_prompt": "ok"},
+              {"caption": "b", "narration": "n2", "image_prompt": "ok"}]
+    video.render_video(scenes, job_id="captest", image_fetcher=lambda p: b"IMG")
+    enc = [c for c in cmds if "libx264" in c]
+    assert enc, "libx264 인코딩 명령이 있어야 한다"
+    assert all("-crf" in c and "-maxrate" in c for c in enc)   # 모든 인코딩에 상한
+
+
 def _render_stub(monkeypatch, tmp_path, video):
     """render_video 의 무거운 ffmpeg/TTS 호출을 전부 우회하는 공통 monkeypatch."""
     monkeypatch.setattr(video, "FONT_PATH", str(tmp_path))
