@@ -1,8 +1,13 @@
 "use client";
 // 초안 미리보기(샌드박스 iframe)·HTML 소스 편집 client — PATCH /api/content/jobs/:id.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
+
+// 미리보기 iframe이 콘텐츠 높이를 부모로 postMessage해 iframe을 실제 내용에
+// 맞춰 리사이즈한다(sandbox에 allow-same-origin이 없어 부모가 직접 읽지 못하므로).
+// 저장·복사되는 draft는 건드리지 않고 미리보기 srcDoc에만 덧붙인다.
+const PREVIEW_SIZER = `<script>(function(){function h(){return Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);}function post(){parent.postMessage({__poporyPreviewHeight:h()},"*");}window.addEventListener("load",post);try{new ResizeObserver(post).observe(document.documentElement);}catch(e){}post();})();</script>`;
 
 interface Props {
   jobId: string;
@@ -20,6 +25,20 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, tags, s
   const [showSource, setShowSource] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [previewHeight, setPreviewHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    function onMsg(e: MessageEvent) {
+      const data = e.data as { __poporyPreviewHeight?: number } | null;
+      if (data && typeof data.__poporyPreviewHeight === "number") {
+        // 최소 120px 보장, 최대 뷰포트 90%까지만(초장문은 iframe 내부 스크롤).
+        const max = typeof window !== "undefined" ? window.innerHeight * 0.9 : 800;
+        setPreviewHeight(Math.min(Math.max(data.__poporyPreviewHeight, 120), max));
+      }
+    }
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
 
   async function patch(body: Record<string, unknown>) {
     setBusy(true);
@@ -93,9 +112,12 @@ export function DraftEditor({ jobId, initialDraft, done, seo, copyright, tags, s
         <span className="mb-1 block text-xs font-semibold text-popory-muted">미리보기</span>
         <iframe
           title="콘텐츠 미리보기"
-          srcDoc={draft}
+          srcDoc={draft + PREVIEW_SIZER}
           sandbox="allow-scripts allow-popups"
-          className="h-[70vh] w-full rounded-md border border-popory-border bg-white"
+          style={previewHeight != null ? { height: `${previewHeight}px` } : undefined}
+          className={`w-full rounded-md border border-popory-border bg-white ${
+            previewHeight == null ? "h-64" : ""
+          }`}
         />
       </div>
 
