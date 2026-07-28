@@ -187,3 +187,38 @@ def test_scan_markers_names_multiple_resources_with_counts():
     assert "Claude 세션 한도 1건" in msg
     assert "이미지 생성 실패 2건" in msg
     assert "Claude 호출 실패 1건" in msg
+
+
+# --- Claude 인증 (OAuth refresh 토큰 만료 예방 + 401 감지) ---
+
+_DAY = 86400.0
+_NOW = 1_800_000_000.0
+
+
+def test_claude_auth_fail_when_unauthorized():
+    """oauth/usage 가 401 이면 이미 장애다 — /login 안내를 메시지에 담는다."""
+    status, msg = checks.check_claude_auth(False, _NOW + 20 * _DAY, _NOW)
+    assert status == "fail"
+    assert "/login" in msg
+
+
+def test_claude_auth_warn_when_refresh_expiry_near():
+    status, msg = checks.check_claude_auth(True, _NOW + 2 * _DAY, _NOW)
+    assert status == "warn"
+    assert "2일" in msg
+
+
+def test_claude_auth_ok_when_expiry_far():
+    status, msg = checks.check_claude_auth(True, _NOW + 28 * _DAY, _NOW)
+    assert status == "ok"
+
+
+def test_claude_auth_fail_when_refresh_already_expired():
+    status, _ = checks.check_claude_auth(True, _NOW - _DAY, _NOW)
+    assert status == "fail"
+
+
+def test_claude_auth_warn_when_state_unavailable():
+    """keychain 을 못 읽으면 단정하지 않고 warn (오경보로 fail 내지 않는다)."""
+    status, _ = checks.check_claude_auth(None, None, _NOW)
+    assert status == "warn"

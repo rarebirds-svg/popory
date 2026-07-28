@@ -117,3 +117,14 @@ def test_gather_uses_yesterday_auto_create_in_morning(tmp_path, monkeypatch):
     results = runmod.gather()
     routine = next(r for r in results if r[0] == "콘텐츠루틴")
     assert routine[1] == "ok", f"expected ok, got {routine}"
+
+
+def test_gather_includes_claude_auth(tmp_path, monkeypatch):
+    """OAuth 만료는 브리핑·콘텐츠를 동시에 죽이므로 점검 항목으로 노출한다."""
+    monkeypatch.setattr(runmod, "WORKER_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(runmod.claude_auth, "current_state", lambda: (False, None))
+
+    results = runmod.gather()
+    item = next(r for r in results if r[0] == "Claude인증")
+    assert item[1] == "fail"
+    assert "/login" in item[2]

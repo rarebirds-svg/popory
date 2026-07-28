@@ -101,6 +101,28 @@ def scan_log_markers(log_text: str) -> tuple[str, str]:
     return ("warn", f"한도/실패 감지 — {detail}")
 
 
+def check_claude_auth(
+    authorized: bool | None,
+    refresh_expires_at: float | None,
+    now: float,
+    warn_days: int = 3,
+) -> tuple[str, str]:
+    """claude CLI 인증 상태. 모든 자동화(브리핑·콘텐츠)가 이 OAuth 하나에 걸려 있다.
+
+    refresh 토큰은 약 30일마다 만료되고 갱신은 사람이 /login 해야만 된다. 만료되면
+    그날 브리핑·콘텐츠가 통째로 죽으므로 만료 전에 미리 경고한다."""
+    if authorized is False:
+        return ("fail", "Claude 인증 만료 — claude /login 필요 (브리핑·콘텐츠 전면 중단)")
+    if refresh_expires_at is None:
+        return ("warn", "Claude 인증 상태 확인 불가 — keychain 미독")
+    remain_days = (refresh_expires_at - now) / 86400
+    if remain_days <= 0:
+        return ("fail", "Claude refresh 토큰 만료됨 — claude /login 필요")
+    if remain_days <= warn_days:
+        return ("warn", f"Claude 인증 {int(remain_days)}일 후 만료 — 미리 claude /login 권장")
+    return ("ok", f"Claude 인증 정상 — {int(remain_days)}일 남음")
+
+
 def check_content_routine(log_text: str) -> tuple[str, str]:
     last = None
     for line in log_text.splitlines():

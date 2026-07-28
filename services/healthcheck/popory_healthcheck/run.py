@@ -2,10 +2,11 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from popory_healthcheck import checks, report
+from popory_healthcheck import checks, claude_auth, report
 from popory_healthcheck.telegram import send_telegram, TelegramError
 
 KST = timezone(timedelta(hours=9))
@@ -70,6 +71,8 @@ def gather() -> list[tuple[str, str, str]]:
     out = []
     out.append(("포털", *checks.check_http("포털", PORTAL)))
     out.append(("API", *checks.check_http("API", API)))
+    # 브리핑보다 앞에 둔다 — 인증이 죽으면 브리핑 실패는 결과일 뿐이라 원인이 먼저 보여야 한다.
+    out.append(("Claude인증", *checks.check_claude_auth(*claude_auth.current_state(), time.time())))
     out.append(("브리핑", *checks.check_briefs_published(BRIEF_URL_TEMPLATE, _brief_categories(), _today())))
     out.append(("워커데몬", *checks.check_daemon("com.popory.content-worker")))
     out.append(("이미지데몬", *checks.check_daemon("com.popory.imagegen")))
