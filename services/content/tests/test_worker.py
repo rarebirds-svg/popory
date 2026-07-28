@@ -616,3 +616,18 @@ def test_comment_skipped_when_no_valid_links(monkeypatch):
     assert called["n"] == 0
     assert any("youtube-result" in p and j.get("status") == "done" for p, j in patched)
     assert any(e.get("status") == "comment_skipped_no_valid_links" for e in logs)
+
+
+def test_auth_failure_sends_notification(monkeypatch):
+    """인증 만료는 사람이 /login 해야 풀리므로 워커가 죽기 전에 즉시 알린다."""
+    sent = []
+    monkeypatch.setattr(worker, "_notify_auth_failure", lambda: sent.append(True))
+
+    def boom(**kw):
+        raise worker.GenerateError("claude CLI exit 1: || stdout: OAuth session expired")
+
+    monkeypatch.setattr(worker, "generate", boom)
+    client = FakeClient({"job": {"id": "j9", "topic": "t"}, "sources": [], "style_samples": []})
+    with pytest.raises(SystemExit):
+        worker.run_once(client)
+    assert sent == [True]

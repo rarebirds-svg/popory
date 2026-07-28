@@ -2,6 +2,7 @@
 import datetime
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -56,6 +57,22 @@ def _is_claude_auth_failure(err: str) -> bool:
         or "OAuth session expired" in err
         or "Failed to authenticate" in err
     )
+
+
+NOTIFY_SH = "/Users/daegong/projects/popory/services/healthcheck/notify.sh"
+
+
+def _notify_auth_failure() -> None:
+    """인증 만료를 즉시 텔레그램으로 알린다. 사람이 /login 해야만 풀리기 때문이다.
+    KeepAlive 재기동 루프에서 알림이 폭주하지 않게 발송측이 하루 1회로 억제한다."""
+    try:
+        subprocess.run(
+            ["bash", NOTIFY_SH, "--once-key=worker_auth",
+             "[popory] 콘텐츠 워커 중단 — Claude 인증 만료. 터미널에서 claude /login 후 잡을 재시도하세요."],
+            capture_output=True, timeout=20,
+        )
+    except Exception:  # noqa: BLE001 — 알림 실패가 종료 경로를 막으면 안 된다.
+        pass
 
 
 def run_once(client) -> bool:
@@ -135,6 +152,7 @@ def run_once(client) -> bool:
             # 프로세스로 재기동해 키체인 접근이 복구된다(자가 치유). 잡은 이미 failed
             # 회신했으므로 재시도하면 새 워커가 처리한다.
             append_log(LOGS_DIR, {"worker": "content", "status": "auth_failure_exit", "job": job_id})
+            _notify_auth_failure()
             sys.exit(1)
     return True
 
