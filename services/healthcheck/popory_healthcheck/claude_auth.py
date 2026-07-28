@@ -1,6 +1,7 @@
 # claude CLI OAuth 상태 취득 — keychain 만료 시각 읽기 + oauth/usage 로 유효성 확인.
 import json
 import subprocess
+import time
 
 import requests
 
@@ -61,3 +62,27 @@ def current_state() -> tuple[bool | None, float | None]:
         return (None, None)
     access = (json.loads(raw).get("claudeAiOauth") or {}).get("accessToken") if raw else None
     return (probe_authorized(access), parse_refresh_expiry(raw))
+
+
+# 셸 스크립트(run_daily.sh·retry_pending.sh)가 분기하는 종료코드. 2(불확실)는
+# 인증 만료로 단정할 수 없는 경우라, 호출측은 보통 정상처럼 진행한다.
+_EXIT_CODES = {"ok": 0, "fail": 1, "warn": 2}
+
+
+def exit_code_for(status: str) -> int:
+    return _EXIT_CODES.get(status, 2)
+
+
+def main() -> int:
+    """`python -m popory_healthcheck.claude_auth` — 인증 상태를 종료코드로 알린다."""
+    from popory_healthcheck import checks
+
+    status, msg = checks.check_claude_auth(*current_state(), time.time())
+    print(f"{status}: {msg}")
+    return exit_code_for(status)
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())

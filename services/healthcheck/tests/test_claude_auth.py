@@ -39,3 +39,10 @@ def test_authorized_unknown_on_500():
 
 def test_authorized_unknown_without_token():
     assert claude_auth.probe_authorized(None) is None
+
+
+def test_exit_code_maps_status():
+    """셸 스크립트가 분기할 수 있게 점검 status 를 종료코드로 바꾼다."""
+    assert claude_auth.exit_code_for("ok") == 0
+    assert claude_auth.exit_code_for("fail") == 1
+    assert claude_auth.exit_code_for("warn") == 2
