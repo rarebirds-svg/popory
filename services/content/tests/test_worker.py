@@ -100,6 +100,10 @@ def test_failure_logs_error_durably(monkeypatch, tmp_path):
 def test_is_claude_auth_failure():
     assert worker._is_claude_auth_failure("claude CLI exit 1: || stdout: Not logged in · Please run /login") is True
     assert worker._is_claude_auth_failure("Please run /login") is True
+    # 2026-07-28 실제 관측 문구. 'Not logged in' 과 다른 형태로도 인증 만료가 온다.
+    assert worker._is_claude_auth_failure(
+        "claude CLI exit 1 (시도 4): || stdout: Failed to authenticate: OAuth session expired and could not be refreshed"
+    ) is True
     assert worker._is_claude_auth_failure("claude CLI timeout after 1200s") is False
     assert worker._is_claude_auth_failure("ng") is False
 

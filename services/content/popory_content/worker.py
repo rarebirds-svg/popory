@@ -49,8 +49,13 @@ TOKEN_TTL_SECONDS = 300
 
 
 def _is_claude_auth_failure(err: str) -> bool:
-    """claude CLI 인증 만료 신호('Not logged in'). 상주 데몬 키체인 갱신 실패 시 발생."""
-    return "Not logged in" in err or "Please run /login" in err
+    """claude CLI 인증 만료 신호. 상주 데몬 키체인 갱신 실패 시 발생하며 문구가 여러 가지다."""
+    return (
+        "Not logged in" in err
+        or "Please run /login" in err
+        or "OAuth session expired" in err
+        or "Failed to authenticate" in err
+    )
 
 
 def run_once(client) -> bool:
