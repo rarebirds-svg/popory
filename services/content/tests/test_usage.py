@@ -38,9 +38,9 @@ def test_cached_uses_cache_within_ttl(monkeypatch):
 
     def fake_fetch():
         calls["n"] += 1
-        return {"session": {"percent": 1}}
+        return ("ok", {"session": {"percent": 1}})
 
-    monkeypatch.setattr(usage, "fetch_claude_usage", fake_fetch)
+    monkeypatch.setattr(usage, "_fetch_with_status", fake_fetch)
     usage._cache["at"] = 0.0
     usage._cache["val"] = None
     a = usage.cached_claude_usage(ttl=300)
@@ -50,7 +50,39 @@ def test_cached_uses_cache_within_ttl(monkeypatch):
 
 
 def test_cached_keeps_prior_on_failure(monkeypatch):
+    """네트워크·서버 오류는 만료가 아니므로 직전 값을 유지한다 (401 과 대비)."""
     usage._cache["val"] = {"session": {"percent": 5}}
     usage._cache["at"] = _time.monotonic() - 1000  # 만료
-    monkeypatch.setattr(usage, "fetch_claude_usage", lambda: None)
+    monkeypatch.setattr(usage, "_fetch_with_status", lambda: ("error", None))
     assert usage.cached_claude_usage(ttl=300) == {"session": {"percent": 5}}
+
+
+def test_cached_drops_cache_when_unauthorized(monkeypatch):
+    """OAuth 만료(401)면 직전 캐시를 버린다 — 옛 사용량을 계속 보여주면 만료가 은폐된다."""
+    usage._cache["val"] = {"session": {"percent": 5}}
+    usage._cache["at"] = _time.monotonic() - 1000  # ttl 만료시켜 재취득 경로로
+    monkeypatch.setattr(usage, "_fetch_with_status", lambda: ("unauthorized", None))
+
+    assert usage.cached_claude_usage() is None
+    assert usage._cache["val"] is None
+
+
+def test_fetch_with_status_reports_unauthorized_on_401(monkeypatch):
+    monkeypatch.setattr(usage, "_keychain_access_token", lambda: "tok")
+
+    class Resp:
+        status_code = 401
+
+    monkeypatch.setattr(usage.requests, "get", lambda *a, **k: Resp())
+    assert usage._fetch_with_status() == ("unauthorized", None)
+
+
+def test_fetch_with_status_reports_error_on_500(monkeypatch):
+    """서버 오류는 만료가 아니다 — 캐시를 버리면 안 되므로 error 로 구분한다."""
+    monkeypatch.setattr(usage, "_keychain_access_token", lambda: "tok")
+
+    class Resp:
+        status_code = 500
+
+    monkeypatch.setattr(usage.requests, "get", lambda *a, **k: Resp())
+    assert usage._fetch_with_status() == ("error", None)

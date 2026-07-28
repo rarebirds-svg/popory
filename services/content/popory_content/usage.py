@@ -52,11 +52,12 @@ def _parse_limits(data: dict[str, Any]) -> dict[str, Any] | None:
     return out or None
 
 
-def fetch_claude_usage() -> dict[str, Any] | None:
-    """oauth/usage 를 호출해 3항목을 반환한다. 토큰 없음·비200·예외면 None."""
+def _fetch_with_status() -> tuple[str, dict[str, Any] | None]:
+    """('ok'|'unauthorized'|'error', 값). 401(OAuth 만료)만 따로 구분한다 —
+    만료는 캐시를 버려야 하고, 네트워크·서버 오류는 직전 값을 유지해야 하기 때문이다."""
     tok = _keychain_access_token()
     if not tok:
-        return None
+        return ("error", None)
     try:
         resp = requests.get(
             USAGE_URL,
@@ -68,18 +69,31 @@ def fetch_claude_usage() -> dict[str, Any] | None:
             },
             timeout=_TIMEOUT,
         )
+        if resp.status_code == 401:
+            return ("unauthorized", None)
         if resp.status_code != 200:
-            return None
-        return _parse_limits(resp.json())
+            return ("error", None)
+        return ("ok", _parse_limits(resp.json()))
     except Exception:  # noqa: BLE001 — 네트워크·파싱 실패는 사용량 미표시로 흡수
-        return None
+        return ("error", None)
+
+
+def fetch_claude_usage() -> dict[str, Any] | None:
+    """oauth/usage 를 호출해 3항목을 반환한다. 토큰 없음·비200·예외면 None."""
+    return _fetch_with_status()[1]
 
 
 def cached_claude_usage(ttl: int = 300) -> dict[str, Any] | None:
     """ttl(초) 안엔 재취득하지 않고 캐시를 반환한다. 취득 실패 시 직전 캐시를 유지한다."""
     if _cache["val"] is not None and time.monotonic() - _cache["at"] < ttl:
         return _cache["val"]
-    val = fetch_claude_usage()
+    status, val = _fetch_with_status()
+    # OAuth 만료면 캐시를 비운다. 유지하면 인증이 끊긴 뒤에도 옛 사용량이 계속 정상처럼
+    # 보여 만료가 은폐된다(장애 진단이 늦어지는 원인).
+    if status == "unauthorized":
+        _cache["at"] = 0.0
+        _cache["val"] = None
+        return None
     if val is not None:
         _cache["at"] = time.monotonic()
         _cache["val"] = val
