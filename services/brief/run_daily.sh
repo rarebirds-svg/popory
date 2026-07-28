@@ -82,6 +82,7 @@ GEN_FAIL_SLUGS=""
 GEN_OK_COUNT=0
 LIMIT_FAIL_SLUGS=""     # 한도(exit 6)로 실패한 카테고리 — 자동 재시도 대상
 LIMIT_FAIL_CUSTOM=""    # 한도로 실패한 커스텀 주제 id
+AUTH_FAIL_SLUGS=""      # claude OAuth 만료로 실패한 카테고리 — /login 후 자동 재시도 대상
 LIMIT_RESET_MAX=0       # 수집한 reset epoch 중 최대값
 
 # 카테고리 목록을 배열로 적재
@@ -216,12 +217,18 @@ while IFS=' ' read -r SLUG MODE; do
     R=$(grep -o '__BRIEF_LIMIT_RESET__=[0-9]*' "${OUT_FILE}" | head -1 | cut -d= -f2)
     [ -n "${R}" ] && [ "${R}" -gt "${LIMIT_RESET_MAX}" ] && LIMIT_RESET_MAX=${R}
   fi
+  # OAuth 만료는 한도와 달리 시간이 지나도 안 풀린다 — 사람이 /login 해야 하므로 따로 센다.
+  AUTH_FAIL=0
+  if [ -f "${OUT_FILE}" ] && grep -qE 'OAuth session expired|Failed to authenticate|Not logged in' "${OUT_FILE}"; then
+    AUTH_FAIL=1
+  fi
   rm -f "${EXIT_FILE}" "${OUT_FILE}"
 
   if [ "${GEN_EXIT}" -ne 0 ]; then
     log "\"generate fail category=${SLUG} exit=${GEN_EXIT}\""
     GEN_FAIL_SLUGS="${GEN_FAIL_SLUGS}${SLUG},"
     [ "${GEN_EXIT}" -eq 6 ] && LIMIT_FAIL_SLUGS="${LIMIT_FAIL_SLUGS}${SLUG},"
+    [ "${AUTH_FAIL}" -eq 1 ] && AUTH_FAIL_SLUGS="${AUTH_FAIL_SLUGS}${SLUG},"
     continue
   fi
   GEN_OK_COUNT=$((GEN_OK_COUNT + 1))
@@ -337,7 +344,16 @@ fi
 GEN_FAIL_CSV="${GEN_FAIL_SLUGS%,}"
 LIMIT_CAT_CSV="${LIMIT_FAIL_SLUGS%,}"
 LIMIT_CUS_CSV="${LIMIT_FAIL_CUSTOM%,}"
-log "\"done dry_run=${DRY_RUN} generated_ok=${GEN_OK_COUNT} failed=${GEN_FAIL_CSV:-none} limit_fail=${LIMIT_CAT_CSV:-none}\""
+AUTH_CAT_CSV="${AUTH_FAIL_SLUGS%,}"
+log "\"done dry_run=${DRY_RUN} generated_ok=${GEN_OK_COUNT} failed=${GEN_FAIL_CSV:-none} limit_fail=${LIMIT_CAT_CSV:-none} auth_fail=${AUTH_CAT_CSV:-none}\""
+
+# OAuth 만료는 다음 정기 점검(10:00/20:00)까지 기다리면 그날 브리핑이 통째로 날아간다.
+# 사람이 /login 해야만 풀리므로 즉시 알린다. 하루 1회만(--once-key).
+if [ -n "${AUTH_CAT_CSV}" ] && [ ${DRY_RUN} -eq 0 ]; then
+  bash /Users/daegong/projects/popory/services/healthcheck/notify.sh --once-key=brief_auth \
+    "[popory] 브리핑 생성 실패 — Claude 인증 만료. 터미널에서 claude /login 하면 10분 내 자동 재생성됩니다. (실패: ${AUTH_CAT_CSV})" \
+    >> "${LOG_FILE}" 2>&1 || log "\"auth notify failed\""
+fi
 
 # retry_pending.sh가 캡처하는 한도 실패 보고 (stdout)
 echo "__RUN_LIMIT_FAIL_CATS__=${LIMIT_CAT_CSV}"
@@ -346,11 +362,17 @@ echo "__RUN_LIMIT_RESET__=${LIMIT_RESET_MAX}"
 # 정규(전체) 실행에서만 pending 마커 관리. --only(재시도) 모드는 retry_pending.sh가 전담.
 if [ -z "${ONLY_SLUG}" ] && [ ${DRY_RUN} -eq 0 ]; then
   PENDING_FILE="/tmp/brief_pending_${DATE}.json"
-  if [ -n "${LIMIT_CAT_CSV}" ] || [ -n "${LIMIT_CUS_CSV}" ]; then
+  # 인증 실패분도 같은 pending 에 싣는다. reset_at 게이팅은 통과시키고(0),
+  # retry_pending.sh 가 실행 직전 인증을 프로브해 막는다 — /login 하면 그때 자동 재개된다.
+  RETRY_CAT_CSV="${LIMIT_CAT_CSV}"
+  if [ -n "${AUTH_CAT_CSV}" ]; then
+    RETRY_CAT_CSV="${RETRY_CAT_CSV:+${RETRY_CAT_CSV},}${AUTH_CAT_CSV}"
+  fi
+  if [ -n "${RETRY_CAT_CSV}" ] || [ -n "${LIMIT_CUS_CSV}" ]; then
     "${VENV_PY}" "${BRIEF_DIR}/write_pending.py" --file "${PENDING_FILE}" \
       --date "${DATE}" --reset-at "${LIMIT_RESET_MAX}" \
-      --categories "${LIMIT_CAT_CSV}" --custom "${LIMIT_CUS_CSV}" >> "${LOG_FILE}" 2>&1
-    log "\"pending written cats=${LIMIT_CAT_CSV:-none} custom=${LIMIT_CUS_CSV:-none} reset_at=${LIMIT_RESET_MAX}\""
+      --categories "${RETRY_CAT_CSV}" --custom "${LIMIT_CUS_CSV}" >> "${LOG_FILE}" 2>&1
+    log "\"pending written cats=${RETRY_CAT_CSV:-none} custom=${LIMIT_CUS_CSV:-none} reset_at=${LIMIT_RESET_MAX}\""
   elif [ -f "${PENDING_FILE}" ]; then
     rm -f "${PENDING_FILE}"
     log "\"pending cleared (no limit failures)\""

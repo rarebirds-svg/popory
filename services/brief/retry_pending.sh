@@ -43,6 +43,17 @@ NOW=$(date +%s)
 # 리셋 전이면 claude 미호출하고 종료 (사용량 윈도우 무소모)
 [ "${NOW}" -lt "${RESET_AT}" ] && exit 0
 
+# 인증이 끊겨 있으면 재시도해봐야 전건 실패한다. claude 미호출로 종료해
+# retry_count 를 태우지 않는다 — 사람이 /login 하면 다음 폴링에서 자동 재개된다.
+HC_DIR=/Users/daegong/projects/popory/services/healthcheck
+if [ -x "${HC_DIR}/.venv/bin/python" ]; then
+  "${HC_DIR}/.venv/bin/python" -m popory_healthcheck.claude_auth > /dev/null 2>&1
+  if [ $? -eq 1 ]; then
+    log "\"claude 인증 만료 — 재시도 보류 (login 대기)\""
+    exit 0
+  fi
+fi
+
 if [ "${RETRY_COUNT}" -ge "${MAX_RETRY}" ]; then
   log "\"give up after ${RETRY_COUNT} retries cats=${CATS} custom=${CUS}\""
   rm -f "${PENDING_FILE}"
