@@ -6,7 +6,7 @@ from pathlib import Path
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.bookstore_links import build_purchase_comment_validated
-from popory_content.youtube_upload import post_comment, comment_exists
+from popory_content.youtube_upload import post_comment, comment_exists, commentable_video_ids
 from popory_content.log import append_log
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
@@ -31,6 +31,22 @@ def _parse_topic(topic: str) -> tuple[str, str | None]:
     return topic.strip(), None
 
 
+def _drop_uncommentable(items: list[dict]) -> list[dict]:
+    """비공개·삭제된 영상을 대상에서 뺀다. 댓글 API가 영구 실패하는 건이라 매일 재시도할 이유가 없다."""
+    by_token: dict[str, list[str]] = {}
+    for it in items:
+        by_token.setdefault(it["access_token"], []).append(it["video_id"])
+    commentable: set[str] = set()
+    for token, vids in by_token.items():
+        commentable |= commentable_video_ids(token, vids)
+    kept = [it for it in items if it["video_id"] in commentable]
+    dropped = [it["video_id"] for it in items if it["video_id"] not in commentable]
+    if dropped:
+        append_log(LOGS_DIR, {"cli": "backfill_comments", "status": "uncommentable",
+                              "count": len(dropped), "videos": dropped})
+    return kept
+
+
 def run() -> int:
     try:
         client = _client()
@@ -42,7 +58,7 @@ def run() -> int:
     except PortalError as e:
         append_log(LOGS_DIR, {"cli": "backfill_comments", "status": "fetch_fail", "error": str(e)})
         return 3
-    items = data.get("items", [])
+    items = _drop_uncommentable(data.get("items", []))
     posted = skipped = failed = 0
     for it in items:
         try:

@@ -41,6 +41,28 @@ def update_description(access_token: str, video_id: str, snippet: dict, descript
         raise UploadError(f"videos.update {resp.status_code}: {resp.text[:200]}")
 
 
+def commentable_video_ids(access_token: str, video_ids: list[str]) -> set[str]:
+    """댓글을 달 수 있는 영상 id만 반환. 비공개(유튜브가 댓글을 끔)와 삭제된 영상은 뺀다.
+
+    조회가 실패한 배치는 판단을 보류하고 그대로 통과시킨다 — 일시적 API 오류로
+    멀쩡한 대상을 영구히 빠뜨리는 쪽이 더 나쁘다.
+    """
+    out: set[str] = set()
+    for i in range(0, len(video_ids), 50):  # videos.list id 파라미터 상한
+        batch = video_ids[i:i + 50]
+        resp = requests.get(
+            VIDEOS_URL, params={"part": "status", "id": ",".join(batch)},
+            headers={"Authorization": f"Bearer {access_token}"}, timeout=30,
+        )
+        if resp.status_code != 200:
+            out.update(batch)
+            continue
+        for it in resp.json().get("items", []):
+            if it.get("status", {}).get("privacyStatus") != "private":
+                out.add(it["id"])
+    return out
+
+
 def comment_exists(access_token: str, video_id: str) -> bool:
     """영상에 서점 링크 댓글이 이미 있으면 True. 조회 실패면 False."""
     resp = requests.get(
