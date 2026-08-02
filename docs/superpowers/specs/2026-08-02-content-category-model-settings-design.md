@@ -39,15 +39,14 @@ TTS는 Google Cloud TTS 단일 공급자다. 로컬 TTS(Qwen3) PoC는 "맥에서
 # options.py
 @dataclass(frozen=True)
 class VoiceSpec:
-    provider: str        # "google" | "fish"
-    id: str              # google: voice name / fish: reference_id
-    deepen: bool = True  # _deepen_voice 후처리 적용 여부
+    provider: str   # "google" | "fish"
+    id: str         # google: voice name / fish: reference_id
 
 VOICE = {
     "female-calm":    VoiceSpec("google", "ko-KR-Chirp3-HD-Aoede"),
     "female-bright":  VoiceSpec("google", "ko-KR-Chirp3-HD-Leda"),
     "male":           VoiceSpec("google", "ko-KR-Neural2-C"),
-    "movie-narrator": VoiceSpec("fish", "<reference_id>", deepen=False),  # 신규
+    "movie-narrator": VoiceSpec("fish", "<reference_id>"),  # 신규
 }
 
 IMAGE_MODEL = {"realvisxl", "sd15"}   # 신규 옵션 키
@@ -57,7 +56,7 @@ IMAGE_MODEL = {"realvisxl", "sd15"}   # 신규 옵션 키
 
 `movie-narrator`의 `reference_id`는 구현 착수 시 확정한다. fish.audio에서 한국어 보이스를 들어보고 고르거나 `GET /v1/voices?language=ko`로 후보를 추린 뒤, 확정된 32자리 ID를 `VOICE` 맵에 상수로 적는다. 보이스를 늘리려면 이 맵에 항목을 추가한다 — 포털 검색 UI는 만들지 않기로 했으므로 코드 수정이 정상 경로다.
 
-`deepen` 필드가 필요한 이유는 `video.py:390`이 모든 세그먼트에 `_deepen_voice()`를 걸어 묵직한 중저음으로 변형하기 때문이다. 기존 3종에 맞춰 튜닝된 후처리라 영화후기용 보이스에 그대로 걸면 의도한 음색이 뭉개진다. 기본값 `True`로 두어 기존 출력은 바뀌지 않는다.
+`_deepen_voice()` 후처리는 건드리지 않는다. `video.py:390`이 모든 세그먼트에 호출하지만 `VOICE_DEEPEN_SEMITONES` 기본값이 `0`이고 `secrets/env.sh`·plist 어디에도 설정돼 있지 않아 **프로덕션에서 no-op**이다. 보이스별 on/off 필드를 미리 만들 근거가 없다. 나중에 이 후처리를 켜게 되면 그때 `VoiceSpec`에 필드를 더한다.
 
 ### 마이그레이션
 
@@ -190,7 +189,7 @@ UI는 두 곳이다.
 | `options.py` | 병합 우선순위(작업 > 카테고리 > 전역), 허용값 밖 입력은 기본값으로 복귀 |
 | `tts` 디스패치 | 스펙의 provider대로 라우팅, 정규화는 한 번만 적용 |
 | `fish.py` | HTTP 목킹 — 성공, 429 백오프 재시도, 최종 실패 시 작업 실패 |
-| `video.py` | `deepen=False`면 `_deepen_voice` 미호출 |
+| `video.py` | `synthesize`에 `VoiceSpec`이 전달되고 기존 렌더 경로가 회귀 없이 통과 |
 | `ModelManager` | 모델 불일치 시 언로드→로드, 일치 시 재사용, 유휴 언로드 회귀 없음 |
 | imagegen 서버 | `/generate`가 `model` 반영, `/health`가 로드된 모델 보고 |
 | 계약 | TS zod 허용값 == 파이썬 `options.py` 허용값 |
@@ -203,7 +202,7 @@ UI는 두 곳이다.
 
 - 마이그레이션은 nullable 컬럼 추가뿐 — 기존 카테고리는 `NULL`이라 전역 기본값으로 동작
 - `VOICE` 값이 문자열에서 `VoiceSpec`으로 바뀌지만 **키는 그대로**라 저장된 `params_json`이 전부 유효
-- `deepen` 기본값 `True`라 기존 3종 보이스 출력이 동일
+- `synthesize`의 키워드 이름 `voice`를 유지하므로 `test_video.py`의 기존 몽키패치가 그대로 동작
 - `FISH_API_KEY` 부재 시 Fish 보이스는 검증에서 거부
 
 ## 위험과 미해결 질문
