@@ -45,6 +45,16 @@ def test_split_sentences():
     assert _split_sentences("문장 하나만") == ["문장 하나만"]
 
 
+def test_split_sentences_keeps_decimals_intact():
+    # 소수점에서 끊기면 tts 의 소수→한글 변환이 온전한 토큰을 못 받아 점을 흘린다(6.25→"육 이십오").
+    assert _split_sentences("보상은 6.25개에서 3.125개로 줄었다. 다음.") == [
+        "보상은 6.25개에서 3.125개로 줄었다.",
+        "다음.",
+    ]
+    # 공백 없는 문장 경계는 계속 끊는다(뒤가 숫자가 아니면 문장 끝).
+    assert _split_sentences("첫째다.둘째다.") == ["첫째다.", "둘째다."]
+
+
 def test_spans_from_durations_track_real_audio_lengths():
     # 자막 타이밍은 문장별 실측 길이를 그대로 따른다(글자수 추정 아님). 문장 사이 gap만큼 띄움.
     spans = _spans_from_durations([2.0, 3.0, 1.0], 0.5)

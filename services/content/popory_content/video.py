@@ -168,8 +168,9 @@ def render_thumbnail(copy: str | None, image_prompt: str | None, out_jpg: Path,
 
 
 def _split_sentences(text: str) -> list[str]:
-    """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음)."""
-    parts = re.split(r"(?<=[.?!])\s*", text.strip())
+    """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음). 뒤가 숫자면 소수점이므로 끊지 않는다
+    — 6.25 가 "6." / "25" 로 갈리면 문장별 합성이라 tts 의 소수→한글 변환이 점을 흘린다."""
+    parts = re.split(r"(?<=[.?!])(?!\d)\s*", text.strip())
     return [p.strip() for p in parts if p.strip()]
 
 
