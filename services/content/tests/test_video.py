@@ -253,6 +253,35 @@ def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
     assert len(clips) == 2
 
 
+def test_headline_places_logo_left_of_title(tmp_path):
+    from PIL import Image
+    from popory_content import video
+    out = tmp_path / "head.png"
+    video._render_headline_png("챕터 제목", out)
+    img = Image.open(out).convert("RGBA")
+    assert img.size == (1920, 1080)
+    # 로고 자리(좌상단)에 불투명 픽셀이 있다.
+    logo_box = img.crop((video.LOGO_X, video.LOGO_Y,
+                         video.LOGO_X + video.LOGO_SIZE, video.LOGO_Y + video.LOGO_SIZE))
+    assert logo_box.split()[-1].getextrema()[1] > 0
+    # 원형 마스크라 로고 상자의 네 모서리는 투명하다(검은 사각형이 드러나지 않는다).
+    assert logo_box.getpixel((1, 1))[3] == 0
+    assert logo_box.getpixel((video.LOGO_SIZE - 2, 1))[3] == 0
+    # 제목은 로고 오른쪽에서 시작한다 → 로고 왼쪽 여백엔 글자가 없다.
+    assert img.crop((0, 0, video.LOGO_X, 1080)).split()[-1].getextrema()[1] == 0
+
+
+def test_headline_falls_back_to_text_when_logo_missing(monkeypatch, tmp_path):
+    # 로고 파일이 없어도 헤드라인은 그려져야 한다(영상 전체가 죽으면 안 됨).
+    from PIL import Image
+    from popory_content import video
+    monkeypatch.setattr(video, "LOGO_PATH", tmp_path / "없는파일.png")
+    out = tmp_path / "head2.png"
+    video._render_headline_png("챕터 제목", out)
+    img = Image.open(out).convert("RGBA")
+    assert img.split()[-1].getextrema()[1] > 0   # 글자는 그려졌다
+
+
 def test_wrap_chunks_keeps_every_chunk_within_one_line():
     from popory_content.video import _wrap_chunks, SUB_WRAP_LANDSCAPE
     s = "복리는 수익률이 아니라 시간에 붙습니다 그래서 버티는 사람에게만 열리는 문이 됩니다 대부분은 그걸 못 견딥니다"

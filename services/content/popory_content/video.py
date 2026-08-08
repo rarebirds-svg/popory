@@ -37,6 +37,11 @@ HEAD_COLOR = (255, 255, 255)
 BODY_COLOR = (223, 231, 245)
 TMP = Path("/tmp")
 BGM_DIR = Path(__file__).resolve().parent.parent / "assets" / "bgm"
+# 헤드라인 왼쪽 포포리 책방 로고. 원본이 108×108이라 그보다 크게 쓰면 뭉개진다.
+LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "logo.png"
+LOGO_X, LOGO_Y = 80, 62
+LOGO_SIZE, LOGO_SIZE_PORTRAIT = 96, 76
+LOGO_GAP = 22  # 로고와 챕터 제목 사이 여백
 # 배경음악 사용 여부. 새 BGM 선정 전까지 꺼둠(2026-07-03 요청). 재활성은 env POPORY_BGM_ENABLED=1 또는 기본값을 "1"로.
 BGM_ENABLED = os.environ.get("POPORY_BGM_ENABLED", "0") == "1"
 
@@ -124,16 +129,43 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
     img.save(out_png)
 
 
+def _logo_circle(size: int) -> Image.Image | None:
+    """로고를 원형으로 잘라 size×size RGBA로 반환. 원본이 알파 없는 검정 배경 정사각형이라
+    그대로 얹으면 밝은 장면에서 검은 사각형이 드러난다 — 채널 아바타처럼 원형으로 마스킹한다.
+    파일이 없거나 깨졌으면 None(헤드라인은 글자만 그린다)."""
+    try:
+        logo = Image.open(LOGO_PATH).convert("RGBA")
+    except Exception:  # noqa: BLE001 — 로고 없음/깨짐은 영상 전체를 막지 않는다
+        return None
+    logo = _cover(logo.convert("RGB"), size, size).convert("RGBA")
+    mask = Image.new("L", (size * 4, size * 4), 0)     # 4배로 그린 뒤 축소 → 계단 없는 원
+    ImageDraw.Draw(mask).ellipse((0, 0, size * 4 - 1, size * 4 - 1), fill=255)
+    logo.putalpha(mask.resize((size, size), Image.LANCZOS))
+    return logo
+
+
 def _render_headline_png(title: str, out_png: Path, portrait: bool = False) -> None:
-    """헤드라인 캡션을 투명 PNG로 렌더(zoompan 위에 좌상단 고정 오버레이용 — 줌에 끌려다니지 않게)."""
+    """헤드라인 캡션을 투명 PNG로 렌더(zoompan 위에 좌상단 고정 오버레이용 — 줌에 끌려다니지 않게).
+    왼쪽에 포포리 책방 로고를 두고 그 오른쪽에 챕터 제목을 세로 중앙 맞춤으로 그린다."""
     w = PORTRAIT_W if portrait else LANDSCAPE_W
     h = PORTRAIT_H if portrait else LANDSCAPE_H
-    title_font = ImageFont.truetype(FONT_PATH, 58 if portrait else 68, index=FONT_INDEX_BOLD)
-    title_wrap = 15 if portrait else 21
+    size = LOGO_SIZE_PORTRAIT if portrait else LOGO_SIZE
+    font_size = 58 if portrait else 68
+    title_wrap = 14 if portrait else 21
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    logo = _logo_circle(size)
+    if logo is not None:
+        img.alpha_composite(logo, (LOGO_X, LOGO_Y))
+        text_x = LOGO_X + size + LOGO_GAP
+    else:
+        text_x = LOGO_X
+    title_font = ImageFont.truetype(FONT_PATH, font_size, index=FONT_INDEX_BOLD)
     d = ImageDraw.Draw(img)
     t = "\n".join(textwrap.wrap(title, width=title_wrap)) or " "
-    d.multiline_text((80, 70), t, font=title_font, fill=HEAD_COLOR, anchor="la", align="left", spacing=10)
+    # 제목 첫 줄 중심을 로고 중심에 맞춘다(로고가 없으면 예전 위치 그대로).
+    text_y = LOGO_Y + size // 2 if logo is not None else LOGO_Y + font_size // 2
+    d.multiline_text((text_x, text_y), t, font=title_font, fill=HEAD_COLOR,
+                     anchor="lm", align="left", spacing=10)
     img.save(out_png)
 
 
