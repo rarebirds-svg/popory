@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from popory_content.generate import run_claude_cli
 from popory_content.subtitles import scene_offsets, Cue
-from popory_content.tts import synthesize
+from popory_content.tts import synthesize, spoken_text
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
 from popory_content.video_contract import parse_video
 
@@ -229,16 +229,46 @@ def _append_silence(src: Path, seconds: float, out: Path) -> None:
           "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[a]", "-map", "[a]", str(out)])
 
 
+# 자막 한 줄에 들어가는 최대 글자 수. 가로는 1920px에 64px 폰트라 좌우 여백 포함 30자,
+# 세로는 1080px에 46px 폰트라 18자가 한계다. 이 값이 곧 자막 조각의 분할 기준이 된다.
+SUB_WRAP_LANDSCAPE, SUB_WRAP_PORTRAIT = 30, 18
+# 자막 블록 상단 y(화면 아래에서 뺀 값). 항상 한 줄이라 블록 높이가 일정해, 예전 다줄 시절처럼
+# 아래로 자라 화면 밖으로 밀릴 걱정이 없다. 세로는 쇼츠 UI 오버레이 영역을 피해 더 위에 둔다.
+SUB_Y_LANDSCAPE, SUB_Y_PORTRAIT = 175, 305
+
+
+def _wrap_chunks(sentence: str, width: int) -> list[str]:
+    """자막을 한 줄에 들어가는 조각으로 쪼갠다(어절 경계 유지). 짧은 문장은 한 조각 그대로."""
+    return textwrap.wrap(sentence, width=width) or [sentence.strip() or " "]
+
+
+def _chunk_spans(chunks: list[str], start: float, speech_dur: float,
+                 end: float) -> list[tuple[float, float]]:
+    """조각별 자막 [start,end]. 문장 안에서는 발화 길이를 실측할 수 없으므로(TTS는 문장 단위로
+    합성한다) 길이 비례로 나누되, 원문이 아니라 TTS 정규화 텍스트 길이를 쓴다 — '1,700'은
+    5글자지만 '천칠백'으로 읽히므로 원문 글자수로 나누면 그 조각이 과대평가된다.
+    마지막 조각은 문장 뒤 무음(SENTENCE_GAP)까지 유지해 자막이 깜빡이지 않게 한다."""
+    weights = [max(1, len(spoken_text(c))) for c in chunks]
+    total = sum(weights)
+    spans: list[tuple[float, float]] = []
+    acc = start
+    for i, wgt in enumerate(weights):
+        nxt = acc + speech_dur * wgt / total
+        spans.append((acc, end if i == len(weights) - 1 else nxt))
+        acc = nxt
+    return spans
+
+
 def _render_subtitle_png(sentence: str, out_png: Path, portrait: bool = False) -> None:
     """문장 자막을 투명 배경 PNG로 렌더(장면 클립 위에 타이밍 오버레이용). 가독성 위해 검정 외곽선."""
     w = PORTRAIT_W if portrait else LANDSCAPE_W
     h = PORTRAIT_H if portrait else LANDSCAPE_H
     if portrait:
         sub_font = ImageFont.truetype(FONT_PATH, 46)
-        sub_wrap, sub_y = 18, h - 320
+        sub_wrap, sub_y = SUB_WRAP_PORTRAIT, h - SUB_Y_PORTRAIT
     else:
         sub_font = ImageFont.truetype(FONT_PATH, 64)
-        sub_wrap, sub_y = 30, h - 240
+        sub_wrap, sub_y = SUB_WRAP_LANDSCAPE, h - SUB_Y_LANDSCAPE
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     s = "\n".join(textwrap.wrap(sentence, width=sub_wrap)) or " "
@@ -444,19 +474,27 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         # 헤드라인·문장 자막을 zoompan 위에 오버레이(줌과 무관하게 고정).
         spans = _spans_from_durations(seg_durs, SENTENCE_GAP)
         scene_local_cues.append([(st, en, sentences[k]) for k, (st, en) in enumerate(spans)])
-        # 입력: 0=배경, 1=오디오, 2=헤드라인, 3+=문장 자막.
+        # 입력: 0=배경, 1=오디오, 2=헤드라인, 3+=자막 조각.
         inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio), "-loop", "1", "-i", str(head_png)]
         graph = f"[0:v]{_zoompan_filter(dur, portrait, variant=motion_base + i)}[v0]"
         # 헤드라인은 장면 내내 좌상단 고정(줌에 끌려다니지 않음).
         graph += ";[v0][2:v]overlay=0:0[vh]"
         prev = "vh"
+        # 화면 자막은 한 줄씩 끊어 띄운다. cue(위에서 만든 SRT·번역 단위)는 문장 그대로 두고
+        # 여기서만 쪼갠다 — 번역기에 문장 조각을 넘기면 주어·술어가 잘려 품질이 떨어진다.
+        sub_wrap = SUB_WRAP_PORTRAIT if portrait else SUB_WRAP_LANDSCAPE
+        n = 0
         for k, (st, en) in enumerate(spans):
-            sub_png = work / f"sub_{i}_{k}.png"
-            _render_subtitle_png(sentences[k], sub_png, portrait=portrait)
-            inputs += ["-loop", "1", "-i", str(sub_png)]
-            out = f"v{k + 1}"
-            graph += f";[{prev}][{k + 3}:v]overlay=0:0:enable='between(t,{st:.3f},{en:.3f})'[{out}]"
-            prev = out
+            chunks = _wrap_chunks(sentences[k], sub_wrap)
+            for chunk, (cst, cen) in zip(chunks, _chunk_spans(chunks, st, seg_durs[k], en)):
+                sub_png = work / f"sub_{i}_{n}.png"
+                _render_subtitle_png(chunk, sub_png, portrait=portrait)
+                inputs += ["-loop", "1", "-i", str(sub_png)]
+                out = f"v{n + 1}"
+                graph += (f";[{prev}][{n + 3}:v]overlay=0:0"
+                          f":enable='between(t,{cst:.3f},{cen:.3f})'[{out}]")
+                prev = out
+                n += 1
         clip = work / f"scene_{i}.mp4"
         _run([
             FFMPEG_BIN, "-y", *inputs,

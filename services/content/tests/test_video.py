@@ -253,6 +253,58 @@ def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
     assert len(clips) == 2
 
 
+def test_wrap_chunks_keeps_every_chunk_within_one_line():
+    from popory_content.video import _wrap_chunks, SUB_WRAP_LANDSCAPE
+    s = "복리는 수익률이 아니라 시간에 붙습니다 그래서 버티는 사람에게만 열리는 문이 됩니다 대부분은 그걸 못 견딥니다"
+    chunks = _wrap_chunks(s, SUB_WRAP_LANDSCAPE)
+    assert len(chunks) > 1
+    assert all(len(c) <= SUB_WRAP_LANDSCAPE for c in chunks)
+    # 어절을 쪼개지 않고 공백 경계에서만 끊는다 → 이어붙이면 원문 그대로.
+    assert " ".join(chunks) == s
+    # 짧은 문장은 그대로 한 조각.
+    assert _wrap_chunks("짧은 문장.", SUB_WRAP_LANDSCAPE) == ["짧은 문장."]
+
+
+def test_chunk_spans_split_speech_and_hold_through_gap():
+    from popory_content.video import _chunk_spans
+    # 발화 6초 + 뒤 무음까지 포함한 문장 구간 [10.0, 17.0].
+    spans = _chunk_spans(["가나다라", "마바사아"], start=10.0, speech_dur=6.0, end=17.0)
+    assert len(spans) == 2
+    assert spans[0][0] == 10.0
+    # 정규화 길이가 같으니 발화 6초를 절반씩 → 첫 조각은 13.0에서 끝난다.
+    assert abs(spans[0][1] - 13.0) < 1e-6
+    assert abs(spans[1][0] - 13.0) < 1e-6
+    # 마지막 조각은 문장 뒤 무음까지 유지해 깜빡임을 없앤다.
+    assert spans[1][1] == 17.0
+
+
+def test_chunk_spans_weight_by_tts_normalized_length():
+    from popory_content.video import _chunk_spans
+    # "1,700"은 5글자지만 TTS는 "천칠백"으로 읽는다. 원문 글자수로 나누면 이 조각이 과대평가된다.
+    spans = _chunk_spans(["1,700", "천칠백"], start=0.0, speech_dur=10.0, end=10.0)
+    assert abs(spans[0][1] - 5.0) < 0.5   # 두 조각의 실제 발화량이 같으므로 거의 반반
+
+
+def test_render_video_cues_stay_sentence_level_while_overlays_split(monkeypatch, tmp_path):
+    # 번인 자막은 한 줄씩 쪼개지만, cue(=SRT·번역 단위)는 문장 그대로 유지돼야 한다.
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    rendered = []
+    monkeypatch.setattr(video, "_render_subtitle_png",
+                        lambda text, png, portrait=False: rendered.append(text))
+    long_sentence = ("복리는 수익률이 아니라 시간에 붙습니다 그래서 버티는 사람에게만 "
+                     "열리는 문이 되고 대부분은 그걸 끝내 못 견딥니다.")
+    scenes = [{"caption": "a", "narration": long_sentence},
+              {"caption": "b", "narration": long_sentence}]
+    _, _, _, cues = video.render_video(scenes, job_id="cuetest")
+    assert len(cues) == 2                      # 장면당 문장 1개 → cue 2개
+    assert cues[0][2] == long_sentence         # 조각이 아니라 문장 전체
+    assert len(rendered) > 1                   # 화면에는 여러 조각으로 나뉘어 표시
+    assert all(len(t) <= video.SUB_WRAP_LANDSCAPE for t in rendered)
+
+
 def test_render_video_counts_missing_images(monkeypatch, tmp_path):
     from popory_content import video
     monkeypatch.setattr(video, "FONT_PATH", str(tmp_path))  # 폰트 존재 체크 통과
