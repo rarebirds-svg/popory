@@ -158,13 +158,37 @@ def test_zoompan_filter_landscape_and_portrait():
 
 
 def test_zoompan_zoom_spans_whole_scene():
-    from popory_content.video import _zoompan_filter
-    # 줌 증분 = (1.12-1.0)/frames. 3초=90프레임 → step≈0.001333
-    f = _zoompan_filter(3.0)
-    assert "zoom+0.001333" in f
+    from popory_content.video import _zoompan_filter, _MOTIONS
+    # variant 0 = 줌인 폭 0.12. 3초=90프레임 → step=0.12/90≈0.001333
+    assert _MOTIONS[0] == (True, 0.50, 0.12)
+    f = _zoompan_filter(3.0, variant=0)
+    assert "on*0.001333" in f and "1.120" in f
     # 24초=720프레임 → 훨씬 작은 증분(장면 내내 천천히)
-    f_long = _zoompan_filter(24.0)
-    assert "zoom+0.000167" in f_long
+    f_long = _zoompan_filter(24.0, variant=0)
+    assert "on*0.000167" in f_long
+
+
+def test_zoompan_variant_alternates_direction_and_anchor():
+    from popory_content.video import _zoompan_filter, _MOTIONS
+    # 인접 variant는 줌 방향이 서로 달라, 장면이 이어져도 같은 무빙이 반복되지 않는다.
+    dirs = [m[0] for m in _MOTIONS]
+    assert all(dirs[i] != dirs[i + 1] for i in range(len(dirs) - 1))
+    f_in = _zoompan_filter(3.0, variant=0)
+    f_out = _zoompan_filter(3.0, variant=1)
+    assert "min(1.0+on*" in f_in       # 줌인은 1.0에서 올라간다
+    assert "max(1.140-on*" in f_out    # 줌아웃은 zmax에서 내려온다
+    # 가로 기준점만 옮기고 세로는 항상 중앙 — 배경에 구워진 하단 스크림을 밀지 않기 위함.
+    assert "*0.35'" in f_out and "*0.50'" in f_in
+    assert all("ih/zoom)*0.50'" in _zoompan_filter(3.0, variant=v) for v in range(len(_MOTIONS)))
+
+
+def test_zoompan_variant_wraps_and_keeps_canvas_size():
+    from popory_content.video import _zoompan_filter, _MOTIONS
+    # variant는 장면 인덱스를 그대로 받으므로 길이를 넘어가면 순환한다.
+    assert _zoompan_filter(3.0, variant=len(_MOTIONS)) == _zoompan_filter(3.0, variant=0)
+    # 어떤 variant도 수퍼샘플 캔버스 크기를 바꾸지 않는다(렌더 비용이 장면마다 동일).
+    for v in range(len(_MOTIONS)):
+        assert "s=3840x2160" in _zoompan_filter(3.0, variant=v)
 
 
 def test_xfade_graph_offsets_and_labels():

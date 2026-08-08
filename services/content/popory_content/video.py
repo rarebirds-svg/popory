@@ -247,19 +247,39 @@ def _render_subtitle_png(sentence: str, out_png: Path, portrait: bool = False) -
     img.save(out_png)
 
 
-def _zoompan_filter(dur: float, portrait: bool = False) -> str:
-    """정지 이미지에 장면 전체에 걸친 느린 줌인(켄번스).
+# 장면별 줌 무빙 변주 (줌인 여부, 가로 기준점 0~1, 줌 폭). 전 장면이 같은 중앙 줌인이면
+# 8장면 내내 움직임이 똑같아 정지 화면처럼 보인다. 인접 항목은 줌 방향이 서로 다르게 배열해
+# 장면을 순서대로 소비해도 같은 무빙이 붙지 않는다.
+# 세로 기준점은 항상 중앙으로 고정한다 — 하단 스크림이 배경 PNG에 구워져 있어(_render_card)
+# 세로로 움직이면 자막 뒤 스크림이 프레임 밖으로 밀려 가독성이 깨진다.
+# 방향·기준점·폭은 수퍼샘플 캔버스 크기를 바꾸지 않으므로 렌더 비용은 기존과 동일하다.
+_MOTIONS: tuple[tuple[bool, float, float], ...] = (
+    (True, 0.50, 0.12),
+    (False, 0.35, 0.14),
+    (True, 0.65, 0.10),
+    (False, 0.50, 0.16),
+    (True, 0.35, 0.13),
+    (False, 0.65, 0.12),
+)
+
+
+def _zoompan_filter(dur: float, portrait: bool = False, variant: int = 0) -> str:
+    """정지 이미지에 장면 전체에 걸친 느린 줌(켄번스). variant로 방향·기준점·폭을 바꾼다.
     zoompan을 2배 해상도(수퍼샘플)로 돌린 뒤 다운스케일해 정수 pan 떨림을 서브픽셀로 묻는다.
     줌 증분을 장면 길이에 맞춰 끝에서 max에 닿게 해, 긴 장면에서 중간에 줌이 멈추지 않게 한다."""
     w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
     frames = max(1, round(dur * 30))
     bw, bh = w * 2, h * 2  # 수퍼샘플 캔버스(떨림 제거의 핵심)
-    zmax = 1.12
-    step = (zmax - 1.0) / frames  # 장면 전체에 걸쳐 균일하게 줌
+    zoom_in, xpos, span = _MOTIONS[variant % len(_MOTIONS)]
+    zmax = 1.0 + span
+    step = span / frames  # 장면 전체에 걸쳐 균일하게 줌
+    # 직전 프레임 값을 누적하는 zoom 대신 출력 프레임 번호 on으로 계산해 두 방향을 같은 식으로 쓴다.
+    z = (f"min(1.0+on*{step:.6f},{zmax:.3f})" if zoom_in
+         else f"max({zmax:.3f}-on*{step:.6f},1.0)")
     return (
         f"scale={bw}:{bh},"
-        f"zoompan=z='min(zoom+{step:.6f},{zmax})':d={frames}"
-        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={bw}x{bh}:fps=30,"
+        f"zoompan=z='{z}':d={frames}"
+        f":x='(iw-iw/zoom)*{xpos:.2f}':y='(ih-ih/zoom)*0.50':s={bw}x{bh}:fps=30,"
         f"scale={w}:{h}:flags=bicubic,format=yuv420p"
     )
 
@@ -361,6 +381,8 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     scene_local_cues: list[list[Cue]] = []
     images_missing = 0
     images_total = 0
+    # 줌 무빙 시작점을 job_id로 정해 같은 작업은 항상 같은 결과가 나오게 한다(_pick_bgm과 같은 방식).
+    motion_base = zlib.crc32(job_id.encode()) % len(_MOTIONS)
     for i, scene in enumerate(scenes):
         caption = str(scene["caption"]).strip()
         narration = str(scene["narration"]).strip() or " "
@@ -410,7 +432,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         scene_local_cues.append([(st, en, sentences[k]) for k, (st, en) in enumerate(spans)])
         # 입력: 0=배경, 1=오디오, 2=헤드라인, 3+=문장 자막.
         inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio), "-loop", "1", "-i", str(head_png)]
-        graph = f"[0:v]{_zoompan_filter(dur, portrait)}[v0]"
+        graph = f"[0:v]{_zoompan_filter(dur, portrait, variant=motion_base + i)}[v0]"
         # 헤드라인은 장면 내내 좌상단 고정(줌에 끌려다니지 않음).
         graph += ";[v0][2:v]overlay=0:0[vh]"
         prev = "vh"
