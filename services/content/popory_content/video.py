@@ -247,35 +247,48 @@ def _render_subtitle_png(sentence: str, out_png: Path, portrait: bool = False) -
     img.save(out_png)
 
 
-# 장면별 줌 무빙 변주 (줌인 여부, 가로 기준점 0~1, 줌 폭). 전 장면이 같은 중앙 줌인이면
-# 8장면 내내 움직임이 똑같아 정지 화면처럼 보인다. 인접 항목은 줌 방향이 서로 다르게 배열해
-# 장면을 순서대로 소비해도 같은 무빙이 붙지 않는다.
+# 줌 무빙의 목표 속도(초당 배율 변화). 사람이 느끼는 건 총 줌 폭이 아니라 이 속도다.
+# 폭을 장면 전체에 균등 분산하던 방식은 장면이 길수록 느려져, 롱폼(장면 32~53초)에서
+# 초당 0.2~0.4%까지 떨어져 정지 화면처럼 보였다(2026-08-08 영상에서 확인).
+ZOOM_RATE_PER_SEC = 0.007
+# 폭 하한·상한. 하한은 쇼츠처럼 짧은 장면에서 폭이 0에 수렴하는 것을 막고(7초 장면 기준
+# 초당 1.7%로 기존 쇼츠와 같은 체감), 상한은 1024px 원본이 과확대로 뭉개지는 것을 막는다.
+ZOOM_SPAN_MIN, ZOOM_SPAN_MAX = 0.06, 0.18
+# 장면별 줌 무빙 변주 (확대로 시작하는지 여부, 가로 기준점 0~1). 전 장면이 같은 무빙이면
+# 움직임이 단조로워 보이므로 인접 항목은 방향이 서로 다르게 배열한다(순환 지점 포함).
 # 세로 기준점은 항상 중앙으로 고정한다 — 하단 스크림이 배경 PNG에 구워져 있어(_render_card)
 # 세로로 움직이면 자막 뒤 스크림이 프레임 밖으로 밀려 가독성이 깨진다.
 # 방향·기준점·폭은 수퍼샘플 캔버스 크기를 바꾸지 않으므로 렌더 비용은 기존과 동일하다.
-_MOTIONS: tuple[tuple[bool, float, float], ...] = (
-    (True, 0.50, 0.12),
-    (False, 0.35, 0.14),
-    (True, 0.65, 0.10),
-    (False, 0.50, 0.16),
-    (True, 0.35, 0.13),
-    (False, 0.65, 0.12),
+_MOTIONS: tuple[tuple[bool, float], ...] = (
+    (True, 0.50),
+    (False, 0.35),
+    (True, 0.65),
+    (False, 0.50),
+    (True, 0.35),
+    (False, 0.65),
 )
 
 
+def _zoom_amplitude(dur: float) -> float:
+    """장면 길이에 맞는 줌 폭. 왕복이라 절반 만에 피크를 찍으므로 목표 속도 × (길이/2)."""
+    return min(ZOOM_SPAN_MAX, max(ZOOM_SPAN_MIN, ZOOM_RATE_PER_SEC * dur / 2))
+
+
 def _zoompan_filter(dur: float, portrait: bool = False, variant: int = 0) -> str:
-    """정지 이미지에 장면 전체에 걸친 느린 줌(켄번스). variant로 방향·기준점·폭을 바꾼다.
+    """정지 이미지에 왕복(삼각파) 줌을 건다 — 절반까지 한 방향으로 가고 나머지 절반에 되돌아온다.
+    한 방향으로만 밀면 인지 가능한 속도를 내는 순간 총 확대율이 커져 1024px 원본이 무너진다.
+    왕복은 최대 확대율을 묶어둔 채 속도만 올릴 수 있어, 같은 화질로 2.6배 빠른 무빙이 된다.
     zoompan을 2배 해상도(수퍼샘플)로 돌린 뒤 다운스케일해 정수 pan 떨림을 서브픽셀로 묻는다.
-    줌 증분을 장면 길이에 맞춰 끝에서 max에 닿게 해, 긴 장면에서 중간에 줌이 멈추지 않게 한다."""
+    variant로 방향(확대→축소 / 축소→확대)과 가로 기준점을 바꾼다."""
     w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
     frames = max(1, round(dur * 30))
     bw, bh = w * 2, h * 2  # 수퍼샘플 캔버스(떨림 제거의 핵심)
-    zoom_in, xpos, span = _MOTIONS[variant % len(_MOTIONS)]
-    zmax = 1.0 + span
-    step = span / frames  # 장면 전체에 걸쳐 균일하게 줌
-    # 직전 프레임 값을 누적하는 zoom 대신 출력 프레임 번호 on으로 계산해 두 방향을 같은 식으로 쓴다.
-    z = (f"min(1.0+on*{step:.6f},{zmax:.3f})" if zoom_in
-         else f"max({zmax:.3f}-on*{step:.6f},1.0)")
+    zoom_in_first, xpos = _MOTIONS[variant % len(_MOTIONS)]
+    amp = _zoom_amplitude(dur)
+    # 삼각파. on=0에서 0, on=frames/2에서 1, on=frames에서 다시 0으로 돌아온다.
+    tri = f"(1-abs(1-2*on/{frames}))"
+    z = (f"1.0+{amp:.4f}*{tri}" if zoom_in_first
+         else f"{1 + amp:.4f}-{amp:.4f}*{tri}")
     return (
         f"scale={bw}:{bh},"
         f"zoompan=z='{z}':d={frames}"

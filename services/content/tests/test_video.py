@@ -157,15 +157,33 @@ def test_zoompan_filter_landscape_and_portrait():
     assert "s=2160x3840" in fp and "scale=1080:1920" in fp
 
 
-def test_zoompan_zoom_spans_whole_scene():
-    from popory_content.video import _zoompan_filter, _MOTIONS
-    # variant 0 = 줌인 폭 0.12. 3초=90프레임 → step=0.12/90≈0.001333
-    assert _MOTIONS[0] == (True, 0.50, 0.12)
-    f = _zoompan_filter(3.0, variant=0)
-    assert "on*0.001333" in f and "1.120" in f
-    # 24초=720프레임 → 훨씬 작은 증분(장면 내내 천천히)
-    f_long = _zoompan_filter(24.0, variant=0)
-    assert "on*0.000167" in f_long
+def test_zoom_amplitude_holds_target_rate_on_long_scenes():
+    from popory_content.video import _zoom_amplitude, ZOOM_RATE_PER_SEC
+    # 왕복이라 장면 절반 만에 피크에 닿는다 → 초당 변화율 = amp / (dur/2).
+    for dur in (20.0, 30.0, 44.6):
+        rate = _zoom_amplitude(dur) / (dur / 2)
+        assert abs(rate - ZOOM_RATE_PER_SEC) < 1e-9
+    # 문제 영상 S10(44.6초)은 피크 1.156 — 검토 때 고른 B안(피크 1.16)과 같다.
+    assert round(1 + _zoom_amplitude(44.6), 3) == 1.156
+
+
+def test_zoom_amplitude_clamped_at_both_ends():
+    from popory_content.video import _zoom_amplitude, ZOOM_SPAN_MIN, ZOOM_SPAN_MAX
+    # 쇼츠처럼 짧은 장면은 목표 속도를 그대로 쓰면 폭이 거의 0이 된다 → 하한으로 받친다.
+    assert _zoom_amplitude(7.0) == ZOOM_SPAN_MIN
+    # 아주 긴 장면은 폭이 무한정 커져 1024px 원본이 뭉개진다 → 상한으로 막는다.
+    assert _zoom_amplitude(60.0) == ZOOM_SPAN_MAX
+    # 상한에 걸려도 기존(0.12를 장면 전체에 분산)보다는 여전히 빠르다.
+    assert ZOOM_SPAN_MAX / 30.0 > 0.12 / 60.0
+
+
+def test_zoompan_is_pingpong_returning_to_start():
+    from popory_content.video import _zoompan_filter, _MOTIONS, _zoom_amplitude
+    amp = _zoom_amplitude(3.0)
+    f_in = _zoompan_filter(3.0, variant=0)     # 넓게 시작 → 확대 → 복귀
+    f_out = _zoompan_filter(3.0, variant=1)    # 확대로 시작 → 축소 → 복귀
+    assert f"1.0+{amp:.4f}*(1-abs(1-2*on/90))" in f_in
+    assert f"{1 + amp:.4f}-{amp:.4f}*(1-abs(1-2*on/90))" in f_out
 
 
 def test_zoompan_variant_alternates_direction_and_anchor():
@@ -173,12 +191,10 @@ def test_zoompan_variant_alternates_direction_and_anchor():
     # 인접 variant는 줌 방향이 서로 달라, 장면이 이어져도 같은 무빙이 반복되지 않는다.
     dirs = [m[0] for m in _MOTIONS]
     assert all(dirs[i] != dirs[i + 1] for i in range(len(dirs) - 1))
-    f_in = _zoompan_filter(3.0, variant=0)
-    f_out = _zoompan_filter(3.0, variant=1)
-    assert "min(1.0+on*" in f_in       # 줌인은 1.0에서 올라간다
-    assert "max(1.140-on*" in f_out    # 줌아웃은 zmax에서 내려온다
+    assert dirs[-1] != dirs[0]  # 순환해도 이어붙지 않는다
     # 가로 기준점만 옮기고 세로는 항상 중앙 — 배경에 구워진 하단 스크림을 밀지 않기 위함.
-    assert "*0.35'" in f_out and "*0.50'" in f_in
+    assert "*0.35'" in _zoompan_filter(3.0, variant=1)
+    assert "*0.50'" in _zoompan_filter(3.0, variant=0)
     assert all("ih/zoom)*0.50'" in _zoompan_filter(3.0, variant=v) for v in range(len(_MOTIONS)))
 
 
