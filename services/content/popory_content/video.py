@@ -164,8 +164,11 @@ def _render_headline_png(title: str, out_png: Path, portrait: bool = False) -> N
     t = "\n".join(textwrap.wrap(title, width=title_wrap)) or " "
     # 제목 첫 줄 중심을 로고 중심에 맞춘다(로고가 없으면 예전 위치 그대로).
     text_y = LOGO_Y + size // 2 if logo is not None else LOGO_Y + font_size // 2
+    # 자막과 같은 검정 외곽선. 헤드라인은 스크림 밖(좌상단)이라 배경이 밝으면 흰 글씨가
+    # 그대로 묻힌다 — 굵게 키워도 마찬가지여서 외곽선이 있어야 배경과 무관하게 읽힌다.
     d.multiline_text((text_x, text_y), t, font=title_font, fill=HEAD_COLOR,
-                     anchor="lm", align="left", spacing=10)
+                     anchor="lm", align="left", spacing=10,
+                     stroke_width=3, stroke_fill=(0, 0, 0, 230))
     img.save(out_png)
 
 
