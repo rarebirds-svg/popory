@@ -186,6 +186,86 @@ def test_zoompan_is_pingpong_returning_to_start():
     assert f"{1 + amp:.4f}-{amp:.4f}*(1-abs(1-2*on/90))" in f_out
 
 
+def test_pan_headroom_uses_pixels_cover_crop_would_discard():
+    from popory_content.video import _pan_headroom
+    # 1024² 원본을 1920x1080에 커버하면 1.875배로 1920x1920이 되고 세로 840px이 잘린다.
+    assert _pan_headroom((1024, 1024)) == 840
+    # 세로형은 같은 원본에서 가로로 840px이 남는다.
+    assert _pan_headroom((1024, 1024), portrait=True) == 840
+    # 이미 16:9인 원본은 버려지는 여유가 없다 → 패닝 없음.
+    assert _pan_headroom((1920, 1080)) == 0
+    assert _pan_headroom(None) == 0
+
+
+def test_pan_amplitude_capped_by_headroom_and_floor():
+    from popory_content.video import _pan_amplitude, PAN_RATE_PX_PER_SEC, PAN_MIN_PX
+    # 편도라 목표 속도 × 길이. 44.6초면 312px로 840px 여유 안에 들어간다.
+    assert _pan_amplitude(44.6, 840) == int(PAN_RATE_PX_PER_SEC * 44.6)
+    # 여유가 부족하면 여유까지만 — 확대를 더 하지 않기 위함.
+    assert _pan_amplitude(44.6, 120) == 120
+    # 여유가 아예 없으면(16:9 원본) 패닝 없음.
+    assert _pan_amplitude(44.6, 0) == 0
+    # 너무 짧으면 캔버스만 키우고 체감이 없으므로 걸지 않는다.
+    assert _pan_amplitude(3.0, 840) == 0
+    assert PAN_MIN_PX > 0
+
+
+def test_zoompan_pans_with_crop_after_zoom():
+    from popory_content.video import _zoompan_filter
+    f = _zoompan_filter(20.0, variant=0, pan_px=140)
+    # 캔버스가 패닝 여유만큼(수퍼샘플 기준 2배) 세로로 길어진다.
+    assert "scale=3840:2440," in f and "s=3840x2440" in f
+    # zoompan 이 먼저, crop 이 나중 — 순서가 뒤바뀌면 패닝이 얼어붙는다.
+    assert f.index("zoompan") < f.index("crop")
+    # crop 은 프레임 크기 창을 세로로 움직인다.
+    assert "crop=3840:2160:0:'(ih-oh)*(t/20.000)'" in f
+    # zoompan 의 s 는 입력과 같은 크기 — 다르면 종횡비가 눌린다.
+    assert "s=3840x2160" not in f
+
+
+def test_zoompan_without_headroom_keeps_old_chain():
+    from popory_content.video import _zoompan_filter
+    f = _zoompan_filter(20.0, variant=0, pan_px=0)
+    assert "crop=" not in f                  # 패닝 여유가 없으면 crop 자체를 걸지 않는다
+    assert "scale=3840:2160," in f and "s=3840x2160" in f
+
+
+def test_zoompan_pan_direction_varies_by_variant():
+    from popory_content.video import _zoompan_filter, _MOTIONS
+    fwd = [m[2] for m in _MOTIONS]
+    assert any(fwd) and not all(fwd)          # 정방향·역방향이 섞여 있다
+    v_fwd = next(i for i, m in enumerate(_MOTIONS) if m[2])
+    v_back = next(i for i, m in enumerate(_MOTIONS) if not m[2])
+    assert "(t/20.000)'" in _zoompan_filter(20.0, variant=v_fwd, pan_px=140)
+    assert "(1-t/20.000)'" in _zoompan_filter(20.0, variant=v_back, pan_px=140)
+
+
+def test_render_card_canvas_and_scrim_flag(tmp_path):
+    from popory_content.video import _render_card
+    from PIL import Image
+    import io
+    buf = io.BytesIO()
+    Image.new("RGB", (1024, 1024), (180, 180, 180)).save(buf, format="PNG")
+    bg = buf.getvalue()
+    out = tmp_path / "canvas.png"
+    _render_card("", "", out, bg_image_bytes=bg, canvas=(1920, 1220), scrim=False)
+    img = Image.open(out)
+    assert img.size == (1920, 1220)          # 확장 캔버스로 커버 크롭
+    # scrim=False 면 하단이 어두워지지 않는다(스크림은 화면 고정 오버레이가 담당).
+    assert img.getpixel((960, 1215))[0] > 150
+
+
+def test_render_scrim_png_is_bottom_gradient(tmp_path):
+    from popory_content.video import _render_scrim_png
+    from PIL import Image
+    out = tmp_path / "scrim.png"
+    _render_scrim_png(out)
+    img = Image.open(out).convert("RGBA")
+    assert img.size == (1920, 1080)
+    assert img.getpixel((960, 100))[3] == 0        # 상단은 완전 투명
+    assert img.getpixel((960, 1070))[3] > 150      # 하단은 진하게
+
+
 def test_zoompan_variant_alternates_direction_and_anchor():
     from popory_content.video import _zoompan_filter, _MOTIONS
     # 인접 variant는 줌 방향이 서로 달라, 장면이 이어져도 같은 무빙이 반복되지 않는다.
