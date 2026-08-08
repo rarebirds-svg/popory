@@ -22,6 +22,7 @@ FFMPEG_BIN = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 FFPROBE_BIN = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
 SAY_VOICE = "Yuna"
 FONT_PATH = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
+FONT_INDEX_BOLD = 6  # .ttc 안의 Bold face 인덱스(0=Regular, 2=Medium, 4=SemiBold, 6=Bold)
 LANDSCAPE_W, LANDSCAPE_H = 1920, 1080
 PORTRAIT_W, PORTRAIT_H = 1080, 1920
 PORTRAIT_OUT_W, PORTRAIT_OUT_H = 540, 960   # 쇼츠 최종 출력 크기 — 렌더는 1080×1920, 출력만 절반으로 다운스케일(파일 축소)
@@ -127,8 +128,8 @@ def _render_headline_png(title: str, out_png: Path, portrait: bool = False) -> N
     """헤드라인 캡션을 투명 PNG로 렌더(zoompan 위에 좌상단 고정 오버레이용 — 줌에 끌려다니지 않게)."""
     w = PORTRAIT_W if portrait else LANDSCAPE_W
     h = PORTRAIT_H if portrait else LANDSCAPE_H
-    title_font = ImageFont.truetype(FONT_PATH, 48 if portrait else 56)
-    title_wrap = 16 if portrait else 22
+    title_font = ImageFont.truetype(FONT_PATH, 58 if portrait else 68, index=FONT_INDEX_BOLD)
+    title_wrap = 15 if portrait else 21
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     t = "\n".join(textwrap.wrap(title, width=title_wrap)) or " "
