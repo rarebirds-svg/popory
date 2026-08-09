@@ -1,15 +1,16 @@
-# 헬스체크 엔트리 — 점검 실행 → 모드별 발송 판단 → 텔레그램 발송 → 상태 저장.
+# 헬스체크 엔트리 — 점검 실행 → 5영역 폴딩 → 공용 포맷터로 발송 → 상태 저장.
 import json
-import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from popory_healthcheck import checks, claude_auth, report
-from popory_healthcheck.telegram import send_telegram, TelegramError
 
 KST = timezone(timedelta(hours=9))
+SEND_PY = "/Users/daegong/projects/scripts/ops-report/send.py"
+ENV_FILE = str(Path(__file__).resolve().parent.parent / "secrets" / "env.sh")
 PORTAL = "https://poporyfamily.com"
 API = "https://api.poporyfamily.com/health"
 BRIEF_URL_TEMPLATE = "https://poporyfamily.com/p/brief-{slug}/"
@@ -96,22 +97,34 @@ def _save_state(results) -> None:
         json.dump(report.state_signature(results), f, ensure_ascii=False)
 
 
+def _send_digest(sections: dict, mode: str) -> int:
+    """공용 포맷터에 계약 JSON을 넘긴다. 발송 실패가 점검 자체를 실패로 만들지는 않는다."""
+    payload = {
+        "kind": "digest",
+        "project": "popory",
+        "at": datetime.now(KST).isoformat(timespec="seconds"),
+        "slot": "am" if mode == "am" else "pm",
+        "sections": sections,
+    }
+    proc = subprocess.run(
+        [sys.executable, SEND_PY, f"--env-file={ENV_FILE}"],
+        input=json.dumps(payload, ensure_ascii=False),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if proc.returncode != 0:
+        print(f"ops-report 발송 실패(rc={proc.returncode}): {proc.stderr.strip()}", file=sys.stderr)
+    return proc.returncode
+
+
 def run(mode: str) -> int:
     results = gather()
-    prev = _load_prev()
-    if report.should_send(mode, results, prev):
-        header = "아침 점검" if mode == "am" else "저녁 점검"
-        text = report.format_report(results, header)
-        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-        try:
-            send_telegram(token, chat_id, text)
-        except TelegramError as e:
-            print(f"telegram send failed: {e}", file=sys.stderr)
-            return 1
-    # 발송 성공 시에만 상태 저장 — 발송 실패(return 1)면 상태 미갱신으로 다음 실행이 재시도.
+    # 이상이 없어도 항상 보낸다 — 침묵이 "정상"과 "발송기 고장"을 구분하지 못하면 안 된다.
+    rc = _send_digest(report.fold_sections(results), mode)
     _save_state(results)
-    return 0
+    return 0 if rc == 0 else 1
 
 
 def main() -> int:

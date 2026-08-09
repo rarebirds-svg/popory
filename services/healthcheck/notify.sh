@@ -5,25 +5,19 @@
 set -u
 
 HC_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV_PY="${HC_DIR}/.venv/bin/python"
 
 ONCE_KEY=""
 MESSAGE=""
 for ARG in ${@+"$@"}; do
   case "${ARG}" in
     --once-key=*) ONCE_KEY="${ARG#*=}" ;;
+    --impact=*)   IMPACT="${ARG#*=}" ;;
+    --action=*)   ACTION="${ARG#*=}" ;;
     *)            MESSAGE="${MESSAGE}${MESSAGE:+ }${ARG}" ;;
   esac
 done
 
 [ -z "${MESSAGE}" ] && exit 0
-
-# 중복 억제 — 같은 key 는 날짜당 1회. 마커는 /tmp 라 재부팅 시 자연 초기화된다.
-if [ -n "${ONCE_KEY}" ]; then
-  MARKER="/tmp/popory_notify_${ONCE_KEY}_$(TZ=Asia/Seoul date +%Y-%m-%d)"
-  [ -f "${MARKER}" ] && exit 0
-  touch "${MARKER}"
-fi
 
 if [ ! -f "${HC_DIR}/secrets/env.sh" ]; then
   exit 2
@@ -31,12 +25,26 @@ fi
 # shellcheck disable=SC1091
 source "${HC_DIR}/secrets/env.sh"
 
-MESSAGE="${MESSAGE}" "${VENV_PY}" -c "
-import os, sys
-from popory_healthcheck.telegram import send_telegram, TelegramError
-try:
-    send_telegram(os.environ['TELEGRAM_BOT_TOKEN'], os.environ['TELEGRAM_CHAT_ID'], os.environ['MESSAGE'])
-except (TelegramError, KeyError) as e:
-    print(f'notify failed: {e}', file=sys.stderr)
+# 경보는 공용 포맷터를 거친다 — 양식·중복 억제의 진실 공급원이 한 곳이어야 한다.
+ONCE_KEY="${ONCE_KEY}" MESSAGE="${MESSAGE}" IMPACT="${IMPACT:-자동화 영향 확인 필요}" \
+ACTION="${ACTION:-터미널에서 상태 확인}" python3 -c "
+import json, os, subprocess, sys
+from datetime import datetime, timedelta, timezone
+payload = {
+    'kind': 'alert',
+    'project': 'popory',
+    'at': datetime.now(timezone(timedelta(hours=9))).isoformat(timespec='seconds'),
+    'what': os.environ['MESSAGE'],
+    'impact': os.environ['IMPACT'],
+    'action': os.environ['ACTION'],
+}
+if os.environ.get('ONCE_KEY'):
+    payload['once_key'] = os.environ['ONCE_KEY']
+proc = subprocess.run(
+    [sys.executable, '/Users/daegong/projects/scripts/ops-report/send.py',
+     '--env-file=${HC_DIR}/secrets/env.sh'],
+    input=json.dumps(payload, ensure_ascii=False), capture_output=True, text=True, check=False)
+if proc.returncode != 0:
+    print(f'notify failed(rc={proc.returncode}): {proc.stderr.strip()}', file=sys.stderr)
     sys.exit(3)
 "
