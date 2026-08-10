@@ -164,7 +164,7 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
     assert body["status"] == "review"
     assert callable(captured.get("image_fetcher"))
     assert captured.get("scene_count") == 12
-    assert captured.get("voice") == "ko-KR-Neural2-C"
+    assert captured.get("voice") == "ko-KR-Chirp3-HD-Charon"
     assert "illustration" in captured.get("image_style_kw")
 
 
