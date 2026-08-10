@@ -63,7 +63,8 @@ popory `services/content`가 한 주제로 4개 채널(블로그·유튜브 동�
 - 전체 caption(해시태그 포함, 500자 이내) 작성.
 
 ## TTS (영상 내레이션) — `tts.py`
-- 기본 음성 **`ko-KR-Chirp3-HD-Charon`(남성, 깊고 무게감)** — `options.py`의 `VOICE["male"]`, `DEFAULTS`가 `voice: "male"`. 선택지 `female-calm`=`ko-KR-Chirp3-HD-Aoede`, `female-bright`=`ko-KR-Chirp3-HD-Leda`. speakingRate 1.0, pitch는 아예 보내지 않는다(모델 기본값). 이제 세 선택지 모두 Chirp3-HD다.
+- 기본 음성 **`ko-KR-Chirp3-HD-Charon`(남성, 깊고 무게감)** — `options.py`의 `VOICE["male"]`, `DEFAULTS`가 `voice: "male"`. 선택지 `female-calm`=`ko-KR-Chirp3-HD-Aoede`, `female-bright`=`ko-KR-Chirp3-HD-Leda`. pitch는 아예 보내지 않는다(모델 기본값). 이제 세 선택지 모두 Chirp3-HD다.
+- **말속도 `SPEAKING_RATE` 기본 1.06** (`POPORY_TTS_SPEAKING_RATE`로 튜닝) — Chirp3-HD 기준 귀 튜닝값이다. 0.96이 "살짝 쳐지는 느낌"이라 `294f614`(2026-06-26)에서 콤마 break 단축(350→175ms)과 **한 세트로** 1.06으로 올렸다. `f8e2898`(06-29)에서 1.0으로 내린 건 같은 날 기본 음성을 Charon→Neural2-C로 되돌린 것과 짝이었으므로 **1.0은 Neural2 기준값**이다. 기본이 다시 Charon이라 1.06으로 복귀했다. 속도와 콤마 break는 함께 조정해야 균형이 맞는다.
 - **Charon 이력** — 2026-06-13 설계에서 Charon으로 갔다가 2026-06-29 `b3d3eeb`에서 Neural2-C로 되돌렸고, 2026-08 다시 Charon으로 왔다. 되돌림 사유는 **취향(이전 목소리 복귀)이지 결함이 아니다** — 그 커밋은 라벨 매핑과 테스트 단언 3줄만 건드렸고 전처리 튜닝은 유지했다. 그 뒤 Chirp3-HD 고유 발음 문제(소수점 흘림 `8705cd8`, 한자 괄호 이중발음 `09e7634`, 앰퍼샌드 `cbae665`)를 전부 잡았으므로 재시도 조건이 달라졌다. **채널 목소리가 또 바뀌므로** 기존 영상과 이어 들으면 차이가 난다.
 - **음성 비교 도구** — `scripts/compare_voices.py`가 같은 원고를 여러 화자로 합성해 `~/Downloads/popory_voice_ab/`에 MP3+비교 페이지를 만든다. 실제 영상과 같은 조건(문장별 합성+`SENTENCE_GAP` 무음)으로 들린다. `--list`로 계정의 ko-KR 화자 목록을 조회한다.
 - **무료 한도 버킷** — Google Cloud TTS는 Neural2·Chirp3-HD **각각 월 100만 자**가 만료 없이 무료다. 실측 사용량은 월 약 17만 자(SSML 태그 포함, 롱폼 16장면+쇼츠 기준)로 한도의 약 17%. Charon 전환으로 세 음성이 모두 Chirp3-HD 버킷 하나를 쓰지만 여전히 여유가 크다. 초과 시 단가는 Chirp3-HD $30/100만 자.
