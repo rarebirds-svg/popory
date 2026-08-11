@@ -45,6 +45,16 @@ def test_split_sentences():
     assert _split_sentences("문장 하나만") == ["문장 하나만"]
 
 
+def test_split_sentences_keeps_decimals_intact():
+    # 소수점에서 끊기면 tts 의 소수→한글 변환이 온전한 토큰을 못 받아 점을 흘린다(6.25→"육 이십오").
+    assert _split_sentences("보상은 6.25개에서 3.125개로 줄었다. 다음.") == [
+        "보상은 6.25개에서 3.125개로 줄었다.",
+        "다음.",
+    ]
+    # 공백 없는 문장 경계는 계속 끊는다(뒤가 숫자가 아니면 문장 끝).
+    assert _split_sentences("첫째다.둘째다.") == ["첫째다.", "둘째다."]
+
+
 def test_spans_from_durations_track_real_audio_lengths():
     # 자막 타이밍은 문장별 실측 길이를 그대로 따른다(글자수 추정 아님). 문장 사이 gap만큼 띄움.
     spans = _spans_from_durations([2.0, 3.0, 1.0], 0.5)
@@ -147,14 +157,134 @@ def test_zoompan_filter_landscape_and_portrait():
     assert "s=2160x3840" in fp and "scale=1080:1920" in fp
 
 
-def test_zoompan_zoom_spans_whole_scene():
+def test_zoom_amplitude_holds_target_rate_on_long_scenes():
+    from popory_content.video import _zoom_amplitude, ZOOM_RATE_PER_SEC
+    # 왕복이라 장면 절반 만에 피크에 닿는다 → 초당 변화율 = amp / (dur/2).
+    for dur in (20.0, 30.0, 44.6):
+        rate = _zoom_amplitude(dur) / (dur / 2)
+        assert abs(rate - ZOOM_RATE_PER_SEC) < 1e-9
+    # 문제 영상 S10(44.6초)은 피크 1.156 — 검토 때 고른 B안(피크 1.16)과 같다.
+    assert round(1 + _zoom_amplitude(44.6), 3) == 1.156
+
+
+def test_zoom_amplitude_clamped_at_both_ends():
+    from popory_content.video import _zoom_amplitude, ZOOM_SPAN_MIN, ZOOM_SPAN_MAX
+    # 쇼츠처럼 짧은 장면은 목표 속도를 그대로 쓰면 폭이 거의 0이 된다 → 하한으로 받친다.
+    assert _zoom_amplitude(7.0) == ZOOM_SPAN_MIN
+    # 아주 긴 장면은 폭이 무한정 커져 1024px 원본이 뭉개진다 → 상한으로 막는다.
+    assert _zoom_amplitude(60.0) == ZOOM_SPAN_MAX
+    # 상한에 걸려도 기존(0.12를 장면 전체에 분산)보다는 여전히 빠르다.
+    assert ZOOM_SPAN_MAX / 30.0 > 0.12 / 60.0
+
+
+def test_zoompan_is_pingpong_returning_to_start():
+    from popory_content.video import _zoompan_filter, _MOTIONS, _zoom_amplitude
+    amp = _zoom_amplitude(3.0)
+    f_in = _zoompan_filter(3.0, variant=0)     # 넓게 시작 → 확대 → 복귀
+    f_out = _zoompan_filter(3.0, variant=1)    # 확대로 시작 → 축소 → 복귀
+    assert f"1.0+{amp:.4f}*(1-abs(1-2*on/90))" in f_in
+    assert f"{1 + amp:.4f}-{amp:.4f}*(1-abs(1-2*on/90))" in f_out
+
+
+def test_pan_headroom_uses_pixels_cover_crop_would_discard():
+    from popory_content.video import _pan_headroom
+    # 1024² 원본을 1920x1080에 커버하면 1.875배로 1920x1920이 되고 세로 840px이 잘린다.
+    assert _pan_headroom((1024, 1024)) == 840
+    # 세로형은 같은 원본에서 가로로 840px이 남는다.
+    assert _pan_headroom((1024, 1024), portrait=True) == 840
+    # 이미 16:9인 원본은 버려지는 여유가 없다 → 패닝 없음.
+    assert _pan_headroom((1920, 1080)) == 0
+    assert _pan_headroom(None) == 0
+
+
+def test_pan_amplitude_capped_by_headroom_and_floor():
+    from popory_content.video import _pan_amplitude, PAN_RATE_PX_PER_SEC, PAN_MIN_PX
+    # 편도라 목표 속도 × 길이. 44.6초면 312px로 840px 여유 안에 들어간다.
+    assert _pan_amplitude(44.6, 840) == int(PAN_RATE_PX_PER_SEC * 44.6)
+    # 여유가 부족하면 여유까지만 — 확대를 더 하지 않기 위함.
+    assert _pan_amplitude(44.6, 120) == 120
+    # 여유가 아예 없으면(16:9 원본) 패닝 없음.
+    assert _pan_amplitude(44.6, 0) == 0
+    # 너무 짧으면 캔버스만 키우고 체감이 없으므로 걸지 않는다.
+    assert _pan_amplitude(3.0, 840) == 0
+    assert PAN_MIN_PX > 0
+
+
+def test_zoompan_pans_with_crop_after_zoom():
     from popory_content.video import _zoompan_filter
-    # 줌 증분 = (1.12-1.0)/frames. 3초=90프레임 → step≈0.001333
-    f = _zoompan_filter(3.0)
-    assert "zoom+0.001333" in f
-    # 24초=720프레임 → 훨씬 작은 증분(장면 내내 천천히)
-    f_long = _zoompan_filter(24.0)
-    assert "zoom+0.000167" in f_long
+    f = _zoompan_filter(20.0, variant=0, pan_px=140)
+    # 캔버스가 패닝 여유만큼(수퍼샘플 기준 2배) 세로로 길어진다.
+    assert "scale=3840:2440," in f and "s=3840x2440" in f
+    # zoompan 이 먼저, crop 이 나중 — 순서가 뒤바뀌면 패닝이 얼어붙는다.
+    assert f.index("zoompan") < f.index("crop")
+    # crop 은 프레임 크기 창을 세로로 움직인다.
+    assert "crop=3840:2160:0:'(ih-oh)*(t/20.000)'" in f
+    # zoompan 의 s 는 입력과 같은 크기 — 다르면 종횡비가 눌린다.
+    assert "s=3840x2160" not in f
+
+
+def test_zoompan_without_headroom_keeps_old_chain():
+    from popory_content.video import _zoompan_filter
+    f = _zoompan_filter(20.0, variant=0, pan_px=0)
+    assert "crop=" not in f                  # 패닝 여유가 없으면 crop 자체를 걸지 않는다
+    assert "scale=3840:2160," in f and "s=3840x2160" in f
+
+
+def test_zoompan_pan_direction_varies_by_variant():
+    from popory_content.video import _zoompan_filter, _MOTIONS
+    fwd = [m[2] for m in _MOTIONS]
+    assert any(fwd) and not all(fwd)          # 정방향·역방향이 섞여 있다
+    v_fwd = next(i for i, m in enumerate(_MOTIONS) if m[2])
+    v_back = next(i for i, m in enumerate(_MOTIONS) if not m[2])
+    assert "(t/20.000)'" in _zoompan_filter(20.0, variant=v_fwd, pan_px=140)
+    assert "(1-t/20.000)'" in _zoompan_filter(20.0, variant=v_back, pan_px=140)
+
+
+def test_render_card_canvas_and_scrim_flag(tmp_path):
+    from popory_content.video import _render_card
+    from PIL import Image
+    import io
+    buf = io.BytesIO()
+    Image.new("RGB", (1024, 1024), (180, 180, 180)).save(buf, format="PNG")
+    bg = buf.getvalue()
+    out = tmp_path / "canvas.png"
+    _render_card("", "", out, bg_image_bytes=bg, canvas=(1920, 1220), scrim=False)
+    img = Image.open(out)
+    assert img.size == (1920, 1220)          # 확장 캔버스로 커버 크롭
+    # scrim=False 면 하단이 어두워지지 않는다(스크림은 화면 고정 오버레이가 담당).
+    assert img.getpixel((960, 1215))[0] > 150
+
+
+def test_render_scrim_png_is_bottom_gradient(tmp_path):
+    from popory_content.video import _render_scrim_png
+    from PIL import Image
+    out = tmp_path / "scrim.png"
+    _render_scrim_png(out)
+    img = Image.open(out).convert("RGBA")
+    assert img.size == (1920, 1080)
+    assert img.getpixel((960, 100))[3] == 0        # 상단은 완전 투명
+    assert img.getpixel((960, 1070))[3] > 150      # 하단은 진하게
+
+
+def test_zoompan_variant_alternates_direction_and_anchor():
+    from popory_content.video import _zoompan_filter, _MOTIONS
+    # 인접 variant는 줌 방향이 서로 달라, 장면이 이어져도 같은 무빙이 반복되지 않는다.
+    dirs = [m[0] for m in _MOTIONS]
+    assert all(dirs[i] != dirs[i + 1] for i in range(len(dirs) - 1))
+    assert dirs[-1] != dirs[0]  # 순환해도 이어붙지 않는다
+    # 가로 기준점만 옮기고 세로는 항상 중앙 — 배경에 구워진 하단 스크림을 밀지 않기 위함.
+    assert "*0.35'" in _zoompan_filter(3.0, variant=1)
+    assert "*0.50'" in _zoompan_filter(3.0, variant=0)
+    assert all("ih/zoom)*0.50'" in _zoompan_filter(3.0, variant=v) for v in range(len(_MOTIONS)))
+
+
+def test_zoompan_variant_wraps_and_keeps_canvas_size():
+    from popory_content.video import _zoompan_filter, _MOTIONS
+    # variant는 장면 인덱스를 그대로 받으므로 길이를 넘어가면 순환한다.
+    assert _zoompan_filter(3.0, variant=len(_MOTIONS)) == _zoompan_filter(3.0, variant=0)
+    # 어떤 variant도 수퍼샘플 캔버스 크기를 바꾸지 않는다(렌더 비용이 장면마다 동일).
+    for v in range(len(_MOTIONS)):
+        assert "s=3840x2160" in _zoompan_filter(3.0, variant=v)
 
 
 def test_xfade_graph_offsets_and_labels():
@@ -201,6 +331,87 @@ def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
     work = tmp_path / "video_smoketest"
     clips = sorted(work.glob("scene_*.mp4"))
     assert len(clips) == 2
+
+
+def test_headline_places_logo_left_of_title(tmp_path):
+    from PIL import Image
+    from popory_content import video
+    out = tmp_path / "head.png"
+    video._render_headline_png("챕터 제목", out)
+    img = Image.open(out).convert("RGBA")
+    assert img.size == (1920, 1080)
+    # 로고 자리(좌상단)에 불투명 픽셀이 있다.
+    logo_box = img.crop((video.LOGO_X, video.LOGO_Y,
+                         video.LOGO_X + video.LOGO_SIZE, video.LOGO_Y + video.LOGO_SIZE))
+    assert logo_box.split()[-1].getextrema()[1] > 0
+    # 원형 마스크라 로고 상자의 네 모서리는 투명하다(검은 사각형이 드러나지 않는다).
+    assert logo_box.getpixel((1, 1))[3] == 0
+    assert logo_box.getpixel((video.LOGO_SIZE - 2, 1))[3] == 0
+    # 제목은 로고 오른쪽에서 시작한다 → 로고 왼쪽 여백엔 글자가 없다.
+    assert img.crop((0, 0, video.LOGO_X, 1080)).split()[-1].getextrema()[1] == 0
+
+
+def test_headline_falls_back_to_text_when_logo_missing(monkeypatch, tmp_path):
+    # 로고 파일이 없어도 헤드라인은 그려져야 한다(영상 전체가 죽으면 안 됨).
+    from PIL import Image
+    from popory_content import video
+    monkeypatch.setattr(video, "LOGO_PATH", tmp_path / "없는파일.png")
+    out = tmp_path / "head2.png"
+    video._render_headline_png("챕터 제목", out)
+    img = Image.open(out).convert("RGBA")
+    assert img.split()[-1].getextrema()[1] > 0   # 글자는 그려졌다
+
+
+def test_wrap_chunks_keeps_every_chunk_within_one_line():
+    from popory_content.video import _wrap_chunks, SUB_WRAP_LANDSCAPE
+    s = "복리는 수익률이 아니라 시간에 붙습니다 그래서 버티는 사람에게만 열리는 문이 됩니다 대부분은 그걸 못 견딥니다"
+    chunks = _wrap_chunks(s, SUB_WRAP_LANDSCAPE)
+    assert len(chunks) > 1
+    assert all(len(c) <= SUB_WRAP_LANDSCAPE for c in chunks)
+    # 어절을 쪼개지 않고 공백 경계에서만 끊는다 → 이어붙이면 원문 그대로.
+    assert " ".join(chunks) == s
+    # 짧은 문장은 그대로 한 조각.
+    assert _wrap_chunks("짧은 문장.", SUB_WRAP_LANDSCAPE) == ["짧은 문장."]
+
+
+def test_chunk_spans_split_speech_and_hold_through_gap():
+    from popory_content.video import _chunk_spans
+    # 발화 6초 + 뒤 무음까지 포함한 문장 구간 [10.0, 17.0].
+    spans = _chunk_spans(["가나다라", "마바사아"], start=10.0, speech_dur=6.0, end=17.0)
+    assert len(spans) == 2
+    assert spans[0][0] == 10.0
+    # 정규화 길이가 같으니 발화 6초를 절반씩 → 첫 조각은 13.0에서 끝난다.
+    assert abs(spans[0][1] - 13.0) < 1e-6
+    assert abs(spans[1][0] - 13.0) < 1e-6
+    # 마지막 조각은 문장 뒤 무음까지 유지해 깜빡임을 없앤다.
+    assert spans[1][1] == 17.0
+
+
+def test_chunk_spans_weight_by_tts_normalized_length():
+    from popory_content.video import _chunk_spans
+    # "1,700"은 5글자지만 TTS는 "천칠백"으로 읽는다. 원문 글자수로 나누면 이 조각이 과대평가된다.
+    spans = _chunk_spans(["1,700", "천칠백"], start=0.0, speech_dur=10.0, end=10.0)
+    assert abs(spans[0][1] - 5.0) < 0.5   # 두 조각의 실제 발화량이 같으므로 거의 반반
+
+
+def test_render_video_cues_stay_sentence_level_while_overlays_split(monkeypatch, tmp_path):
+    # 번인 자막은 한 줄씩 쪼개지만, cue(=SRT·번역 단위)는 문장 그대로 유지돼야 한다.
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    rendered = []
+    monkeypatch.setattr(video, "_render_subtitle_png",
+                        lambda text, png, portrait=False: rendered.append(text))
+    long_sentence = ("복리는 수익률이 아니라 시간에 붙습니다 그래서 버티는 사람에게만 "
+                     "열리는 문이 되고 대부분은 그걸 끝내 못 견딥니다.")
+    scenes = [{"caption": "a", "narration": long_sentence},
+              {"caption": "b", "narration": long_sentence}]
+    _, _, _, cues = video.render_video(scenes, job_id="cuetest")
+    assert len(cues) == 2                      # 장면당 문장 1개 → cue 2개
+    assert cues[0][2] == long_sentence         # 조각이 아니라 문장 전체
+    assert len(rendered) > 1                   # 화면에는 여러 조각으로 나뉘어 표시
+    assert all(len(t) <= video.SUB_WRAP_LANDSCAPE for t in rendered)
 
 
 def test_render_video_counts_missing_images(monkeypatch, tmp_path):

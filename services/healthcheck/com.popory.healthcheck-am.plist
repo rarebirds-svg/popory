@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- 헬스체크 아침 종합 점검을 매일 10:30 KST 실행하는 launchd 정의. -->
+<!-- 헬스체크 아침 종합 점검을 매일 09:00 KST 실행하는 launchd 정의. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -12,7 +12,7 @@
   </array>
   <key>WorkingDirectory</key><string>/Users/daegong/projects/popory/services/healthcheck</string>
   <key>StartCalendarInterval</key>
-  <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>30</integer></dict>
+  <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
   <key>StandardOutPath</key><string>/Users/daegong/projects/popory/services/healthcheck/logs/launchd-am.stdout.log</string>
   <key>StandardErrorPath</key><string>/Users/daegong/projects/popory/services/healthcheck/logs/launchd-am.stderr.log</string>
   <key>EnvironmentVariables</key>

@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from popory_content.generate import run_claude_cli
 from popory_content.subtitles import scene_offsets, Cue
-from popory_content.tts import synthesize
+from popory_content.tts import synthesize, spoken_text
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
 from popory_content.video_contract import parse_video
 
@@ -22,6 +22,7 @@ FFMPEG_BIN = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 FFPROBE_BIN = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
 SAY_VOICE = "Yuna"
 FONT_PATH = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
+FONT_INDEX_BOLD = 6  # .ttc 안의 Bold face 인덱스(0=Regular, 2=Medium, 4=SemiBold, 6=Bold)
 LANDSCAPE_W, LANDSCAPE_H = 1920, 1080
 PORTRAIT_W, PORTRAIT_H = 1080, 1920
 PORTRAIT_OUT_W, PORTRAIT_OUT_H = 540, 960   # 쇼츠 최종 출력 크기 — 렌더는 1080×1920, 출력만 절반으로 다운스케일(파일 축소)
@@ -36,6 +37,11 @@ HEAD_COLOR = (255, 255, 255)
 BODY_COLOR = (223, 231, 245)
 TMP = Path("/tmp")
 BGM_DIR = Path(__file__).resolve().parent.parent / "assets" / "bgm"
+# 헤드라인 왼쪽 포포리 책방 로고. 원본이 108×108이라 그보다 크게 쓰면 뭉개진다.
+LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "logo.png"
+LOGO_X, LOGO_Y = 80, 62
+LOGO_SIZE, LOGO_SIZE_PORTRAIT = 96, 76
+LOGO_GAP = 22  # 로고와 챕터 제목 사이 여백
 # 배경음악 사용 여부. 새 BGM 선정 전까지 꺼둠(2026-07-03 요청). 재활성은 env POPORY_BGM_ENABLED=1 또는 기본값을 "1"로.
 BGM_ENABLED = os.environ.get("POPORY_BGM_ENABLED", "0") == "1"
 
@@ -80,6 +86,16 @@ def _cover(im: Image.Image, w: int, h: int) -> Image.Image:
     return im.crop((left, top, left + w, top + h))
 
 
+def _image_size(bg_bytes: bytes | None) -> tuple[int, int] | None:
+    """배경 바이트의 원본 크기. 없거나 깨졌으면 None(패닝 여유 계산에서 0으로 취급)."""
+    if not bg_bytes:
+        return None
+    try:
+        return Image.open(BytesIO(bg_bytes)).size
+    except Exception:  # noqa: BLE001 — 깨진 바이트는 단색 폴백 경로와 동일하게 처리
+        return None
+
+
 def _scrim_bottom(img: Image.Image, w: int = LANDSCAPE_W, h: int = LANDSCAPE_H) -> None:
     """하단 그라데이션 스크림(아래로 갈수록 어두움)으로 캡션 가독성 확보."""
     grad_h = int(h * 0.4)
@@ -91,15 +107,35 @@ def _scrim_bottom(img: Image.Image, w: int = LANDSCAPE_W, h: int = LANDSCAPE_H) 
     img.paste(black, (0, h - grad_h), grad)
 
 
-def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes | None = None, portrait: bool = False) -> None:
+def _render_scrim_png(out_png: Path, portrait: bool = False) -> None:
+    """하단 스크림을 투명 PNG로 렌더(zoompan·crop 뒤 오버레이용).
+    배경에 구워두면 패닝할 때 스크림이 배경과 함께 밀려 자막 뒤가 밝아진다 — 화면에 고정해야 한다."""
     w = PORTRAIT_W if portrait else LANDSCAPE_W
     h = PORTRAIT_H if portrait else LANDSCAPE_H
+    grad_h = int(h * 0.4)
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    band = Image.new("RGBA", (w, grad_h), (0, 0, 0, 255))
+    alpha = Image.new("L", (1, grad_h))
+    for y in range(grad_h):
+        alpha.putpixel((0, y), int(190 * y / grad_h))
+    band.putalpha(alpha.resize((w, grad_h)))
+    img.paste(band, (0, h - grad_h))
+    img.save(out_png)
+
+
+def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes | None = None,
+                 portrait: bool = False, canvas: tuple[int, int] | None = None,
+                 scrim: bool = True) -> None:
+    """배경 카드. canvas를 주면 그 크기로 커버 크롭한다(패닝 여유를 남긴 확장 캔버스).
+    scrim=False면 하단 그라데이션을 굽지 않는다 — 패닝 시엔 _render_scrim_png로 화면에 고정한다."""
+    w, h = canvas or ((PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H))
     img = None
     if bg_image_bytes:
         try:
             bg = Image.open(BytesIO(bg_image_bytes)).convert("RGB")
             img = _cover(bg, w, h)
-            _scrim_bottom(img, w, h)
+            if scrim:
+                _scrim_bottom(img, w, h)
         except Exception:  # noqa: BLE001 — 깨진 이미지 바이트는 단색 폴백(작업 전체 크래시 방지)
             img = None
     if img is None:
@@ -123,16 +159,46 @@ def _render_card(title: str, subtitle: str, out_png: Path, bg_image_bytes: bytes
     img.save(out_png)
 
 
+def _logo_circle(size: int) -> Image.Image | None:
+    """로고를 원형으로 잘라 size×size RGBA로 반환. 원본이 알파 없는 검정 배경 정사각형이라
+    그대로 얹으면 밝은 장면에서 검은 사각형이 드러난다 — 채널 아바타처럼 원형으로 마스킹한다.
+    파일이 없거나 깨졌으면 None(헤드라인은 글자만 그린다)."""
+    try:
+        logo = Image.open(LOGO_PATH).convert("RGBA")
+    except Exception:  # noqa: BLE001 — 로고 없음/깨짐은 영상 전체를 막지 않는다
+        return None
+    logo = _cover(logo.convert("RGB"), size, size).convert("RGBA")
+    mask = Image.new("L", (size * 4, size * 4), 0)     # 4배로 그린 뒤 축소 → 계단 없는 원
+    ImageDraw.Draw(mask).ellipse((0, 0, size * 4 - 1, size * 4 - 1), fill=255)
+    logo.putalpha(mask.resize((size, size), Image.LANCZOS))
+    return logo
+
+
 def _render_headline_png(title: str, out_png: Path, portrait: bool = False) -> None:
-    """헤드라인 캡션을 투명 PNG로 렌더(zoompan 위에 좌상단 고정 오버레이용 — 줌에 끌려다니지 않게)."""
+    """헤드라인 캡션을 투명 PNG로 렌더(zoompan 위에 좌상단 고정 오버레이용 — 줌에 끌려다니지 않게).
+    왼쪽에 포포리 책방 로고를 두고 그 오른쪽에 챕터 제목을 세로 중앙 맞춤으로 그린다."""
     w = PORTRAIT_W if portrait else LANDSCAPE_W
     h = PORTRAIT_H if portrait else LANDSCAPE_H
-    title_font = ImageFont.truetype(FONT_PATH, 48 if portrait else 56)
-    title_wrap = 16 if portrait else 22
+    size = LOGO_SIZE_PORTRAIT if portrait else LOGO_SIZE
+    font_size = 58 if portrait else 68
+    title_wrap = 14 if portrait else 21
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    logo = _logo_circle(size)
+    if logo is not None:
+        img.alpha_composite(logo, (LOGO_X, LOGO_Y))
+        text_x = LOGO_X + size + LOGO_GAP
+    else:
+        text_x = LOGO_X
+    title_font = ImageFont.truetype(FONT_PATH, font_size, index=FONT_INDEX_BOLD)
     d = ImageDraw.Draw(img)
     t = "\n".join(textwrap.wrap(title, width=title_wrap)) or " "
-    d.multiline_text((80, 70), t, font=title_font, fill=HEAD_COLOR, anchor="la", align="left", spacing=10)
+    # 제목 첫 줄 중심을 로고 중심에 맞춘다(로고가 없으면 예전 위치 그대로).
+    text_y = LOGO_Y + size // 2 if logo is not None else LOGO_Y + font_size // 2
+    # 자막과 같은 검정 외곽선. 헤드라인은 스크림 밖(좌상단)이라 배경이 밝으면 흰 글씨가
+    # 그대로 묻힌다 — 굵게 키워도 마찬가지여서 외곽선이 있어야 배경과 무관하게 읽힌다.
+    d.multiline_text((text_x, text_y), t, font=title_font, fill=HEAD_COLOR,
+                     anchor="lm", align="left", spacing=10,
+                     stroke_width=3, stroke_fill=(0, 0, 0, 230))
     img.save(out_png)
 
 
@@ -168,8 +234,9 @@ def render_thumbnail(copy: str | None, image_prompt: str | None, out_jpg: Path,
 
 
 def _split_sentences(text: str) -> list[str]:
-    """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음)."""
-    parts = re.split(r"(?<=[.?!])\s*", text.strip())
+    """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음). 뒤가 숫자면 소수점이므로 끊지 않는다
+    — 6.25 가 "6." / "25" 로 갈리면 문장별 합성이라 tts 의 소수→한글 변환이 점을 흘린다."""
+    parts = re.split(r"(?<=[.?!])(?!\d)\s*", text.strip())
     return [p.strip() for p in parts if p.strip()]
 
 
@@ -227,16 +294,46 @@ def _append_silence(src: Path, seconds: float, out: Path) -> None:
           "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[a]", "-map", "[a]", str(out)])
 
 
+# 자막 한 줄에 들어가는 최대 글자 수. 가로는 1920px에 64px 폰트라 좌우 여백 포함 30자,
+# 세로는 1080px에 46px 폰트라 18자가 한계다. 이 값이 곧 자막 조각의 분할 기준이 된다.
+SUB_WRAP_LANDSCAPE, SUB_WRAP_PORTRAIT = 30, 18
+# 자막 블록 상단 y(화면 아래에서 뺀 값). 항상 한 줄이라 블록 높이가 일정해, 예전 다줄 시절처럼
+# 아래로 자라 화면 밖으로 밀릴 걱정이 없다. 세로는 쇼츠 UI 오버레이 영역을 피해 더 위에 둔다.
+SUB_Y_LANDSCAPE, SUB_Y_PORTRAIT = 175, 305
+
+
+def _wrap_chunks(sentence: str, width: int) -> list[str]:
+    """자막을 한 줄에 들어가는 조각으로 쪼갠다(어절 경계 유지). 짧은 문장은 한 조각 그대로."""
+    return textwrap.wrap(sentence, width=width) or [sentence.strip() or " "]
+
+
+def _chunk_spans(chunks: list[str], start: float, speech_dur: float,
+                 end: float) -> list[tuple[float, float]]:
+    """조각별 자막 [start,end]. 문장 안에서는 발화 길이를 실측할 수 없으므로(TTS는 문장 단위로
+    합성한다) 길이 비례로 나누되, 원문이 아니라 TTS 정규화 텍스트 길이를 쓴다 — '1,700'은
+    5글자지만 '천칠백'으로 읽히므로 원문 글자수로 나누면 그 조각이 과대평가된다.
+    마지막 조각은 문장 뒤 무음(SENTENCE_GAP)까지 유지해 자막이 깜빡이지 않게 한다."""
+    weights = [max(1, len(spoken_text(c))) for c in chunks]
+    total = sum(weights)
+    spans: list[tuple[float, float]] = []
+    acc = start
+    for i, wgt in enumerate(weights):
+        nxt = acc + speech_dur * wgt / total
+        spans.append((acc, end if i == len(weights) - 1 else nxt))
+        acc = nxt
+    return spans
+
+
 def _render_subtitle_png(sentence: str, out_png: Path, portrait: bool = False) -> None:
     """문장 자막을 투명 배경 PNG로 렌더(장면 클립 위에 타이밍 오버레이용). 가독성 위해 검정 외곽선."""
     w = PORTRAIT_W if portrait else LANDSCAPE_W
     h = PORTRAIT_H if portrait else LANDSCAPE_H
     if portrait:
         sub_font = ImageFont.truetype(FONT_PATH, 46)
-        sub_wrap, sub_y = 18, h - 320
+        sub_wrap, sub_y = SUB_WRAP_PORTRAIT, h - SUB_Y_PORTRAIT
     else:
         sub_font = ImageFont.truetype(FONT_PATH, 64)
-        sub_wrap, sub_y = 30, h - 240
+        sub_wrap, sub_y = SUB_WRAP_LANDSCAPE, h - SUB_Y_LANDSCAPE
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     s = "\n".join(textwrap.wrap(sentence, width=sub_wrap)) or " "
@@ -246,21 +343,94 @@ def _render_subtitle_png(sentence: str, out_png: Path, portrait: bool = False) -
     img.save(out_png)
 
 
-def _zoompan_filter(dur: float, portrait: bool = False) -> str:
-    """정지 이미지에 장면 전체에 걸친 느린 줌인(켄번스).
-    zoompan을 2배 해상도(수퍼샘플)로 돌린 뒤 다운스케일해 정수 pan 떨림을 서브픽셀로 묻는다.
-    줌 증분을 장면 길이에 맞춰 끝에서 max에 닿게 해, 긴 장면에서 중간에 줌이 멈추지 않게 한다."""
+# 줌 무빙의 목표 속도(초당 배율 변화). 사람이 느끼는 건 총 줌 폭이 아니라 이 속도다.
+# 폭을 장면 전체에 균등 분산하던 방식은 장면이 길수록 느려져, 롱폼(장면 32~53초)에서
+# 초당 0.2~0.4%까지 떨어져 정지 화면처럼 보였다(2026-08-08 영상에서 확인).
+ZOOM_RATE_PER_SEC = 0.007
+# 폭 하한·상한. 하한은 쇼츠처럼 짧은 장면에서 폭이 0에 수렴하는 것을 막고(7초 장면 기준
+# 초당 1.7%로 기존 쇼츠와 같은 체감), 상한은 1024px 원본이 과확대로 뭉개지는 것을 막는다.
+ZOOM_SPAN_MIN, ZOOM_SPAN_MAX = 0.06, 0.18
+# 패닝 목표 속도(초당 출력 픽셀). 줌 0.7%/s와 체감을 맞춘 값 — 1080px의 0.7%가 초당 7.6px다.
+# 패닝은 왕복하지 않고 한 방향으로 흘린다. 줌과 달리 확대율을 건드리지 않아 화질 비용이
+# 없고, 편도가 같은 여유로 두 배 멀리 간다.
+PAN_RATE_PX_PER_SEC = 7.0
+PAN_MIN_PX = 40  # 이보다 짧으면 캔버스만 키우고 체감은 없어 아예 걸지 않는다
+# 장면별 무빙 변주 (확대로 시작하는지 여부, 가로 줌 기준점 0~1, 패닝 정방향 여부).
+# 전 장면이 같은 무빙이면 단조로우므로 인접 항목은 줌 방향이 서로 다르게 배열한다(순환 지점 포함).
+_MOTIONS: tuple[tuple[bool, float, bool], ...] = (
+    (True, 0.50, True),
+    (False, 0.35, False),
+    (True, 0.65, True),
+    (False, 0.50, False),
+    (True, 0.35, False),
+    (False, 0.65, True),
+)
+
+
+def _zoom_amplitude(dur: float) -> float:
+    """장면 길이에 맞는 줌 폭. 왕복이라 절반 만에 피크를 찍으므로 목표 속도 × (길이/2)."""
+    return min(ZOOM_SPAN_MAX, max(ZOOM_SPAN_MIN, ZOOM_RATE_PER_SEC * dur / 2))
+
+
+def _pan_headroom(size: tuple[int, int] | None, portrait: bool = False) -> int:
+    """원본을 프레임에 커버 크롭할 때 잘려나가는 여유 픽셀(출력 스케일 기준).
+    이 범위 안에서는 **확대를 더 하지 않고** 패닝할 수 있다 — 화질 비용이 0이라는 뜻이다.
+    1024² 원본이면 가로형은 세로로 840px, 세로형은 가로로 840px이 남는다.
+    16:9 원본처럼 남는 여유가 없으면 0(패닝 없음)."""
+    if not size:
+        return 0
+    w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
+    iw, ih = size
+    if iw <= 0 or ih <= 0:
+        return 0
+    scale = max(w / iw, h / ih)
+    return int(max(0, round(iw * scale - w if portrait else ih * scale - h)))
+
+
+def _pan_amplitude(dur: float, headroom: int) -> int:
+    """장면 길이에 맞는 패닝 거리(출력 픽셀). 편도라 목표 속도 × 길이이며, 원본에서 남는
+    여유를 넘지 않는다. 여유를 넘겨 잡으면 확대를 더 해야 해서 화질이 깎인다."""
+    amp = min(int(PAN_RATE_PX_PER_SEC * dur), max(0, headroom))
+    return amp if amp >= PAN_MIN_PX else 0
+
+
+def _zoompan_filter(dur: float, portrait: bool = False, variant: int = 0,
+                    pan_px: int = 0) -> str:
+    """정지 이미지에 왕복(삼각파) 줌 + 편도 패닝을 건다.
+    줌은 절반까지 갔다 되돌아온다 — 한 방향으로만 밀면 인지 가능한 속도에서 총 확대율이
+    커져 1024px 원본이 무너지는데, 왕복은 최대 확대율을 묶은 채 속도만 올릴 수 있다.
+    패닝은 커버 크롭이 버리던 여유(pan_px)를 쓰므로 확대율이 늘지 않아 화질 손실이 없다.
+
+    필터 순서가 핵심이다. zoompan은 **입력 종횡비 그대로** 크롭하므로 세로로 긴 캔버스를
+    그대로 먹이고 s만 16:9로 주면 화면이 눌린다. 그래서 zoompan은 캔버스와 같은 크기로
+    돌리고(종횡비 유지), 그 뒤 crop이 프레임 크기 창을 움직여 패닝을 만든다.
+    crop을 zoompan 앞에 두면 안 된다 — zoompan이 첫 입력 프레임을 d프레임 동안 붙들어
+    패닝이 얼어붙는다(2026-08 ffmpeg로 확인).
+    2배 수퍼샘플 후 다운스케일해 정수 크롭 떨림을 서브픽셀로 묻는다."""
     w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
     frames = max(1, round(dur * 30))
-    bw, bh = w * 2, h * 2  # 수퍼샘플 캔버스(떨림 제거의 핵심)
-    zmax = 1.12
-    step = (zmax - 1.0) / frames  # 장면 전체에 걸쳐 균일하게 줌
-    return (
-        f"scale={bw}:{bh},"
-        f"zoompan=z='min(zoom+{step:.6f},{zmax})':d={frames}"
-        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={bw}x{bh}:fps=30,"
-        f"scale={w}:{h}:flags=bicubic,format=yuv420p"
+    bw, bh = w * 2, h * 2  # 수퍼샘플 프레임(떨림 제거의 핵심)
+    slack = max(0, pan_px) * 2  # 수퍼샘플 기준 여유
+    cw, ch = (bw + slack, bh) if portrait else (bw, bh + slack)
+    zoom_in_first, xpos, pan_forward = _MOTIONS[variant % len(_MOTIONS)]
+    amp = _zoom_amplitude(dur)
+    # 삼각파. on=0에서 0, on=frames/2에서 1, on=frames에서 다시 0으로 돌아온다.
+    tri = f"(1-abs(1-2*on/{frames}))"
+    z = (f"1.0+{amp:.4f}*{tri}" if zoom_in_first
+         else f"{1 + amp:.4f}-{amp:.4f}*{tri}")
+    graph = (
+        f"scale={cw}:{ch},"
+        f"zoompan=z='{z}':d={frames}"
+        f":x='(iw-iw/zoom)*{xpos:.2f}':y='(ih-ih/zoom)*0.50':s={cw}x{ch}:fps=30"
     )
+    if slack:
+        # 편도 이동. 정방향은 0에서 여유 끝까지, 역방향은 그 반대.
+        prog = f"(t/{dur:.3f})" if pan_forward else f"(1-t/{dur:.3f})"
+        if portrait:
+            graph += f",crop={bw}:{bh}:'(iw-ow)*{prog}':0"
+        else:
+            graph += f",crop={bw}:{bh}:0:'(ih-oh)*{prog}'"
+    return graph + f",scale={w}:{h}:flags=bicubic,format=yuv420p"
 
 
 def _xfade_graph(durations: list[float], td: float = XFADE_TD) -> tuple[str, str, str]:
@@ -360,6 +530,11 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     scene_local_cues: list[list[Cue]] = []
     images_missing = 0
     images_total = 0
+    # 줌 무빙 시작점을 job_id로 정해 같은 작업은 항상 같은 결과가 나오게 한다(_pick_bgm과 같은 방식).
+    motion_base = zlib.crc32(job_id.encode()) % len(_MOTIONS)
+    # 스크림은 배경에 굽지 않고 화면에 고정 오버레이한다 — 배경이 패닝으로 밀리기 때문.
+    scrim_png = work / "scrim.png"
+    _render_scrim_png(scrim_png, portrait=portrait)
     for i, scene in enumerate(scenes):
         caption = str(scene["caption"]).strip()
         narration = str(scene["narration"]).strip() or " "
@@ -400,26 +575,40 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             _append_silence(audio, CHAPTER_GAP, padded)
             audio = padded
         dur = _duration(audio)
+        # 커버 크롭이 버리던 여유만큼 캔버스를 키워 그 안에서 패닝한다(확대율은 그대로 → 화질 손실 없음).
+        pan_px = _pan_amplitude(dur, _pan_headroom(_image_size(bg_bytes), portrait))
+        fw, fh = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
+        canvas = (fw + pan_px, fh) if portrait else (fw, fh + pan_px)
         base_png = work / f"{i}.png"
-        _render_card("", "", base_png, bg_image_bytes=bg_bytes, portrait=portrait)
+        _render_card("", "", base_png, bg_image_bytes=bg_bytes, portrait=portrait,
+                     canvas=canvas, scrim=False)
         head_png = work / f"head_{i}.png"
         _render_headline_png(caption, head_png, portrait=portrait)
         # 헤드라인·문장 자막을 zoompan 위에 오버레이(줌과 무관하게 고정).
         spans = _spans_from_durations(seg_durs, SENTENCE_GAP)
         scene_local_cues.append([(st, en, sentences[k]) for k, (st, en) in enumerate(spans)])
-        # 입력: 0=배경, 1=오디오, 2=헤드라인, 3+=문장 자막.
-        inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio), "-loop", "1", "-i", str(head_png)]
-        graph = f"[0:v]{_zoompan_filter(dur, portrait)}[v0]"
-        # 헤드라인은 장면 내내 좌상단 고정(줌에 끌려다니지 않음).
-        graph += ";[v0][2:v]overlay=0:0[vh]"
+        # 입력: 0=배경, 1=오디오, 2=헤드라인, 3=스크림, 4+=자막 조각.
+        inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio),
+                  "-loop", "1", "-i", str(head_png), "-loop", "1", "-i", str(scrim_png)]
+        graph = f"[0:v]{_zoompan_filter(dur, portrait, variant=motion_base + i, pan_px=pan_px)}[v0]"
+        # 스크림·헤드라인은 화면에 고정(줌·패닝에 끌려다니지 않음). 스크림이 먼저 깔린다.
+        graph += ";[v0][3:v]overlay=0:0[vs];[vs][2:v]overlay=0:0[vh]"
         prev = "vh"
+        # 화면 자막은 한 줄씩 끊어 띄운다. cue(위에서 만든 SRT·번역 단위)는 문장 그대로 두고
+        # 여기서만 쪼갠다 — 번역기에 문장 조각을 넘기면 주어·술어가 잘려 품질이 떨어진다.
+        sub_wrap = SUB_WRAP_PORTRAIT if portrait else SUB_WRAP_LANDSCAPE
+        n = 0
         for k, (st, en) in enumerate(spans):
-            sub_png = work / f"sub_{i}_{k}.png"
-            _render_subtitle_png(sentences[k], sub_png, portrait=portrait)
-            inputs += ["-loop", "1", "-i", str(sub_png)]
-            out = f"v{k + 1}"
-            graph += f";[{prev}][{k + 3}:v]overlay=0:0:enable='between(t,{st:.3f},{en:.3f})'[{out}]"
-            prev = out
+            chunks = _wrap_chunks(sentences[k], sub_wrap)
+            for chunk, (cst, cen) in zip(chunks, _chunk_spans(chunks, st, seg_durs[k], en)):
+                sub_png = work / f"sub_{i}_{n}.png"
+                _render_subtitle_png(chunk, sub_png, portrait=portrait)
+                inputs += ["-loop", "1", "-i", str(sub_png)]
+                out = f"v{n + 1}"
+                graph += (f";[{prev}][{n + 4}:v]overlay=0:0"
+                          f":enable='between(t,{cst:.3f},{cen:.3f})'[{out}]")
+                prev = out
+                n += 1
         clip = work / f"scene_{i}.mp4"
         _run([
             FFMPEG_BIN, "-y", *inputs,

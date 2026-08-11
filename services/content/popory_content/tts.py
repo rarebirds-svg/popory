@@ -158,6 +158,13 @@ def _prep_text(text: str) -> str:
     return " ".join(out)
 
 
+def spoken_text(text: str) -> str:
+    """실제로 소리 나는 형태의 평문(특수문자 정규화 + 숫자→한글까지 반영).
+    자막 조각이 문장 안에서 차지하는 발화량 비중을 재는 데 쓴다 — 원문 글자수로 재면
+    '1,700'(5글자)이 '천칠백'(3음절)보다 길게 잡혀 자막 타이밍이 밀린다."""
+    return _NUM_TOKEN.sub(_read_number, _prep_text(text))
+
+
 def _to_ssml(text: str) -> str:
     """정리된 텍스트를 SSML로 감싼다. XML 이스케이프 후 순수 정수를 한자어 수사 평문으로
     바꾼다(16→십육). say-as 태그를 쓰지 않아 "1차"가 "일 (끊김) 차"로 갈라지지 않고

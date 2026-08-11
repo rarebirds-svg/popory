@@ -7,31 +7,36 @@ def _stub_gather(results):
     return lambda: results
 
 
+def _stub_send(sent):
+    def _send(sections, mode):
+        sent.update(sections=sections, mode=mode)
+        return 0
+    return _send
+
+
 def test_am_sends_and_saves(tmp_path, monkeypatch):
     results = [("포털", "ok", "정상")]
     sent = {}
     monkeypatch.setattr(runmod, "gather", _stub_gather(results))
-    monkeypatch.setattr(runmod, "send_telegram", lambda t, c, text: sent.update(text=text))
+    monkeypatch.setattr(runmod, "_send_digest", _stub_send(sent))
     monkeypatch.setattr(runmod, "STATE_FILE", str(tmp_path / "last.json"))
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "T")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "C")
     rc = runmod.run("am")
     assert rc == 0
-    assert "포털" in sent["text"]
+    assert sent["mode"] == "am"
+    assert sent["sections"]["service"]["status"] == "ok"
     assert json.load(open(tmp_path / "last.json"))["포털"] == "ok"
 
 
-def test_pm_silent_when_ok(tmp_path, monkeypatch):
+def test_pm_sends_even_when_all_ok(tmp_path, monkeypatch):
+    """무이상 억제를 없앴다. 침묵은 "정상"이 아니라 "발송기 고장"만을 뜻해야 한다."""
     results = [("포털", "ok", "정상")]
     sent = {}
     monkeypatch.setattr(runmod, "gather", _stub_gather(results))
-    monkeypatch.setattr(runmod, "send_telegram", lambda t, c, text: sent.update(text=text))
+    monkeypatch.setattr(runmod, "_send_digest", _stub_send(sent))
     monkeypatch.setattr(runmod, "STATE_FILE", str(tmp_path / "last.json"))
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "T")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "C")
     rc = runmod.run("pm")
     assert rc == 0
-    assert "text" not in sent  # 발송 안 함
+    assert sent["mode"] == "pm"
 
 
 # ── 이하: 이틀치 로그 읽기 헬퍼 단위 테스트 ──
