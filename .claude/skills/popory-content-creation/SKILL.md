@@ -63,7 +63,10 @@ popory `services/content`가 한 주제로 4개 채널(블로그·유튜브 동�
 - 전체 caption(해시태그 포함, 500자 이내) 작성.
 
 ## TTS (영상 내레이션) — `tts.py`
-- 기본 음성 **`ko-KR-Neural2-C`(남성)** — `options.py`의 `VOICE["male"]`, `DEFAULTS`가 `voice: "male"`. 한때 Chirp3-HD Charon이었으나 2026-06-29 커밋 `b3d3eeb`에서 이전 목소리로 복귀했다(그 이전 영상과 목소리가 다르다). 선택지 `female-calm`=`ko-KR-Chirp3-HD-Aoede`, `female-bright`=`ko-KR-Chirp3-HD-Leda`. speakingRate 1.0, pitch는 아예 보내지 않는다(모델 기본값).
+- 기본 음성 **`ko-KR-Chirp3-HD-Charon`(남성, 깊고 무게감)** — `options.py`의 `VOICE["male"]`, `DEFAULTS`가 `voice: "male"`. 선택지 `female-calm`=`ko-KR-Chirp3-HD-Aoede`, `female-bright`=`ko-KR-Chirp3-HD-Leda`. speakingRate 1.0, pitch는 아예 보내지 않는다(모델 기본값). 이제 세 선택지 모두 Chirp3-HD다.
+- **Charon 이력** — 2026-06-13 설계에서 Charon으로 갔다가 2026-06-29 `b3d3eeb`에서 Neural2-C로 되돌렸고, 2026-08 다시 Charon으로 왔다. 되돌림 사유는 **취향(이전 목소리 복귀)이지 결함이 아니다** — 그 커밋은 라벨 매핑과 테스트 단언 3줄만 건드렸고 전처리 튜닝은 유지했다. 그 뒤 Chirp3-HD 고유 발음 문제(소수점 흘림 `8705cd8`, 한자 괄호 이중발음 `09e7634`, 앰퍼샌드 `cbae665`)를 전부 잡았으므로 재시도 조건이 달라졌다. **채널 목소리가 또 바뀌므로** 기존 영상과 이어 들으면 차이가 난다.
+- **음성 비교 도구** — `scripts/compare_voices.py`가 같은 원고를 여러 화자로 합성해 `~/Downloads/popory_voice_ab/`에 MP3+비교 페이지를 만든다. 실제 영상과 같은 조건(문장별 합성+`SENTENCE_GAP` 무음)으로 들린다. `--list`로 계정의 ko-KR 화자 목록을 조회한다.
+- **무료 한도 버킷** — Google Cloud TTS는 Neural2·Chirp3-HD **각각 월 100만 자**가 만료 없이 무료다. 실측 사용량은 월 약 17만 자(SSML 태그 포함, 롱폼 16장면+쇼츠 기준)로 한도의 약 17%. Charon 전환으로 세 음성이 모두 Chirp3-HD 버킷 하나를 쓰지만 여전히 여유가 크다. 초과 시 단가는 Chirp3-HD $30/100만 자.
 - 입력은 **`ssml` 필드**로 보낸다(`<speak>…</speak>`). 과거 `markup`/`[pause long]`은 제거 — 문장별 합성으로 바뀐 뒤 단일 문장이라 죽은 코드였고, markup 프리뷰 모드가 숫자 정규화를 망가뜨려(아래) `ssml`로 전환. 문장 사이 호흡은 `video.py`의 `SENTENCE_GAP`(0.7초) 무음 갭이 담당.
 - **챕터(상단 헤드라인) 전환은 마침표 인터벌의 2배** — 장면 caption(상단 챕터)이 바뀌는 장면 경계엔 문장 사이 `SENTENCE_GAP`보다 긴 호흡을 둔다. `video.py`의 `CHAPTER_GAP = 2 * SENTENCE_GAP`(1.4초) 무음을 비마지막 장면 오디오 끝에 붙여(`_append_silence`) 한 챕터가 끝났음을 청각적으로 구분한다. 장면 전환 크로스페이드(`XFADE_TD` 0.4초)가 무음 끝을 살짝 먹어 실제 정적은 조금 짧게 들린다. 마지막 장면 뒤엔 넣지 않는다.
 - **정수·소수를 붙인 한글로 변환** — 정수(`16`→십육)와 점 1개 소수(`29.2`→이십구점이, 정수부+점+소수부 자리별)를 `_read_number`/`_read_decimal`이 붙인 한글로 치환한다. say-as 태그를 쓰지 않아 뒤 글자와 끊기지 않는다("1차"→"일차"). **소수를 숫자로 두면 안 된다** — Chirp3-HD가 값에 따라(`29.2` 등) 소수점을 흘려 "이십구 이"로 읽는다(2026-07 귀 확인). 붙인 한글은 `29.2`·`41.8` 모두 점을 정확히 읽는다. **시간(3:00)·슬래시 날짜(2024/06)·점 여러 개(2024.06.21·버전 1.2.3)**는 모델에 맡긴다. 퍼센트 기호 `%`는 `_normalize_for_tts`에서 '퍼센트'로 치환(`12.3%`→십이점삼퍼센트), 앰퍼샌드 `&`는 '앤'으로(`S&P`→에스앤피).
@@ -74,7 +77,8 @@ popory `services/content`가 한 주제로 4개 채널(블로그·유튜브 동�
 - **소수는 문장 분할보다 앞서 깨질 수 있다** — TTS 는 문장별로 따로 합성하므로(`video.py` `_split_sentences` → `synthesize`), 분할이 소수점에서 끊기면 `tts.py` 의 소수→한글 변환이 온전한 토큰을 못 받아 무력화된다. 2026-08 에 `6.25`가 `6.` / `25`로 갈려 "육 … 이십오"로, `0.0008`은 `0.` / `0008`(→정수 8)로 갈려 "영 … 팔"로 읽혔다(커밋 `fd07c86`에서 마침표 뒤가 숫자면 끊지 않도록 수정). **tts.py 만 보고 숫자 읽기를 판단하지 말 것** — 그 앞 단계가 텍스트를 어떻게 자르는지까지 확인해야 한다. 같은 이유로 자막도 같은 지점에서 끊긴다.
 
 ## 이미지 (영상·캐러셀 배경) — `worker.py` `_safe_image`, imagegen
-- **2단 라우터**: 1순위 Cloudflare flux-schnell(무료), 한도 소진·실패 시 로컬 RealVisXL 폴백.
+- **2단 라우터**: 1순위 Cloudflare Workers AI, 한도 소진·실패 시 로컬 RealVisXL 폴백.
+- CF 기본 모델은 **FLUX.2 klein 9B**(2026-08 교체 — schnell은 인물·디테일 약함). 요청 body `model: "schnell"`로 구모델 호출 가능(A/B·롤백용, `scripts/compare_image_models.py`). klein은 unit-priced **$0.015/장(1024×1024)** 로 schnell의 무료 neurons와 과금 방식이 다르다 — worker의 4006(neurons) 소진 감지는 klein엔 안 걸릴 수 있음.
 - **이미지 안에 글자/텍스트 금지.**
 - image_prompt는 영어 한 문장. 기본 스타일 키워드 **`photorealistic, cinematic`** (영상 시리즈에 정해진 룩이 따로 있으면 그것을 우선).
 - 인물: 등장·얼굴 OK이되 **편안하고 자연스러운 표정**, 해부학적으로 정상·온전한 인체(잘리거나 기형 금지), 과도한 얼굴·손 클로즈업 자제. (예전 "무섭고 기형적인 얼굴" 피드백 반영.)

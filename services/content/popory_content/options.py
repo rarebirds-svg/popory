@@ -3,7 +3,10 @@ import json
 
 SCENE_COUNT = {"3": 5, "5": 8, "7": 12, "10": 16}
 SHORT_SCENE_COUNT = {"15": 3, "30": 5, "60": 8}
-VOICE = {"female-calm": "ko-KR-Chirp3-HD-Aoede", "female-bright": "ko-KR-Chirp3-HD-Leda", "male": "ko-KR-Neural2-C"}
+# male 은 Chirp3-HD Charon(깊고 무게감 있는 남성). 2026-06-29 b3d3eeb 에서 Neural2-C 로 되돌렸다가
+# 2026-08 재적용 — 되돌림 사유는 취향(이전 목소리 복귀)이었고, 그 뒤 Chirp3-HD 고유 발음 문제
+# (소수점 흘림·한자 이중발음·앰퍼샌드)를 tts.py 가 모두 잡아 재시도 조건이 달라졌다.
+VOICE = {"female-calm": "ko-KR-Chirp3-HD-Aoede", "female-bright": "ko-KR-Chirp3-HD-Leda", "male": "ko-KR-Chirp3-HD-Charon"}
 STYLE = {
     "photo": "photorealistic, cinematic",
     "illust": "digital illustration, clean",
