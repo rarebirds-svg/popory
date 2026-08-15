@@ -178,7 +178,8 @@ IMAGEGEN_URL = os.environ.get("POPORY_IMAGEGEN_URL", "http://localhost:8765/gene
 # 로컬 fp32 SDXL/SD 생성은 맥미니 16GB 메모리 압박에서 장면당 ~110초가 걸린다.
 # 120초는 빠듯해 종종 read timeout → 재시도 낭비 → 단색 폴백을 유발했다. 여유 상향.
 IMAGE_TIMEOUT_SECONDS = int(os.environ.get("POPORY_IMAGEGEN_TIMEOUT", "300"))
-# 1순위 = Cloudflare flux-schnell(무료 ~10k neurons/일). 한도 소진(4006)이면 로컬 RealVisXL 폴백.
+# 1순위 = Cloudflare flux-schnell(무료 ~10k neurons/일). 한도 소진(4006)이면 로컬 폴백
+# (services/imagegen — 2026-08 부터 FLUX.2 klein 4B, 그 전엔 RealVisXL).
 USE_CF_IMAGE = os.environ.get("POPORY_USE_CF_IMAGE", "1") != "0"
 CF_AI_IMAGE_PATH = "/api/content/ai-image"
 CF_QUOTA_FILE = LOGS_DIR / "cf_quota.json"

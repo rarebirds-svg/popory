@@ -4,7 +4,9 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
   "torch>=2.4",
-  "diffusers>=0.30",
+  # FLUX.2 klein(Flux2KleinPipeline)은 2026-08 기준 PyPI 릴리스에 아직 없고 main 에만 있다
+  # (BFL 모델카드도 소스 설치를 안내). 릴리스에 들어오면 "diffusers>=X" 로 되돌릴 것.
+  "diffusers @ git+https://github.com/huggingface/diffusers.git",
   "transformers>=4.44",
   "accelerate>=0.33",
   "safetensors>=0.4",
