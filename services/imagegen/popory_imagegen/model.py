@@ -1,5 +1,4 @@
-# 로컬 이미지 생성 — ModelManager(lazy-load·직렬화·유휴 언로드) + diffusers 실 로더.
-# 기본 모델은 FLUX.2 klein 4B(Apache 2.0). realvisxl(SDXL)·sd15 는 폴백으로 남긴다.
+# SDXL 로컬 이미지 생성 — ModelManager(lazy-load·직렬화·유휴 언로드) + diffusers 실 로더.
 import gc
 import os
 import threading
@@ -87,58 +86,8 @@ class _DiffusersPipe:
             pass
 
 
-class _Flux2Pipe:
-    """FLUX.2 klein 파이프 래퍼. SDXL 래퍼와 두 가지가 다르다:
-    ① negative_prompt 를 쓰지 않는다 — klein 은 guidance-distilled 라 네거티브가 동작하지
-       않고, 인자로 넘기면 파이프라인이 TypeError 를 낸다. 서버가 항상 넘기므로 받아서 버린다.
-       (기형 인체 억제는 네거티브 대신 FLUX.2 자체 해부학 품질에 의존한다.)
-    ② 기본 해상도 1024 — FLUX.2 학습 해상도. SDXL 경로의 768 보다 크다."""
-
-    def __init__(self, pipe: Any, steps: int, guidance: float, width: int, height: int):
-        self._pipe = pipe
-        self._steps = steps
-        self._guidance = guidance
-        self._w = width
-        self._h = height
-
-    def generate(self, prompt: str, negative_prompt: str | None = None,
-                 steps: int | None = None, width: int | None = None,
-                 height: int | None = None) -> bytes:
-        del negative_prompt  # klein 은 네거티브 미지원(위 ① 참고)
-        img = self._pipe(
-            prompt=prompt,
-            num_inference_steps=steps or self._steps,
-            guidance_scale=self._guidance,
-            width=width or self._w,
-            height=height or self._h,
-        ).images[0]
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
-
-    def close(self) -> None:
-        try:
-            import torch
-            del self._pipe
-            if torch.backends.mps.is_available():
-                torch.mps.empty_cache()
-        except Exception:  # noqa: BLE001 — 정리 실패는 무시
-            pass
-
-
-# FLUX.2 klein 생성 파라미터. klein 4B 는 distilled 라 4스텝 고정이 표준이고 guidance 는
-# 사실상 무시된다. 맥미니 스모크로 핀고정할 것(스텝을 올려도 품질이 안 오르면 4 유지).
-FLUX2_STEPS = int(os.environ.get("POPORY_IMAGEGEN_FLUX2_STEPS", "4"))
-FLUX2_GUIDANCE = float(os.environ.get("POPORY_IMAGEGEN_FLUX2_GUIDANCE", "1.0"))
-FLUX2_SIZE = int(os.environ.get("POPORY_IMAGEGEN_FLUX2_SIZE", "1024"))
-# 16GB 공유 메모리 대응. klein 4B 는 BF16 로 ~13GB 를 쓰는데 맥미니는 KataGo·TTS·워커와
-# RAM 을 나눠 쓴다. diffusers 의 순차 오프로드(text_encoder->transformer->vae)로 피크를
-# 낮춘다. 메모리가 충분하면 0 으로 꺼서 속도를 얻는다.
-FLUX2_OFFLOAD = os.environ.get("POPORY_IMAGEGEN_FLUX2_OFFLOAD", "1") != "0"
-
-
-def build_pipe(model_name: str | None = None) -> Any:
-    """env POPORY_IMAGEGEN_MODEL(flux2klein|realvisxl|sd15)에 따라 diffusers 파이프 구성.
+def build_pipe(model_name: str | None = None) -> _DiffusersPipe:
+    """env POPORY_IMAGEGEN_MODEL(realvisxl|sd15)에 따라 diffusers 파이프 구성.
     파라미터는 맥미니 스모크로 핀고정한다(diffusers 버전차 흡수)."""
     import torch
     from diffusers import (
@@ -147,29 +96,7 @@ def build_pipe(model_name: str | None = None) -> Any:
         StableDiffusionXLPipeline,
     )
 
-    name = model_name or os.environ.get("POPORY_IMAGEGEN_MODEL", "flux2klein")
-    if name == "flux2klein":
-        # FLUX.2 klein 4B(Apache 2.0 — 상업 이용 자유). SDXL 세대보다 인물·디테일이 낫다.
-        # ① DiffusionPipeline 로 로드 — 레포의 model_index.json 이 파이프라인 클래스를
-        #    고르므로 Flux2KleinPipeline/KV 중 무엇이든 코드 수정 없이 받는다.
-        # ② bfloat16 — MPS 에서 fp16 은 오버플로(NaN→검정). SDXL 경로와 같은 이유.
-        # ③ int4 는 MPS 에서 PyTorch 버그로 불가하므로 쓰지 않는다(필요하면 int8).
-        from diffusers import DiffusionPipeline
-
-        pipe = DiffusionPipeline.from_pretrained(
-            "black-forest-labs/FLUX.2-klein-4B", torch_dtype=torch.bfloat16
-        )
-        if FLUX2_OFFLOAD:
-            # 순차 오프로드는 내부에서 device 를 잡으므로 .to() 를 부르지 않는다.
-            pipe.enable_model_cpu_offload(device="mps")
-        else:
-            pipe.to("mps")
-        try:
-            pipe.vae.enable_tiling()  # VAE 디코드 피크 완화(미지원 버전이면 무시)
-        except Exception:  # noqa: BLE001
-            pass
-        return _Flux2Pipe(pipe, steps=FLUX2_STEPS, guidance=FLUX2_GUIDANCE,
-                          width=FLUX2_SIZE, height=FLUX2_SIZE)
+    name = model_name or os.environ.get("POPORY_IMAGEGEN_MODEL", "realvisxl")
     if name == "sd15":
         # fp16 파일을 로드해 fp32로 업캐스트한다. MPS fp16 연산은 NaN→검은 이미지를
         # 내므로 연산은 fp32로, 다운로드는 작은 fp16 가중치 재사용으로 막는다.

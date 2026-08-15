@@ -77,12 +77,7 @@ popory `services/content`가 한 주제로 4개 채널(블로그·유튜브 동�
 - 리터럴 대괄호 `[]`·문장 앞 간투사(음·어…)도 제거.
 
 ## 이미지 (영상·캐러셀 배경) — `worker.py` `_safe_image`, imagegen
-- **2단 라우터**: 1순위 Cloudflare flux-schnell(무료 ~10k neurons/일), 한도 소진·실패 시 로컬 폴백. 둘 다 무료다.
-- **로컬 모델은 FLUX.2 klein 4B**(2026-08 교체, 이전 RealVisXL). Apache 2.0이라 상업 이용이 자유롭고 SDXL 세대보다 인물·디테일이 낫다. `POPORY_IMAGEGEN_MODEL`로 `realvisxl`·`sd15` 롤백 가능(코드에 그대로 남아 있다).
-  - **네거티브 프롬프트가 없다** — klein은 guidance-distilled라 네거티브가 동작하지 않고 인자로 넘기면 TypeError다. `_Flux2Pipe`가 받아서 버린다. 기형 인체 억제는 SDXL 때의 `NEGATIVE_DEFAULT` 대신 **FLUX.2 자체 해부학 품질에 의존**하므로, 교체 후 인물 장면을 특히 눈으로 확인할 것.
-  - **16GB 공유 메모리가 최대 위험** — klein 4B는 BF16으로 약 13GB를 쓰는데 맥미니는 KataGo·TTS·워커와 RAM을 나눈다. 기본값은 순차 오프로드 켬(`POPORY_IMAGEGEN_FLUX2_OFFLOAD=1`). MPS는 int4를 지원하지 않으니(PyTorch 버그) int4로 줄일 생각은 말 것.
-  - **diffusers를 소스에서 설치해야 한다** — `Flux2KleinPipeline`이 2026-08 기준 PyPI 릴리스에 없다. `pip install -U 'git+https://github.com/huggingface/diffusers.git'`.
-  - 스텝·guidance·해상도는 `POPORY_IMAGEGEN_FLUX2_{STEPS,GUIDANCE,SIZE}`로 튜닝(기본 4스텝·1.0·1024). **바꾸기 전 `scripts/smoke_flux2.py`로 장당 시간·피크 RSS를 실측**할 것 — 워커 타임아웃이 300초다.
+- **2단 라우터**: 1순위 Cloudflare flux-schnell(무료), 한도 소진·실패 시 로컬 RealVisXL 폴백.
 - **이미지 안에 글자/텍스트 금지.**
 - image_prompt는 영어 한 문장. 기본 스타일 키워드 **`photorealistic, cinematic`** (영상 시리즈에 정해진 룩이 따로 있으면 그것을 우선).
 - 인물: 등장·얼굴 OK이되 **편안하고 자연스러운 표정**, 해부학적으로 정상·온전한 인체(잘리거나 기형 금지), 과도한 얼굴·손 클로즈업 자제. (예전 "무섭고 기형적인 얼굴" 피드백 반영.)
