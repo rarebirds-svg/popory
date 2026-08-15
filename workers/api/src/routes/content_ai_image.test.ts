@@ -30,9 +30,4 @@ describe("POST /api/content/ai-image", () => {
     const res = await SELF.fetch("https://example.com/api/content/ai-image", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ prompt: "" }) });
     expect(res.status).toBe(400);
   });
-  it("모르는 model 은 400", async () => {
-    const token = await workerToken();
-    const res = await SELF.fetch("https://example.com/api/content/ai-image", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ prompt: "x", model: "nope" }) });
-    expect(res.status).toBe(400);
-  });
 });

@@ -74,6 +74,11 @@ _NUM_TOKEN = re.compile(r"\d+(?:[.:/]\d+)*")
 # <break>는 실제 무음 삽입이라 과거 [pause] 마크업의 "어/으/응" 추임새 부작용이 없다.
 # POPORY_TTS_COMMA_BREAK_MS로 튜닝(0이면 비활성).
 COMMA_BREAK_MS = int(os.environ.get("POPORY_TTS_COMMA_BREAK_MS", "175"))
+# 말속도. 1.06은 Chirp3-HD 기준 귀 튜닝값 — 0.96이 "살짝 쳐지는 느낌"이라 294f614(2026-06-26)에서
+# 콤마 break 단축(350→175ms)과 한 세트로 상향했다. f8e2898(2026-06-29)에서 1.0으로 내렸으나
+# 그건 같은 날 기본 음성을 Chirp3-HD Charon→Neural2-C로 되돌린 것과 짝이었다(Neural2 기준값).
+# 기본 음성이 다시 Charon이므로 Chirp3-HD 튜닝값으로 복귀. POPORY_TTS_SPEAKING_RATE로 튜닝.
+SPEAKING_RATE = float(os.environ.get("POPORY_TTS_SPEAKING_RATE", "1.06"))
 _COMMA = re.compile(r",\s*")
 # 콤마 직전 나열 항목(공백·콤마 아닌 연속 글자) + 콤마 + 뒤 공백.
 _COMMA_ITEM = re.compile(r"([^\s,]*),[ \t]*")
@@ -195,7 +200,7 @@ def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
             json={
                 "input": {"ssml": _to_ssml(_prep_text(text))},
                 "voice": {"languageCode": LANGUAGE, "name": voice},
-                "audioConfig": {"audioEncoding": "MP3", "speakingRate": 1.0},
+                "audioConfig": {"audioEncoding": "MP3", "speakingRate": SPEAKING_RATE},
             },
             timeout=30,
         )
