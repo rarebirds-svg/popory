@@ -74,11 +74,13 @@ _NUM_TOKEN = re.compile(r"\d+(?:[.:/]\d+)*")
 # <break>는 실제 무음 삽입이라 과거 [pause] 마크업의 "어/으/응" 추임새 부작용이 없다.
 # POPORY_TTS_COMMA_BREAK_MS로 튜닝(0이면 비활성).
 COMMA_BREAK_MS = int(os.environ.get("POPORY_TTS_COMMA_BREAK_MS", "175"))
-# 말속도. 1.06은 Chirp3-HD 기준 귀 튜닝값 — 0.96이 "살짝 쳐지는 느낌"이라 294f614(2026-06-26)에서
-# 콤마 break 단축(350→175ms)과 한 세트로 상향했다. f8e2898(2026-06-29)에서 1.0으로 내렸으나
-# 그건 같은 날 기본 음성을 Chirp3-HD Charon→Neural2-C로 되돌린 것과 짝이었다(Neural2 기준값).
-# 기본 음성이 다시 Charon이므로 Chirp3-HD 튜닝값으로 복귀. POPORY_TTS_SPEAKING_RATE로 튜닝.
-SPEAKING_RATE = float(os.environ.get("POPORY_TTS_SPEAKING_RATE", "1.06"))
+# 말속도. 화자 계열과 짝이 맞아야 한다 — 1.0은 Neural2 기준값, 1.06은 Chirp3-HD 기준 귀 튜닝값이다.
+# 이력: 0.96이 "살짝 쳐지는 느낌"이라 294f614(2026-06-26)에서 콤마 break 단축(350→175ms)과 한 세트로
+# 1.06으로 올렸고, f8e2898(06-29)에서 기본 음성을 Charon→Neural2-C로 되돌리며 1.0으로 내렸다.
+# cb48d04 머지에서 한때 VOICE["male"]=Neural2-C 인데 이 값만 1.06으로 남아 어긋났다(PR #5 브랜치가
+# aae6588 보다 먼저 갈라져 나와 섞인 결과). 기본 음성이 Neural2-C 이므로 1.0으로 통일한다.
+# 화자를 Chirp3-HD 계열로 바꾸면 이 값도 1.06으로 함께 올릴 것. POPORY_TTS_SPEAKING_RATE로 튜닝.
+SPEAKING_RATE = float(os.environ.get("POPORY_TTS_SPEAKING_RATE", "1.0"))
 _COMMA = re.compile(r",\s*")
 # 콤마 직전 나열 항목(공백·콤마 아닌 연속 글자) + 콤마 + 뒤 공백.
 _COMMA_ITEM = re.compile(r"([^\s,]*),[ \t]*")
