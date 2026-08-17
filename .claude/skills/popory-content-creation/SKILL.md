@@ -81,7 +81,7 @@ popory `services/content`가 한 주제로 4개 채널(블로그·유튜브 동�
 ## 이미지 (영상·캐러셀 배경) — `worker.py` `_safe_image`, imagegen
 - **2단 라우터**: 1순위 Cloudflare Workers AI, 한도 소진·실패 시 로컬 RealVisXL 폴백.
 - CF 기본 모델은 **FLUX.2 klein 9B**(2026-08 교체 — schnell은 인물·디테일 약함). 요청 body `model: "schnell"`로 구모델 호출 가능(A/B·롤백용, `scripts/compare_image_models.py`). klein은 unit-priced **$0.015/장(1024×1024)** 로 schnell의 무료 neurons와 과금 방식이 다르다 — worker의 4006(neurons) 소진 감지는 klein엔 안 걸릴 수 있음.
-- **모델 선택은 워커가 아니라 API에 있다** — `services/content`는 포털 `/api/content/ai-image`만 호출하고, 실제 모델은 `workers/api/src/routes/content_ai_image.ts`의 `MODELS`(기본 `modelKey = "klein"`)가 고른다. `worker.py`의 `_try_cloudflare`·`_safe_image` **주석은 아직 "flux-schnell"이라고 적혀 있어 실제와 다르다** — 모델을 확인할 땐 워커 주석이 아니라 이 라우트를 볼 것.
+- **모델 선택은 워커가 아니라 API에 있다** — `services/content`는 포털 `/api/content/ai-image`만 호출하고 모델 이름을 모른다. 실제 모델은 `workers/api/src/routes/content_ai_image.ts`의 `MODELS`(기본 `modelKey = "klein"`)가 고른다. 모델을 확인·교체할 땐 워커가 아니라 이 라우트를 볼 것.
 - **이미지 안에 글자/텍스트 금지.**
 - image_prompt는 영어 한 문장. 기본 스타일 키워드 **`photorealistic, cinematic`** (영상 시리즈에 정해진 룩이 따로 있으면 그것을 우선).
 - 인물: 등장·얼굴 OK이되 **편안하고 자연스러운 표정**, 해부학적으로 정상·온전한 인체(잘리거나 기형 금지), 과도한 얼굴·손 클로즈업 자제. (예전 "무섭고 기형적인 얼굴" 피드백 반영.)

@@ -177,7 +177,10 @@ IMAGEGEN_URL = os.environ.get("POPORY_IMAGEGEN_URL", "http://localhost:8765/gene
 # 로컬 fp32 SDXL/SD 생성은 맥미니 16GB 메모리 압박에서 장면당 ~110초가 걸린다.
 # 120초는 빠듯해 종종 read timeout → 재시도 낭비 → 단색 폴백을 유발했다. 여유 상향.
 IMAGE_TIMEOUT_SECONDS = int(os.environ.get("POPORY_IMAGEGEN_TIMEOUT", "300"))
-# 1순위 = Cloudflare flux-schnell(무료 ~10k neurons/일). 한도 소진(4006)이면 로컬 RealVisXL 폴백.
+# 1순위 = Cloudflare Workers AI(포털 CF_AI_IMAGE_PATH 경유). 실패·한도 소진(4006)이면 로컬 RealVisXL 폴백.
+# 모델은 이 파일이 아니라 workers/api 의 content_ai_image 라우트가 고른다(기본 FLUX.2 klein 9B,
+# body 의 model 로 구 schnell 호출 가능). 아래 4006/neurons 감지는 무료 neurons 로 과금되던
+# schnell 기준이라, unit-priced 인 klein 에서는 안 걸리고 일반 실패로 폴백할 수 있다.
 USE_CF_IMAGE = os.environ.get("POPORY_USE_CF_IMAGE", "1") != "0"
 CF_AI_IMAGE_PATH = "/api/content/ai-image"
 CF_QUOTA_FILE = LOGS_DIR / "cf_quota.json"
@@ -259,7 +262,8 @@ def heartbeat_loop(client, stop: threading.Event) -> None:
 
 
 def _try_cloudflare(client, prompt: str) -> bytes | None:
-    """CF flux-schnell로 1장. 한도(4006/neurons)면 그날 소진 표시 후 None(→로컬 폴백). 그 외 실패도 None."""
+    """CF Workers AI로 1장(모델은 포털 라우트가 결정, 기본 klein). 한도(4006/neurons)면
+    그날 소진 표시 후 None(→로컬 폴백). 그 외 실패도 None."""
     try:
         content = client.post_for_bytes(CF_AI_IMAGE_PATH, json={"prompt": prompt})
         _verify_image(content)
@@ -272,7 +276,7 @@ def _try_cloudflare(client, prompt: str) -> bytes | None:
 
 
 def _safe_image(client, prompt: str, job_id: str = "?"):
-    """배경 1장 생성. 1순위 CF flux-schnell(무료), 한도 소진·실패 시 로컬 RealVisXL 폴백.
+    """배경 1장 생성. 1순위 CF Workers AI(기본 klein), 한도 소진·실패 시 로컬 RealVisXL 폴백.
     깨진 응답은 검증으로 걸러 재시도, 최종 실패만 image_failed 로그+None."""
     if USE_CF_IMAGE and client is not None and not _cf_exhausted_today():
         img = _try_cloudflare(client, prompt)
