@@ -320,5 +320,5 @@ def test_synthesize_uses_ssml_and_rate(monkeypatch):
     assert ssml and ssml.startswith("<speak>")
     assert "십육" in ssml  # 숫자를 한자어 수사 평문으로 변환
     assert "markup" not in payload["input"]
-    assert payload["audioConfig"]["speakingRate"] == 1.0
+    assert payload["audioConfig"]["speakingRate"] == tts.SPEAKING_RATE  # Chirp3-HD 튜닝값 1.06
     assert payload["voice"]["name"] == "ko-KR-Chirp3-HD-Aoede"
