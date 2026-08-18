@@ -29,7 +29,7 @@ from popory_content.instagram_image_render import render_carousel
 from popory_content.instagram_upload import upload_reels, upload_carousel, InstagramUploadError
 from popory_content.facebook_upload import upload_reels as fb_upload_reels
 from popory_content.youtube_playlist import assign_to_playlist
-from popory_content.image_review import review_image, harden_prompt
+from popory_content.image_review import review_image, harden_prompt, is_unavailable
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
@@ -315,6 +315,11 @@ def _safe_image(client, prompt: str, job_id: str = "?"):
             break  # 생성 자체가 실패 — 프롬프트를 바꿔도 같으므로 중단(이미 로그됨)
         ok, reason = review_image(img, job_id)
         if ok:
+            # 검수를 "못 한" 통과는 드러낸다 — 조용히 넘어가면 claude 인증 만료 같은
+            # 사고에서 전량이 무검수로 통과하는데 아무도 모른다.
+            if is_unavailable(reason):
+                append_log(LOGS_DIR, {"worker": "content", "status": "image_review_error",
+                                      "job": job_id, "reason": reason})
             return img
         last_img = img
         append_log(LOGS_DIR, {"worker": "content", "status": "image_rejected", "job": job_id,

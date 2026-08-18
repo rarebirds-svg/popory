@@ -57,6 +57,36 @@ def _frames_from_video(mp4: Path, interval: int, work: Path) -> list[Path]:
     return sorted(out_dir.glob("*.png"))
 
 
+def _spread(targets: list[Path], limit: int) -> list[Path]:
+    """표본을 잡(디렉터리) 전체에 고루 펴서 뽑는다.
+
+    단순히 앞에서 limit 장을 자르면 정렬상 앞선 잡 한두 개의 배경만 보게 돼
+    "전체 중 몇 %가 기형인가"를 전혀 대표하지 못한다(2026-08 실제로 30장이 잡
+    2개에 몰려 탈락 0건이 나왔다). 디렉터리별로 라운드로빈해 한 잡에서 1장씩
+    돌아가며 채운다."""
+    if limit <= 0 or len(targets) <= limit:
+        return targets
+    groups: dict[Path, list[Path]] = {}
+    for f in targets:
+        groups.setdefault(f.parent, []).append(f)
+    picked: list[Path] = []
+    order = sorted(groups)
+    i = 0
+    while len(picked) < limit:
+        progressed = False
+        for d in order:
+            bucket = groups[d]
+            if i < len(bucket):
+                picked.append(bucket[i])
+                progressed = True
+                if len(picked) >= limit:
+                    break
+        if not progressed:
+            break
+        i += 1
+    return picked
+
+
 def _report(rows: list[dict], out_dir: Path) -> None:
     rejected = [r for r in rows if not r["ok"]]
     cards = "".join(
@@ -109,7 +139,7 @@ def main() -> None:
         shutil.rmtree(work, ignore_errors=True)
         return
     if args.limit:
-        targets = targets[: args.limit]
+        targets = _spread(targets, args.limit)
 
     print(f"{len(targets)}장 검수 시작 — 장당 수 초~수십 초 걸립니다.\n")
     rows: list[dict] = []
@@ -131,7 +161,11 @@ def main() -> None:
 
     shutil.rmtree(work, ignore_errors=True)
     bad = sum(1 for r in rows if not r["ok"])
+    unavail = sum(1 for r in rows if r["ok"] and ir.is_unavailable(r["reason"]))
     print(f"\n총 {len(rows)}장 중 탈락 {bad}장 ({bad / len(rows) * 100:.0f}%)")
+    if unavail:
+        # 통과로 집계되지만 실제로는 판정을 못 한 것 — 0건 탈락을 "다 멀쩡함"으로 오독하면 안 된다.
+        print(f"⚠️  이 중 {unavail}장은 검수를 수행하지 못했다(fail-open). results.json 의 reason 확인.")
     print(f"열기: open {out_dir}/index.html")
 
 

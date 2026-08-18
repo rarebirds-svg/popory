@@ -46,6 +46,17 @@ SYSTEM_PROMPT = """당신은 유튜브 영상 배경 이미지의 품질 검수�
 <image_review>reject: 짧은 사유</image_review>"""
 
 
+# 검수를 "수행하지 못한" 경우의 사유 접두사. fail-open 이라 통과(True)로 나가지만
+# "진짜 멀쩡함"과 "검수기가 죽음"은 구분돼야 한다 — 구분이 없으면 claude 인증이 만료된
+# 날 전량이 조용히 통과하는데 아무도 모른다.
+UNAVAILABLE_PREFIX = "검수불가"
+
+
+def is_unavailable(reason: str) -> bool:
+    """판정을 못 한 통과인지(=fail-open) 여부."""
+    return reason.startswith(UNAVAILABLE_PREFIX)
+
+
 class ReviewError(Exception):
     """판정 결과를 파싱하지 못함(재시도 대상)."""
 
@@ -66,8 +77,10 @@ def _parse(out: str) -> tuple[bool, str]:
 def review_image(png: bytes, job_id: str = "?") -> tuple[bool, str]:
     """이미지 1장을 검수한다. (통과여부, 사유) 반환.
     검수를 못 하면(비활성·CLI 실패·파싱 실패) 통과로 본다 — fail-open."""
-    if not ENABLED or not png:
-        return True, ""
+    if not ENABLED:
+        return True, f"{UNAVAILABLE_PREFIX}: 검수 비활성(POPORY_IMAGE_REVIEW=0)"
+    if not png:
+        return True, f"{UNAVAILABLE_PREFIX}: 빈 이미지"
     tmp = None
     try:
         # claude CLI 가 Read 로 열 수 있게 파일로 떨군다. 경로에 job_id 를 넣어 로그와 대조 가능.
@@ -85,8 +98,9 @@ def review_image(png: bytes, job_id: str = "?") -> tuple[bool, str]:
             max_attempts=MAX_ATTEMPTS,
             allowed_tools=("Read",),
         )
-    except Exception:  # noqa: BLE001 — 검수 실패가 생성을 막으면 안 된다(fail-open)
-        return True, ""
+    except Exception as e:  # noqa: BLE001 — 검수 실패가 생성을 막으면 안 된다(fail-open)
+        # 통과시키되 "판정을 못 했다"는 사실은 남긴다(호출측이 로그·집계로 드러낸다).
+        return True, f"{UNAVAILABLE_PREFIX}: {type(e).__name__}: {str(e)[:150]}"
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)

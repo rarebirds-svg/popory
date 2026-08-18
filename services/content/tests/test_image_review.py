@@ -35,20 +35,25 @@ def test_parse_malformed_raises(bad):
 
 # --- fail-open ---
 
-def test_review_disabled_passes(monkeypatch):
+def test_review_disabled_passes_but_marks_unavailable(monkeypatch):
     monkeypatch.setattr(ir, "ENABLED", False)
-    assert ir.review_image(b"PNG", "j1") == (True, "")
+    ok, reason = ir.review_image(b"PNG", "j1")
+    assert ok is True and ir.is_unavailable(reason)
 
 
-def test_review_empty_bytes_passes():
-    assert ir.review_image(b"", "j1") == (True, "")
+def test_review_empty_bytes_passes_but_marks_unavailable():
+    ok, reason = ir.review_image(b"", "j1")
+    assert ok is True and ir.is_unavailable(reason)
 
 
-def test_review_cli_failure_passes(monkeypatch):
-    """CLI 가 죽어도 통과시켜야 한다 — 검수 실패로 배치가 멈추면 안 된다."""
+def test_review_cli_failure_passes_but_marks_unavailable(monkeypatch):
+    """CLI 가 죽어도 통과시키되(fail-open), 판정을 못 했다는 사실은 남겨야 한다 —
+    구분이 없으면 인증 만료된 날 전량이 조용히 통과하는데 아무도 모른다."""
     monkeypatch.setattr(ir, "ENABLED", True)
     monkeypatch.setattr(ir, "run_claude_cli", lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
-    assert ir.review_image(b"PNG", "j1") == (True, "")
+    ok, reason = ir.review_image(b"PNG", "j1")
+    assert ok is True
+    assert ir.is_unavailable(reason) and "boom" in reason
 
 
 def test_review_passes_read_tool_and_temp_path(monkeypatch):
@@ -144,3 +149,30 @@ def test_safe_image_rounds_zero_disables_regeneration(monkeypatch):
     calls = _stub(monkeypatch, [b"BAD"], [(False, "기형")])
     assert w._safe_image(None, "p", "j1") == b"BAD"
     assert len(calls) == 1, "라운드 0 이면 검수만 하고 재생성은 안 한다"
+
+
+def test_normal_verdicts_are_not_marked_unavailable():
+    """정상 판정과 fail-open 이 섞이면 집계가 무의미해진다."""
+    assert not ir.is_unavailable("")
+    assert not ir.is_unavailable("얼굴 기형")
+    assert ir.is_unavailable(f"{ir.UNAVAILABLE_PREFIX}: RuntimeError: boom")
+
+
+def test_worker_logs_when_review_unavailable(monkeypatch):
+    """검수를 못 한 통과는 image_review_error 로 드러나야 한다."""
+    logged = []
+    monkeypatch.setattr(w, "_generate_image", lambda c, p, job_id="?": b"IMG")
+    monkeypatch.setattr(w, "review_image",
+                        lambda img, job_id="?": (True, f"{ir.UNAVAILABLE_PREFIX}: 죽음"))
+    monkeypatch.setattr(w, "append_log", lambda d, rec: logged.append(rec))
+    assert w._safe_image(None, "p", "j1") == b"IMG"
+    assert any(r.get("status") == "image_review_error" for r in logged)
+
+
+def test_worker_does_not_log_error_on_normal_pass(monkeypatch):
+    logged = []
+    monkeypatch.setattr(w, "_generate_image", lambda c, p, job_id="?": b"IMG")
+    monkeypatch.setattr(w, "review_image", lambda img, job_id="?": (True, ""))
+    monkeypatch.setattr(w, "append_log", lambda d, rec: logged.append(rec))
+    w._safe_image(None, "p", "j1")
+    assert not any(r.get("status") == "image_review_error" for r in logged)

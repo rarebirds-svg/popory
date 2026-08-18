@@ -61,3 +61,49 @@ def test_report_lists_only_rejected(tmp_path):
 def test_report_handles_all_passed(tmp_path):
     si._report([{"source": "/tmp/a.png", "ok": True, "reason": "", "saved": ""}], tmp_path)
     assert "탈락한 이미지가 없습니다" in (tmp_path / "index.html").read_text(encoding="utf-8")
+
+
+def test_spread_samples_across_job_dirs(tmp_path):
+    """앞에서 자르면 정렬상 앞선 잡 한두 개만 보게 돼 전체를 대표하지 못한다
+    (2026-08 실제로 30장이 잡 2개에 몰려 탈락 0건이 나왔다)."""
+    dirs = []
+    for j in range(5):
+        d = tmp_path / f"video_job{j}"
+        d.mkdir()
+        dirs.append(d)
+        for i in range(16):
+            _mk(d, f"{i}.png")
+    all_files = si._collect_from_dirs([tmp_path])
+    assert len(all_files) == 80
+
+    picked = si._spread(all_files, 10)
+    assert len(picked) == 10
+    covered = {p.parent.name for p in picked}
+    assert covered == {d.name for d in dirs}, f"모든 잡에서 뽑혀야 한다: {covered}"
+
+    # 대조: 단순 절단은 한 잡에만 몰린다
+    assert len({p.parent.name for p in all_files[:10]}) == 1
+
+
+def test_spread_returns_all_when_under_limit(tmp_path):
+    d = tmp_path / "video_a"
+    d.mkdir()
+    for i in range(3):
+        _mk(d, f"{i}.png")
+    files = si._collect_from_dirs([tmp_path])
+    assert si._spread(files, 10) == files
+    assert si._spread(files, 0) == files
+
+
+def test_spread_handles_uneven_buckets(tmp_path):
+    """잡마다 장면 수가 다를 때(롱폼 16 vs 쇼츠 8) 적은 쪽이 소진돼도 멈추지 않는다."""
+    big = tmp_path / "video_long"
+    big.mkdir()
+    for i in range(10):
+        _mk(big, f"{i}.png")
+    small = tmp_path / "video_short"
+    small.mkdir()
+    _mk(small, "0.png")
+    picked = si._spread(si._collect_from_dirs([tmp_path]), 6)
+    assert len(picked) == 6
+    assert sum(1 for p in picked if p.parent.name == "video_short") == 1
