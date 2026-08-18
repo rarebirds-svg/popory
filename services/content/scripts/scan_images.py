@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -101,15 +102,18 @@ def _report(rows: list[dict], out_dir: Path) -> None:
     """전체 이미지를 판정과 함께 싣는다. 탈락분만 실으면 0건일 때 볼 게 없어
     "판정이 느슨해서 놓친 것"을 사람이 확인할 수 없다 — 통과분이 핵심 검토 대상이다."""
     rank = {"탈락": 0, "검수불가": 1, "통과": 2}
-    ordered = sorted(rows, key=lambda r: rank[_verdict(r)[0]])
+    # 번호는 스캔 순서로 고정한다 — 정렬이 바뀌어도 텍스트 목록(--list)과 화면이 대응돼야
+    # 사람이 "3번이 잘못됐다"고 지목할 수 있다.
+    numbered = [(i, r) for i, r in enumerate(rows, start=1)]
+    ordered = sorted(numbered, key=lambda pair: rank[_verdict(pair[1])[0]])
     cards = []
-    for r in ordered:
+    for n, r in ordered:
         label, color = _verdict(r)
         note = f"<br><span style='color:{color}'>{r['reason']}</span>" if r["reason"] else ""
         cards.append(
-            f"<figure><a href='images/{r['saved']}' target='_blank'>"
+            f"<figure id='n{n}'><a href='images/{r['saved']}' target='_blank'>"
             f"<img src='images/{r['saved']}' loading='lazy'></a>"
-            f"<figcaption><b style='color:{color}'>{label}</b>{note}"
+            f"<figcaption><b>{n}.</b> <b style='color:{color}'>{label}</b>{note}"
             f"<br><code>{Path(r['source']).parent.name}/{Path(r['source']).name}</code>"
             "</figcaption></figure>"
         )
@@ -134,13 +138,53 @@ def _report(rows: list[dict], out_dir: Path) -> None:
     (out_dir / "index.html").write_text(html, encoding="utf-8")
 
 
+def _pad(text: str, width: int) -> str:
+    """표시 폭 기준으로 오른쪽을 채운다. 한글은 터미널에서 2칸을 차지하므로
+    글자 수로 패딩하면 목록 열이 어긋나 눈으로 훑기 나빠진다."""
+    shown = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+    return text + " " * max(1, width - shown)
+
+
+def _print_checklist(results_json: Path) -> None:
+    """육안 검토용 체크리스트. 리포트의 번호와 같은 순서라 화면과 대조하며 훑을 수 있다.
+    사람이 판정을 뒤집고 싶을 때 "3번, 17번" 처럼 지목하면 된다."""
+    try:
+        rows = json.loads(results_json.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        print(f"error: results.json 을 읽지 못했습니다 — {e}", file=sys.stderr)
+        sys.exit(2)
+    n_bad = sum(1 for r in rows if not r["ok"])
+    n_unavail = sum(1 for r in rows if r["ok"] and ir.is_unavailable(r["reason"]))
+    print(f"총 {len(rows)}장 — 탈락 {n_bad} / 검수불가 {n_unavail} / 통과 {len(rows) - n_bad - n_unavail}\n")
+    print("번호  " + _pad("판정", 10) + "경로")
+    print("----  " + "-" * 8 + "  " + "-" * 50)
+    for i, r in enumerate(rows, start=1):
+        if not r["ok"]:
+            verdict = "탈락"
+        elif ir.is_unavailable(r["reason"]):
+            verdict = "검수불가"
+        else:
+            verdict = "통과"
+        src = r["source"]
+        print(f"{i:>4}  {_pad(verdict, 10)}{src}")
+        if r["reason"]:
+            print(f"      └ {r['reason']}")
+    print("\n리포트의 번호와 같은 순서다. 화면에서 훑어보고 판정이 틀린 번호를 지목할 것.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="기존 생성 이미지 일괄 검수")
     ap.add_argument("--dir", action="append", default=[], help="스캔할 디렉터리/파일(반복 가능)")
     ap.add_argument("--video", action="append", default=[], help="프레임을 추출해 스캔할 MP4(반복 가능)")
     ap.add_argument("--interval", type=int, default=15, help="영상 프레임 추출 간격(초, 기본 15)")
     ap.add_argument("--limit", type=int, default=0, help="검수할 최대 장수(0=제한 없음)")
+    ap.add_argument("--list", metavar="RESULTS_JSON",
+                    help="스캔하지 않고 기존 results.json 을 번호 매긴 체크리스트로 출력")
     args = ap.parse_args()
+
+    if args.list:
+        _print_checklist(Path(args.list).expanduser())
+        return
 
     if not ir.ENABLED:
         print("error: POPORY_IMAGE_REVIEW=0 이라 검수가 꺼져 있습니다.", file=sys.stderr)

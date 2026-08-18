@@ -135,3 +135,44 @@ def test_spread_handles_uneven_buckets(tmp_path):
     picked = si._spread(si._collect_from_dirs([tmp_path]), 6)
     assert len(picked) == 6
     assert sum(1 for p in picked if p.parent.name == "video_short") == 1
+
+
+def test_pad_uses_display_width_for_korean():
+    """한글은 터미널에서 2칸이라 글자 수로 패딩하면 목록 열이 어긋난다."""
+    assert si._pad("통과", 10) == "통과" + " " * 6        # 표시 4칸 + 6
+    assert si._pad("검수불가", 10) == "검수불가" + " " * 2  # 표시 8칸 + 2
+    assert si._pad("ok", 10) == "ok" + " " * 8
+    assert si._pad("아주긴판정라벨입니다", 4) == "아주긴판정라벨입니다 "  # 넘쳐도 최소 1칸
+
+
+def test_report_numbers_follow_scan_order_not_sort(tmp_path):
+    """번호는 스캔 순서로 고정돼야 텍스트 목록과 화면이 대응한다.
+    정렬(탈락 우선)이 번호를 바꾸면 사람이 '3번'을 지목할 수 없다."""
+    rows = [
+        {"source": "/tmp/a/0.png", "ok": True, "reason": "", "saved": "a.png"},
+        {"source": "/tmp/a/1.png", "ok": False, "reason": "얼굴 기형", "saved": "b.png"},
+        {"source": "/tmp/a/2.png", "ok": True, "reason": "", "saved": "c.png"},
+    ]
+    si._report(rows, tmp_path)
+    html = (tmp_path / "index.html").read_text(encoding="utf-8")
+    # 탈락(2번)이 화면 맨 앞이지만 번호는 2 를 유지해야 한다
+    assert "id='n2'" in html and "<b>2.</b>" in html
+    assert html.index("id='n2'") < html.index("id='n1'"), "탈락이 앞에 온다"
+    assert "<b>1.</b>" in html and "<b>3.</b>" in html
+
+
+def test_checklist_reports_counts(capsys, tmp_path):
+    import json as _json
+    rows = [
+        {"source": "/tmp/a/0.png", "ok": True, "reason": "", "saved": ""},
+        {"source": "/tmp/a/1.png", "ok": False, "reason": "얼굴 기형", "saved": ""},
+        {"source": "/tmp/a/2.png", "ok": True, "reason": "검수불가: boom", "saved": ""},
+    ]
+    f = tmp_path / "results.json"
+    f.write_text(_json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    si._print_checklist(f)
+    out = capsys.readouterr().out
+    assert "총 3장 — 탈락 1 / 검수불가 1 / 통과 1" in out
+    assert "얼굴 기형" in out
+    for n in ("   1", "   2", "   3"):
+        assert n in out
