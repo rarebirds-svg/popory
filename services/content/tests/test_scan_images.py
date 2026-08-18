@@ -45,22 +45,50 @@ def test_collect_recurses_subdirs(tmp_path):
     assert [p.name for p in si._collect_from_dirs([tmp_path])] == ["0.png"]
 
 
-def test_report_lists_only_rejected(tmp_path):
+def test_report_includes_passed_images_too(tmp_path):
+    """탈락분만 실으면 0건일 때 볼 게 없어, 판정이 느슨해 놓친 건을 사람이 못 잡는다.
+    통과분이야말로 핵심 검토 대상이다."""
     rows = [
-        {"source": "/tmp/a.png", "ok": True, "reason": "", "saved": ""},
-        {"source": "/tmp/b.png", "ok": False, "reason": "눈동자 방향 어긋남", "saved": "0002_b.png"},
+        {"source": "/tmp/video_a/0.png", "ok": True, "reason": "", "saved": "0001_video_a_0.png"},
+        {"source": "/tmp/video_b/1.png", "ok": False, "reason": "눈동자 방향 어긋남",
+         "saved": "0002_video_b_1.png"},
     ]
     si._report(rows, tmp_path)
     html = (tmp_path / "index.html").read_text(encoding="utf-8")
-    assert "총 2장 중 <b>1장 탈락</b>" in html
+    assert "images/0001_video_a_0.png" in html, "통과 이미지도 실려야 한다"
+    assert "images/0002_video_b_1.png" in html
     assert "눈동자 방향 어긋남" in html
-    assert "rejected/0002_b.png" in html
-    assert "a.png" not in html, "통과 이미지는 리포트에 싣지 않는다"
+    assert "총 2장 — 탈락 1장 / 통과 1장" in html
 
 
-def test_report_handles_all_passed(tmp_path):
-    si._report([{"source": "/tmp/a.png", "ok": True, "reason": "", "saved": ""}], tmp_path)
-    assert "탈락한 이미지가 없습니다" in (tmp_path / "index.html").read_text(encoding="utf-8")
+def test_report_puts_rejected_first(tmp_path):
+    rows = [
+        {"source": "/tmp/a/0.png", "ok": True, "reason": "", "saved": "pass.png"},
+        {"source": "/tmp/a/1.png", "ok": False, "reason": "얼굴 기형", "saved": "bad.png"},
+    ]
+    si._report(rows, tmp_path)
+    html = (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert html.index("bad.png") < html.index("pass.png")
+
+
+def test_report_flags_unavailable_separately(tmp_path):
+    """검수불가를 통과로 뭉뚱그리면 검수기가 죽은 걸 못 잡는다."""
+    rows = [
+        {"source": "/tmp/a/0.png", "ok": True, "reason": "", "saved": "ok.png"},
+        {"source": "/tmp/a/1.png", "ok": True, "reason": "검수불가: RuntimeError: boom",
+         "saved": "na.png"},
+    ]
+    si._report(rows, tmp_path)
+    html = (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert "검수불가 1장" in html
+    assert "총 2장 — 탈락 0장 / 통과 1장" in html, "검수불가는 통과 수에서 빠져야 한다"
+
+
+def test_report_images_are_clickable(tmp_path):
+    rows = [{"source": "/tmp/a/0.png", "ok": True, "reason": "", "saved": "x.png"}]
+    si._report(rows, tmp_path)
+    html = (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert "<a href='images/x.png' target='_blank'>" in html
 
 
 def test_spread_samples_across_job_dirs(tmp_path):

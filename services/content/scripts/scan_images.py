@@ -10,7 +10,7 @@
 # 출력: ~/Downloads/popory_image_scan/<timestamp>/
 #   index.html   — 탈락 이미지와 사유를 한눈에(브라우저로 열기)
 #   results.json — 전체 판정 결과(장당 1줄, 중간에 끊겨도 남는다)
-#   rejected/    — 탈락 이미지 사본
+#   images/      — 스캔한 이미지 사본(통과분 포함 — 판정이 느슨한지 눈으로 봐야 한다)
 import argparse
 import datetime
 import json
@@ -87,22 +87,49 @@ def _spread(targets: list[Path], limit: int) -> list[Path]:
     return picked
 
 
+def _verdict(row: dict) -> tuple[str, str]:
+    """(라벨, 색) — 통과·탈락·검수불가 세 갈래. 검수불가를 통과로 뭉뚱그리면
+    "검수기가 죽었는데 다 멀쩡해 보이는" 상황을 못 잡는다."""
+    if not row["ok"]:
+        return "탈락", "#c0392b"
+    if ir.is_unavailable(row["reason"]):
+        return "검수불가", "#b7791f"
+    return "통과", "#2f855a"
+
+
 def _report(rows: list[dict], out_dir: Path) -> None:
-    rejected = [r for r in rows if not r["ok"]]
-    cards = "".join(
-        f"<figure><img src='rejected/{r['saved']}' width='420'>"
-        f"<figcaption><b>{r['reason']}</b><br><code>{r['source']}</code></figcaption></figure>"
-        for r in rejected
-    )
+    """전체 이미지를 판정과 함께 싣는다. 탈락분만 실으면 0건일 때 볼 게 없어
+    "판정이 느슨해서 놓친 것"을 사람이 확인할 수 없다 — 통과분이 핵심 검토 대상이다."""
+    rank = {"탈락": 0, "검수불가": 1, "통과": 2}
+    ordered = sorted(rows, key=lambda r: rank[_verdict(r)[0]])
+    cards = []
+    for r in ordered:
+        label, color = _verdict(r)
+        note = f"<br><span style='color:{color}'>{r['reason']}</span>" if r["reason"] else ""
+        cards.append(
+            f"<figure><a href='images/{r['saved']}' target='_blank'>"
+            f"<img src='images/{r['saved']}' loading='lazy'></a>"
+            f"<figcaption><b style='color:{color}'>{label}</b>{note}"
+            f"<br><code>{Path(r['source']).parent.name}/{Path(r['source']).name}</code>"
+            "</figcaption></figure>"
+        )
+    n_bad = sum(1 for r in rows if not r["ok"])
+    n_unavail = sum(1 for r in rows if r["ok"] and ir.is_unavailable(r["reason"]))
+    warn = (f" <b style='color:#b7791f'>검수불가 {n_unavail}장</b> — 이만큼은 판정이 안 된 것이니"
+            " 탈락 0건을 '다 멀쩡함'으로 읽으면 안 된다." if n_unavail else "")
     html = (
         "<meta charset='utf-8'><title>포포리 이미지 검수 결과</title>"
-        "<style>body{font-family:system-ui;margin:2rem}"
-        "figure{display:inline-block;margin:0 1rem 1.5rem 0;vertical-align:top;max-width:420px}"
-        "figcaption{font-size:.9rem;color:#333;margin-top:.4rem;word-break:break-all}"
-        "code{color:#666}</style>"
-        f"<h1>이미지 검수 결과</h1><p>총 {len(rows)}장 중 <b>{len(rejected)}장 탈락</b>"
-        f" ({len(rows) - len(rejected)}장 통과).</p>"
-        + (cards or "<p>탈락한 이미지가 없습니다.</p>")
+        "<style>body{font-family:system-ui;margin:2rem;background:#fafafa}"
+        "figure{display:inline-block;margin:0 1rem 1.5rem 0;vertical-align:top;width:320px}"
+        "img{width:320px;height:auto;border-radius:6px;box-shadow:0 1px 6px rgba(0,0,0,.15)}"
+        "figcaption{font-size:.85rem;color:#333;margin-top:.4rem;word-break:break-all}"
+        "code{color:#777}</style>"
+        f"<h1>이미지 검수 결과</h1>"
+        f"<p>총 {len(rows)}장 — 탈락 {n_bad}장 / 통과 {len(rows) - n_bad - n_unavail}장.{warn}</p>"
+        "<p style='color:#555'>탈락·검수불가를 앞에 모았다. <b>통과분도 눈으로 훑어</b>"
+        " 기형인데 통과한 게 있는지 확인할 것 — 그게 판정 기준을 조일 근거가 된다."
+        " 이미지를 클릭하면 원본 크기로 열린다.</p>"
+        + "".join(cards)
     )
     (out_dir / "index.html").write_text(html, encoding="utf-8")
 
@@ -121,7 +148,7 @@ def main() -> None:
 
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = Path.home() / "Downloads" / "popory_image_scan" / ts
-    (out_dir / "rejected").mkdir(parents=True, exist_ok=True)
+    (out_dir / "images").mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="popory_scan_"))
 
     targets: list[Path] = []
@@ -146,12 +173,15 @@ def main() -> None:
     results_f = out_dir / "results.json"
     for i, f in enumerate(targets, start=1):
         ok, reason = ir.review_image(f.read_bytes(), job_id=f"scan{i}")
-        row = {"source": str(f), "ok": ok, "reason": reason, "saved": ""}
+        # 통과분도 사본을 남긴다 — /tmp 는 macOS 가 언제든 비우고, 판정이 느슨한지
+        # 확인하려면 통과한 이미지를 봐야 한다. 리포트가 자체 완결되는 이점도 있다.
+        saved = f"{i:04d}_{f.parent.name}_{f.name}"
+        shutil.copy(f, out_dir / "images" / saved)
+        row = {"source": str(f), "ok": ok, "reason": reason, "saved": saved}
         if not ok:
-            saved = f"{i:04d}_{f.name}"
-            shutil.copy(f, out_dir / "rejected" / saved)
-            row["saved"] = saved
             print(f"[{i}/{len(targets)}] 탈락 — {reason}  ({f})")
+        elif ir.is_unavailable(reason):
+            print(f"[{i}/{len(targets)}] 검수불가 — {reason}")
         else:
             print(f"[{i}/{len(targets)}] ok")
         rows.append(row)
