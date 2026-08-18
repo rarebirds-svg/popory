@@ -86,10 +86,12 @@ def test_append_subscribe_cta_no_brand_dup():
     assert append_subscribe_cta(out) == out  # 멱등
 
 
-def test_video_and_shorts_prompts_allow_natural_faces():
-    """SDXL은 얼굴을 잘 그리므로 얼굴 허용 — 단 자연스러운 표정·정상 인체로 유도."""
+def test_video_and_shorts_prompts_avoid_faces():
+    """2026-08 정책 전환 — 얼굴 허용에서 얼굴 회피로. 생성 모델이 얼굴·눈·손을 기형으로
+    만드는 빈도가 높아, 사후 검수(image_review)로 거르기 전에 애초에 덜 만들게 유도한다."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
     for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
-        assert "얼굴이 보여도" in sp        # 얼굴 허용
-        assert "자연스러운 표정" in sp      # 무서운/과장 표정 방지
-        assert "정상" in sp                 # 해부학적 정상 인체
+        assert "얼굴은 되도록 넣지 않습니다" in sp   # 기본은 얼굴 회피
+        assert "뒷모습" in sp and "실루엣" in sp     # 사람이 필요하면 이렇게
+        assert "클로즈업" in sp                      # 정면 얼굴·손 클로즈업 금지
+        assert "얼굴이 보여도" not in sp             # 옛 허용 문구가 남으면 안 된다

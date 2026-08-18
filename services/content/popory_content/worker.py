@@ -29,6 +29,7 @@ from popory_content.instagram_image_render import render_carousel
 from popory_content.instagram_upload import upload_reels, upload_carousel, InstagramUploadError
 from popory_content.facebook_upload import upload_reels as fb_upload_reels
 from popory_content.youtube_playlist import assign_to_playlist
+from popory_content.image_review import review_image, harden_prompt
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
@@ -172,6 +173,9 @@ def _report(client, job_id: str, body: dict, status_label: str) -> None:
 
 IMAGE_MAX_ATTEMPTS = 3
 IMAGE_BACKOFF = [2, 5]
+# 검수 탈락 시 프롬프트를 강화해 다시 뽑는 최대 라운드. 0 이면 검수만 하고 재생성은 안 한다.
+# 장면당 최악 1+N 회 생성이라 배치 시간에 직결된다.
+IMAGE_REVIEW_ROUNDS = int(os.environ.get("POPORY_IMAGE_REVIEW_ROUNDS", "2"))
 IMAGE_FAIL_RATIO = 0.5
 IMAGEGEN_URL = os.environ.get("POPORY_IMAGEGEN_URL", "http://localhost:8765/generate")
 # 로컬 fp32 SDXL/SD 생성은 맥미니 16GB 메모리 압박에서 장면당 ~110초가 걸린다.
@@ -271,8 +275,8 @@ def _try_cloudflare(client, prompt: str) -> bytes | None:
         return None
 
 
-def _safe_image(client, prompt: str, job_id: str = "?"):
-    """배경 1장 생성. 1순위 CF flux-schnell(무료), 한도 소진·실패 시 로컬 RealVisXL 폴백.
+def _generate_image(client, prompt: str, job_id: str = "?"):
+    """배경 1장 생성(검수 없음). 1순위 CF flux-schnell(무료), 한도 소진·실패 시 로컬 폴백.
     깨진 응답은 검증으로 걸러 재시도, 최종 실패만 image_failed 로그+None."""
     if USE_CF_IMAGE and client is not None and not _cf_exhausted_today():
         img = _try_cloudflare(client, prompt)
@@ -293,6 +297,32 @@ def _safe_image(client, prompt: str, job_id: str = "?"):
                 time.sleep(IMAGE_BACKOFF[attempt - 1])
     append_log(LOGS_DIR, {"worker": "content", "status": "image_failed", "job": job_id, "error": last})
     return None
+
+
+def _safe_image(client, prompt: str, job_id: str = "?"):
+    """배경 1장 생성 + 이상 검수. 얼굴·인체 기형이나 눈 이상이 보이면 프롬프트에서 인물
+    위험을 단계적으로 낮춰(뒷모습·실루엣 → 인물 제거) 재생성한다.
+
+    끝까지 통과하지 못하면 **마지막 이미지를 그대로 쓴다** — 배경이 단색으로 비면
+    _finalize_video 가 failed/review 로 떨어뜨려 영상 전체를 버리게 되는데, 기형이
+    의심되는 한 장이 그보다 낫다. 재생성 라운드는 IMAGE_REVIEW_ROUNDS 로 제한해
+    24장을 도는 배치가 늘어지지 않게 한다."""
+    last_img = None
+    for round_index in range(IMAGE_REVIEW_ROUNDS + 1):
+        p = prompt if round_index == 0 else harden_prompt(prompt, round_index - 1)
+        img = _generate_image(client, p, job_id)
+        if img is None:
+            break  # 생성 자체가 실패 — 프롬프트를 바꿔도 같으므로 중단(이미 로그됨)
+        ok, reason = review_image(img, job_id)
+        if ok:
+            return img
+        last_img = img
+        append_log(LOGS_DIR, {"worker": "content", "status": "image_rejected", "job": job_id,
+                              "round": round_index, "reason": reason, "prompt": p[:200]})
+    if last_img is not None:
+        append_log(LOGS_DIR, {"worker": "content", "status": "image_review_exhausted",
+                              "job": job_id, "rounds": IMAGE_REVIEW_ROUNDS})
+    return last_img
 
 
 def _maybe_put_thumbnail(client, job_id: str, meta: dict, portrait: bool) -> None:
