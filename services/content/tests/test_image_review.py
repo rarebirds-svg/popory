@@ -176,3 +176,40 @@ def test_worker_does_not_log_error_on_normal_pass(monkeypatch):
     monkeypatch.setattr(w, "append_log", lambda d, rec: logged.append(rec))
     w._safe_image(None, "p", "j1")
     assert not any(r.get("status") == "image_review_error" for r in logged)
+
+
+# --- 판정 기준(SYSTEM_PROMPT) ---
+# 실제로 통과해버린 두 장을 기준 삼아 회귀를 막는다.
+#  - 머리 없는 몸통 + 피부톤 튀는 손 (팔짱 포즈)
+#  - 두 팔이 한 소매로 융합 + 한쪽 손 소실 (턱 괴기 포즈)
+# 둘 다 얼굴은 멀쩡해서, 얼굴·눈 위주 기준으로는 걸리지 않았다.
+
+def test_system_prompt_traces_limbs_not_gestalt():
+    """게슈탈트 판정이 아니라 어깨→손 사슬을 적게 강제해야 한다."""
+    p = ir.SYSTEM_PROMPT
+    assert "어깨 → 상완 → 팔꿈치 → 전완 → 손목 → 손" in p
+    assert "모든 인물" in p
+
+
+def test_system_prompt_rejects_missing_and_fused_parts():
+    p = ir.SYSTEM_PROMPT
+    assert "[결손]" in p and "[융합·분기]" in p
+    # 프레임 밖 크롭과 구분하는 기준이 있어야 과잉 차단이 안 난다
+    assert "프레임 밖으로 잘린 것과 구분" in p
+    # 머리 없는 몸통이 "얼굴 안 보이는 인물"로 새지 않게 못 박는다
+    assert "머리 자체가 없는 몸통은 여기 해당하지 않습니다" in p
+    # 애매하면 ok 의 예외
+    assert "결손·융합은 예외" in p
+
+
+def test_system_prompt_covers_skin_tone_and_ignores_text():
+    p = ir.SYSTEM_PROMPT
+    assert "[색·재질]" in p
+    assert "글자가 뭉개진 것은 ok" in p
+
+
+def test_retry_hint_bans_folded_arm_poses():
+    """재생성 힌트가 팔짱·턱 괴기를 명시적으로 막아야 한다."""
+    r0 = ir.harden_prompt("A woman at a desk", 0)
+    assert "no crossed arms" in r0
+    assert "no chin resting on a hand" in r0
