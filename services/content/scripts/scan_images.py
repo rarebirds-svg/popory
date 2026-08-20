@@ -6,7 +6,8 @@
 #   .venv/bin/python scripts/scan_images.py --dir ~/Downloads/imgs
 #   .venv/bin/python scripts/scan_images.py --video out.mp4    # 완성 영상에서 프레임 추출 후 스캔
 #   .venv/bin/python scripts/scan_images.py --limit 30         # 표본 30장만(오래 걸릴 때)
-#   .venv/bin/python scripts/scan_images.py --explain a.png    # 1장의 판정 근거를 그대로 출력
+#   .venv/bin/python scripts/scan_images.py --explain a.png            # 1장의 판정 근거를 그대로 출력
+#   .venv/bin/python scripts/scan_images.py --explain a.png --tile 2   # 겹쳐 자른 조각별 판정
 #
 # 출력: ~/Downloads/popory_image_scan/<timestamp>/
 #   index.html   — 탈락 이미지와 사유를 한눈에(브라우저로 열기)
@@ -173,36 +174,67 @@ def _print_checklist(results_json: Path) -> None:
     print("\n리포트의 번호와 같은 순서다. 화면에서 훑어보고 판정이 틀린 번호를 지목할 것.")
 
 
-def _explain(path: Path) -> None:
-    """이미지 1장을 검수하고 모델이 쓴 판정 근거(골격 추적)를 그대로 출력한다.
-    ok/reject 만 보면 "결함을 못 본 것"과 "보고도 애매해서 넘긴 것"이 구분되지 않는데,
-    이 둘은 고치는 방법이 완전히 다르다(전자는 모델·해상도, 후자는 판정 문턱)."""
+def _tiles(path: Path, work: Path, grid: int = 2, overlap: float = 0.15) -> list[tuple[str, Path]]:
+    """이미지를 grid×grid 로 겹쳐 자른다. 인물의 팔다리가 분석 픽셀에서 차지하는 비율을 키우려는 것 —
+    한 장 통째로 넣으면 claude Read 가 축소하면서 소매 융합 같은 디테일이 사라진다.
+    경계에 걸친 부위가 잘려 오판되지 않게 타일을 서로 겹친다."""
+    from PIL import Image
+    im = Image.open(path).convert("RGB")
+    W, H = im.size
+    tw, th = W / grid, H / grid
+    ox, oy = tw * overlap, th * overlap
+    out: list[tuple[str, Path]] = []
+    for r in range(grid):
+        for c in range(grid):
+            box = (max(0, int(c * tw - ox)), max(0, int(r * th - oy)),
+                   min(W, int((c + 1) * tw + ox)), min(H, int((r + 1) * th + oy)))
+            dst = work / f"tile_{r}{c}.png"
+            im.crop(box).save(dst)
+            out.append((f"{r + 1}행 {c + 1}열", dst))
+    return out
+
+
+def _review_raw(path: Path, model: str) -> str:
+    """판정 태그만 남기지 않고 모델 출력 원문을 받는다(parse 를 항등함수로 준다)."""
+    from popory_content.generate import run_claude_cli
+    return run_claude_cli(
+        system_prompt=ir.SYSTEM_PROMPT,
+        user_msg=f"다음 이미지를 검수하세요: {path}",
+        parse=lambda out: out,
+        job_id="explain",
+        model=model,
+        timeout_seconds=ir.TIMEOUT_SECONDS,
+        max_attempts=1,
+        allowed_tools=("Read",),
+    )
+
+
+def _explain(path: Path, model: str | None = None, tile: int = 0) -> None:
+    """이미지 1장의 판정 근거(골격 추적 서술)를 원문 그대로 출력한다.
+    ok/reject 만으로는 "못 봤다"와 "보고도 넘겼다"가 구분되지 않는데 고치는 방법이 정반대다.
+    tile 을 주면 겹쳐 자른 조각별로 따로 판정한다 — 통째로는 못 잡던 결함이 조각에서 잡히면
+    원인은 판정 기준이 아니라 해상도다."""
     if not path.exists():
         print(f"error: 파일이 없습니다 — {path}", file=sys.stderr)
         sys.exit(2)
-    from popory_content.generate import run_claude_cli
+    model = model or ir.MODEL
     print(f"검수 중: {path}")
-    print(f"모델: {ir.MODEL}\n" + "-" * 60)
+    print(f"모델: {model}" + (f" / {tile}×{tile} 타일" if tile else "") + "\n" + "-" * 60)
+    work = Path(tempfile.mkdtemp(prefix="popory_explain_"))
     try:
-        # parse 를 항등함수로 줘서 태그만 남기지 않고 원문을 받는다. 재시도는 1회 —
-        # 근거를 보려는 것이지 판정을 얻으려는 게 아니라 실패하면 실패한 대로 봐야 한다.
-        raw = run_claude_cli(
-            system_prompt=ir.SYSTEM_PROMPT,
-            user_msg=f"다음 이미지를 검수하세요: {path}",
-            parse=lambda out: out,
-            job_id="explain",
-            model=ir.MODEL,
-            timeout_seconds=ir.TIMEOUT_SECONDS,
-            max_attempts=1,
-            allowed_tools=("Read",),
-        )
-    except Exception as e:  # noqa: BLE001 — 진단 도구라 예외도 그대로 보여준다
-        print(f"검수 실패: {type(e).__name__}: {e}", file=sys.stderr)
-        sys.exit(2)
-    print(raw.strip())
+        parts = _tiles(path, work, grid=tile) if tile else [("전체", path)]
+        for label, target in parts:
+            if len(parts) > 1:
+                print(f"\n### {label}")
+            try:
+                print(_review_raw(target, model).strip())
+            except Exception as e:  # noqa: BLE001 — 진단 도구라 예외도 그대로 보여준다
+                print(f"검수 실패: {type(e).__name__}: {e}", file=sys.stderr)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     print("-" * 60)
-    print("골격 추적이 결함을 짚었는데 ok 가 나왔으면 판정 문턱 문제,")
-    print("추적 자체가 '정상'이라고 썼으면 모델이 못 본 것이다.")
+    print("추적이 결함을 짚었는데 ok 면 판정 문턱 문제,")
+    print("추적이 '정상'이라고 썼으면 모델이 못 본 것이다(타일·모델을 바꿔 볼 것).")
 
 
 def main() -> None:
@@ -215,6 +247,9 @@ def main() -> None:
                     help="스캔하지 않고 기존 results.json 을 번호 매긴 체크리스트로 출력")
     ap.add_argument("--explain", metavar="IMAGE",
                     help="이미지 1장의 판정 근거를 그대로 출력(왜 통과시켰는지 진단용)")
+    ap.add_argument("--model", help="검수 모델 override(진단용, 기본 POPORY_IMAGE_REVIEW_MODEL)")
+    ap.add_argument("--tile", type=int, default=0, metavar="N",
+                    help="--explain 시 N×N 으로 겹쳐 잘라 조각별 판정(해상도 원인 확인용)")
     args = ap.parse_args()
 
     if args.list:
@@ -222,7 +257,7 @@ def main() -> None:
         return
 
     if args.explain:
-        _explain(Path(args.explain).expanduser())
+        _explain(Path(args.explain).expanduser(), model=args.model, tile=args.tile)
         return
 
     if not ir.ENABLED:

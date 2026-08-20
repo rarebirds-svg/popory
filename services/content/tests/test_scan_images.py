@@ -200,6 +200,50 @@ def test_explain_prints_raw_model_output(tmp_path, monkeypatch, capsys):
     assert captured["system_prompt"] is si.ir.SYSTEM_PROMPT
 
 
+def test_explain_model_override(tmp_path, monkeypatch, capsys):
+    img = tmp_path / "a.png"
+    img.write_bytes(b"x")
+    captured = {}
+
+    def fake_run(**kw):
+        captured.update(kw)
+        return kw["parse"]("<image_review>ok</image_review>")
+
+    monkeypatch.setattr("popory_content.generate.run_claude_cli", fake_run)
+    si._explain(img, model="claude-opus-5")
+    assert captured["model"] == "claude-opus-5"
+
+
+def test_tiles_cover_image_with_overlap(tmp_path):
+    """조각이 서로 겹쳐야 경계에 걸친 팔이 잘려 오판되지 않는다."""
+    src = tmp_path / "src.png"
+    Image.new("RGB", (400, 300), "white").save(src)
+    work = tmp_path / "w"
+    work.mkdir()
+    parts = si._tiles(src, work, grid=2, overlap=0.15)
+    assert len(parts) == 4
+    sizes = [Image.open(p).size for _, p in parts]
+    # 겹침 때문에 조각이 정확히 절반보다 커야 하고, 원본보다는 작아야 한다
+    for w, h in sizes:
+        assert 200 < w < 400 and 150 < h < 300
+
+
+def test_explain_tile_reviews_each_piece(tmp_path, monkeypatch, capsys):
+    src = tmp_path / "src.png"
+    Image.new("RGB", (400, 300), "white").save(src)
+    seen = []
+
+    def fake_run(**kw):
+        seen.append(kw["user_msg"])
+        return kw["parse"]("<image_review>ok</image_review>")
+
+    monkeypatch.setattr("popory_content.generate.run_claude_cli", fake_run)
+    si._explain(src, tile=2)
+    out = capsys.readouterr().out
+    assert len(seen) == 4
+    assert "1행 1열" in out and "2행 2열" in out
+
+
 def test_explain_missing_file_exits(tmp_path):
     import pytest
     with pytest.raises(SystemExit):
