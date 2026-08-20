@@ -176,3 +176,31 @@ def test_checklist_reports_counts(capsys, tmp_path):
     assert "얼굴 기형" in out
     for n in ("   1", "   2", "   3"):
         assert n in out
+
+
+# --- --explain (판정 근거 진단) ---
+
+def test_explain_prints_raw_model_output(tmp_path, monkeypatch, capsys):
+    """태그만이 아니라 모델이 쓴 골격 추적 원문이 그대로 나와야 한다."""
+    img = tmp_path / "a.png"
+    img.write_bytes(b"x")
+    raw = "인물1: 팔 2개, 손 1개 — 오른팔 끝에 손 없음\n<image_review>ok</image_review>"
+    captured = {}
+
+    def fake_run(**kw):
+        captured.update(kw)
+        return kw["parse"](raw)
+
+    monkeypatch.setattr("popory_content.generate.run_claude_cli", fake_run)
+    si._explain(img)
+    out = capsys.readouterr().out
+    assert "오른팔 끝에 손 없음" in out
+    # 원문을 받으려면 parse 가 항등이어야 하고, Read 로 이미지를 열 수 있어야 한다
+    assert captured["allowed_tools"] == ("Read",)
+    assert captured["system_prompt"] is si.ir.SYSTEM_PROMPT
+
+
+def test_explain_missing_file_exits(tmp_path):
+    import pytest
+    with pytest.raises(SystemExit):
+        si._explain(tmp_path / "nope.png")
