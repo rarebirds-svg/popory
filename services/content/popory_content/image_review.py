@@ -125,6 +125,43 @@ def review_image(png: bytes, job_id: str = "?") -> tuple[bool, str]:
             tmp.unlink(missing_ok=True)
 
 
+# --- 생성 프롬프트 정책 (탈락을 만들기 전에 줄인다) ---
+# video_prompt.py 의 "사람 얼굴은 되도록 넣지 않습니다"는 LLM 에 대한 부탁이라 자주 무시된다 —
+# 실제로 통과해버린 불량 두 장 다 인물이 화면 중앙에 크게 있었다. 기형은 사람이 있어야 생기므로
+# 부탁이 아니라 코드로 못 박는다. 검수·재생성보다 앞단이고, 공짜이며, 한도 소비도 같이 준다.
+
+# 사람이 안 나오는 장면: 모델이 멋대로 인물을 그려 넣는 걸 막는다.
+NO_PEOPLE_SUFFIX = " Empty of people; focus on the setting, objects and light."
+# 사람이 이미 들어간 장면: 지우면 장면이 죽으므로 대신 **실패 표면**을 줄인다.
+# 기형은 그 부위가 크고 선명할 때만 보인다 — 거리·실루엣·얕은 심도·역광이 그걸 없앤다.
+SAFE_PEOPLE_SUFFIX = (
+    " Any person is distant and seen from behind or in silhouette, softly out of focus,"
+    " backlit; no facial features, no visible hands, arms relaxed and separated."
+)
+# 프롬프트에 사람이 있는지 판단할 단어. 빠짐없이 잡을 수는 없지만, 놓쳐도 손해가 작게 설계했다 —
+# 놓치면 NO_PEOPLE_SUFFIX 가 붙는데, 그건 "사람 그리지 마라"라 기형이 나올 일이 없다.
+PERSON_WORDS = (
+    "person", "people", "human", "figure", "silhouette", "crowd", "couple", "family",
+    "man", "men", "woman", "women", "boy", "girl", "child", "children", "kid", "baby",
+    "someone", "somebody", "portrait", "face", "hand", "reader", "student", "teacher",
+    "doctor", "nurse", "writer", "author", "worker", "traveler", "passenger", "customer",
+    "friends", "he ", "she ", "his ", "her ", "their ",
+)
+
+
+def has_person(prompt: str) -> bool:
+    """프롬프트가 사람을 묘사하는지. 단어 경계를 보지 않고 부분일치로 넓게 잡는다 —
+    놓치는 쪽(사람인데 못 알아봄)이 반대보다 나쁘다."""
+    low = prompt.lower()
+    return any(w in low for w in PERSON_WORDS)
+
+
+def apply_people_policy(prompt: str) -> str:
+    """생성 직전에 항상 적용하는 인물 정책. 사람이 없으면 못 넣게, 있으면 안 보이게 만든다."""
+    suffix = SAFE_PEOPLE_SUFFIX if has_person(prompt) else NO_PEOPLE_SUFFIX
+    return prompt.rstrip().rstrip(".") + "." + suffix
+
+
 # 재생성 시 프롬프트에 덧붙일 강화 지시. 같은 프롬프트로 다시 뽑으면 같은 기형이 재현되므로
 # 인물 묘사를 단계적으로 후퇴시킨다(얼굴 회피 → 인물 제거).
 RETRY_HINTS = (

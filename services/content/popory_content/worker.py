@@ -29,7 +29,8 @@ from popory_content.instagram_image_render import render_carousel
 from popory_content.instagram_upload import upload_reels, upload_carousel, InstagramUploadError
 from popory_content.facebook_upload import upload_reels as fb_upload_reels
 from popory_content.youtube_playlist import assign_to_playlist
-from popory_content.image_review import review_image, harden_prompt, is_unavailable
+from popory_content.image_review import (apply_people_policy, harden_prompt,
+                                          is_unavailable, review_image)
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
@@ -309,7 +310,9 @@ def _safe_image(client, prompt: str, job_id: str = "?"):
     24장을 도는 배치가 늘어지지 않게 한다."""
     last_img = None
     for round_index in range(IMAGE_REVIEW_ROUNDS + 1):
-        p = prompt if round_index == 0 else harden_prompt(prompt, round_index - 1)
+        # 0라운드엔 인물 정책, 이후엔 harden_prompt 가 인물 위험을 더 낮춘다. 둘을 겹쳐 붙이면
+        # "사람을 이렇게 그려라"와 "사람을 빼라"가 한 프롬프트에서 충돌하므로 배타로 둔다.
+        p = apply_people_policy(prompt) if round_index == 0 else harden_prompt(prompt, round_index - 1)
         img = _generate_image(client, p, job_id)
         if img is None:
             break  # 생성 자체가 실패 — 프롬프트를 바꿔도 같으므로 중단(이미 로그됨)

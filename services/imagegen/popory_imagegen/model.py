@@ -42,6 +42,19 @@ class ModelManager:
         return self._pipe is not None
 
 
+# SDXL-Lightning 은 저스텝 distilled 라 CFG 를 끄는(0.0) 게 기본 레시피다. 다만 diffusers 는
+# guidance_scale > 1 일 때만 classifier-free guidance 를 켜므로 **0.0 에서는 아래 NEGATIVE_DEFAULT 가
+# 통째로 무시된다** — 기형 방지 네거티브가 아무 일도 하지 않는다. 1.5~2.0 이면 Lightning 도 대체로
+# 견디고 네거티브가 살아나는 대신 스텝당 연산이 2배가 된다(장당 ~18초 → ~36초 예상).
+# 맥미니에서 품질·속도를 실측해 정할 문제라 손잡이로 빼 둔다. 기본값은 기존 동작 유지.
+GUIDANCE = float(os.environ.get("POPORY_IMAGEGEN_GUIDANCE", "0.0"))
+
+
+def negative_active(guidance: float) -> bool:
+    """이 guidance 에서 negative_prompt 가 실제로 적용되는지(diffusers 는 >1 에서만 CFG 를 켠다)."""
+    return guidance > 1.0
+
+
 NEGATIVE_DEFAULT = (
     "deformed, distorted, disfigured, mutated, extra limbs, bad anatomy, "
     "deformed face, ugly face, mutated face, asymmetric eyes, deformed eyes, "
@@ -128,4 +141,4 @@ def build_pipe(model_name: str | None = None) -> _DiffusersPipe:
         pipe.scheduler.config, timestep_spacing="trailing"
     )
     pipe.upcast_vae()
-    return _DiffusersPipe(pipe, steps=8, guidance=0.0, width=768, height=768)
+    return _DiffusersPipe(pipe, steps=8, guidance=GUIDANCE, width=768, height=768)

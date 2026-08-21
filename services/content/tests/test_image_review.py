@@ -125,7 +125,8 @@ def test_safe_image_regenerates_with_hardened_prompt_on_reject(monkeypatch):
     calls = _stub(monkeypatch, [b"BAD", b"GOOD"], [(False, "얼굴 기형"), (True, "")])
     assert w._safe_image(None, "A man reading", "j1") == b"GOOD"
     assert len(calls) == 2
-    assert calls[0] == "A man reading"
+    assert calls[0].startswith("A man reading")
+    assert ir.SAFE_PEOPLE_SUFFIX in calls[0], "0라운드부터 인물 정책이 붙는다"
     assert "silhouette" in calls[1], "재생성은 인물 위험을 낮춘 프롬프트로 해야 한다"
 
 
@@ -213,3 +214,51 @@ def test_retry_hint_bans_folded_arm_poses():
     r0 = ir.harden_prompt("A woman at a desk", 0)
     assert "no crossed arms" in r0
     assert "no chin resting on a hand" in r0
+
+
+# --- 생성 프롬프트 인물 정책 ---
+
+@pytest.mark.parametrize("prompt", [
+    "A man reading by a window",
+    "Two students at a desk",
+    "A quiet cafe with people talking",
+    "Her hands on an open book",
+])
+def test_person_prompts_get_safe_composition(prompt):
+    """사람을 지우면 장면이 죽으므로 대신 실패 표면(크고 선명한 인체)을 없앤다."""
+    out = ir.apply_people_policy(prompt)
+    assert ir.SAFE_PEOPLE_SUFFIX in out
+    assert ir.NO_PEOPLE_SUFFIX not in out
+    assert "out of focus" in out and "no visible hands" in out
+
+
+@pytest.mark.parametrize("prompt", [
+    "An empty library at dusk, warm lamplight",
+    "A worn paperback on a wooden table",
+    "Rain on a window, blurred street lights",
+])
+def test_peopleless_prompts_get_no_people(prompt):
+    """모델이 멋대로 인물을 그려 넣는 걸 막는다 — 사람이 없으면 기형도 없다."""
+    out = ir.apply_people_policy(prompt)
+    assert ir.NO_PEOPLE_SUFFIX in out
+    assert ir.SAFE_PEOPLE_SUFFIX not in out
+
+
+def test_people_policy_keeps_original_prompt():
+    out = ir.apply_people_policy("A worn paperback on a table.")
+    assert out.startswith("A worn paperback on a table.")
+
+
+def test_people_policy_never_stacks_both_suffixes():
+    """두 접미사가 겹치면 '이렇게 그려라'와 '빼라'가 한 프롬프트에서 충돌한다."""
+    for prompt in ("A man reading", "An empty room"):
+        out = ir.apply_people_policy(prompt)
+        assert (ir.SAFE_PEOPLE_SUFFIX in out) != (ir.NO_PEOPLE_SUFFIX in out)
+
+
+def test_safe_image_does_not_stack_policy_on_retry(monkeypatch):
+    """재생성 라운드엔 harden_prompt 만 붙는다 — 정책과 겹치면 지시가 모순된다."""
+    calls = _stub(monkeypatch, [b"A", b"B"], [(False, "기형"), (True, "")])
+    w._safe_image(None, "A man reading", "j1")
+    assert ir.SAFE_PEOPLE_SUFFIX not in calls[1]
+    assert ir.NO_PEOPLE_SUFFIX not in calls[1]
