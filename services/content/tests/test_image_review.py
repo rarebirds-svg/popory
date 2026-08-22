@@ -262,3 +262,33 @@ def test_safe_image_does_not_stack_policy_on_retry(monkeypatch):
     w._safe_image(None, "A man reading", "j1")
     assert ir.SAFE_PEOPLE_SUFFIX not in calls[1]
     assert ir.NO_PEOPLE_SUFFIX not in calls[1]
+
+
+# --- has_person 단어 경계 ---
+# 부분일치로 짜면 "the "⊃"he ", "this "⊃"his ", "many"⊃"man" 이라 사실상 전량이
+# 사람 있음으로 분류되고 "사람 그리지 마라" 분기가 통째로 죽는다. 회귀를 고정한다.
+
+@pytest.mark.parametrize("prompt", [
+    "A worn paperback on the table",
+    "Rain on the window, blurred lights",
+    "A quiet room in this old house",
+    "A manuscript and many letters",
+    "A wooden surface under warm light",
+    "Sunlight over the other shelf",
+    "A German edition bound in leather",
+])
+def test_has_person_false_on_lookalike_words(prompt):
+    assert ir.has_person(prompt) is False, f"오탐: {prompt}"
+
+
+@pytest.mark.parametrize("prompt", [
+    "A man reading by a window",
+    "Two students at a desk",
+    "Her hands on an open book",
+    "A crowd on the street",
+    "People talking in a cafe",
+    "A child near the shelf",
+    "Readers waiting in line",
+])
+def test_has_person_true_on_real_people(prompt):
+    assert ir.has_person(prompt) is True, f"미탐: {prompt}"

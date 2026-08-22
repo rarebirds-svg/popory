@@ -145,15 +145,17 @@ PERSON_WORDS = (
     "man", "men", "woman", "women", "boy", "girl", "child", "children", "kid", "baby",
     "someone", "somebody", "portrait", "face", "hand", "reader", "student", "teacher",
     "doctor", "nurse", "writer", "author", "worker", "traveler", "passenger", "customer",
-    "friends", "he ", "she ", "his ", "her ", "their ",
+    "friend", "he", "she", "his", "her", "they", "their",
 )
+# **단어 경계로 본다.** 부분일치로 짜면 "the "⊃"he ", "this "⊃"his ", "other "⊃"her ",
+# "many"⊃"man" 이라 사실상 모든 프롬프트가 사람 있음으로 분류되고, "사람 그리지 마라" 분기가
+# 통째로 죽는다. 뒤의 s? 는 복수형(readers·students)을 같이 잡기 위한 것.
+_PERSON_RE = re.compile(r"\b(" + "|".join(PERSON_WORDS) + r")s?\b", re.IGNORECASE)
 
 
 def has_person(prompt: str) -> bool:
-    """프롬프트가 사람을 묘사하는지. 단어 경계를 보지 않고 부분일치로 넓게 잡는다 —
-    놓치는 쪽(사람인데 못 알아봄)이 반대보다 나쁘다."""
-    low = prompt.lower()
-    return any(w in low for w in PERSON_WORDS)
+    """프롬프트가 사람을 묘사하는지."""
+    return _PERSON_RE.search(prompt) is not None
 
 
 def apply_people_policy(prompt: str) -> str:
