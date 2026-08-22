@@ -507,3 +507,26 @@ def test_global_cues_offset_by_scene(monkeypatch):
         cues += [(off + st, off + en, t) for (st, en, t) in scene]
     assert cues[0] == (0.0, 2.0, "첫 문장")
     assert cues[1] == (4.6, 6.1, "둘째 문장")  # 5.0 - 0.4 = 4.6 오프셋
+
+
+# --- 쇼츠 자막 위치 (폰트 없이 상수만 검사) ---
+
+def test_portrait_subtitle_clears_youtube_ui_band():
+    """쇼츠 번인 자막이 재생기 UI 띠를 침범하면 YouTube 제목과 겹쳐 둘 다 안 읽힌다.
+    2026-08-22 업로드분에서 실제로 그랬다(자막이 UI 안으로 139px 들어가 있었다)."""
+    top = _video.PORTRAIT_H - _video.SUB_Y_PORTRAIT
+    bottom = top + _video.SUB_LINE_H_PORTRAIT
+    ui_top = _video.PORTRAIT_H - _video.PORTRAIT_UI_SAFE_BOTTOM
+    assert bottom <= ui_top, f"자막 하단 {bottom} 이 UI 안전선 {ui_top} 을 침범한다"
+    assert top > _video.PORTRAIT_H * 0.6, f"자막 상단 {top} 이 너무 높다 — 화면 중앙을 가린다"
+
+
+def test_portrait_subtitle_stays_inside_scrim():
+    """자막은 하단 스크림 그라데이션 안에 있어야 밝은 배경에서도 읽힌다."""
+    scrim_top = _video.PORTRAIT_H - int(_video.PORTRAIT_H * 0.4)
+    assert _video.PORTRAIT_H - _video.SUB_Y_PORTRAIT > scrim_top
+
+
+def test_landscape_subtitle_unchanged():
+    """가로형은 재생기 UI 가 재생 중 숨으므로 기존 위치를 유지한다."""
+    assert _video.SUB_Y_LANDSCAPE == 175
