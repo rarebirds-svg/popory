@@ -92,7 +92,7 @@ def run_once(client) -> bool:
             anchor = StyleAnchor(IMAGE_STYLE_ANCHOR)  # 작업마다 새로 — 톤이 작업 밖으로 새지 않게
             mp4, scenes, meta, img_missing, img_total, cues = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
-                image_fetcher=lambda p: _safe_image(client, p, job_id, anchor),
+                image_fetcher=lambda p: _safe_image(client, p, job_id, anchor, "landscape"),
                 scene_count=SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
@@ -107,7 +107,7 @@ def run_once(client) -> bool:
             anchor = StyleAnchor(IMAGE_STYLE_ANCHOR)
             mp4, scenes, meta, img_missing, img_total, cues = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
-                image_fetcher=lambda p: _safe_image(client, p, job_id, anchor),
+                image_fetcher=lambda p: _safe_image(client, p, job_id, anchor, "portrait"),
                 scene_count=SHORT_SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
@@ -136,7 +136,7 @@ def run_once(client) -> bool:
             )
             anchor = StyleAnchor(IMAGE_STYLE_ANCHOR)
             images = render_carousel(
-                slides, image_fetcher=lambda p: _safe_image(client, p, job_id, anchor)
+                slides, image_fetcher=lambda p: _safe_image(client, p, job_id, anchor, "square")
             )
             client.put_carousel(job_id, images)
             caption = meta.get("caption", "")
@@ -195,10 +195,33 @@ CF_IMAGE_MODEL = os.environ.get("POPORY_CF_IMAGE_MODEL", "klein-4b")
 # klein 이 실패했을 때 물러설 모델. 같은 무료 한도라 로컬(장당 ~18초)보다 먼저 시도할 값어치가 있다.
 # 빈 값이면 물러서지 않고 바로 로컬로 간다.
 CF_IMAGE_FALLBACK_MODEL = os.environ.get("POPORY_CF_IMAGE_FALLBACK_MODEL", "schnell")
-# klein 만 치수를 받는다(schnell 은 1024×1024 고정). 미설정이면 모델 기본값 — 정사각 원본의
-# 세로 여유를 video.py 배경 패닝이 쓰고 있어서, 종횡비 변경은 별도 판단거리다.
-CF_IMAGE_WIDTH = int(os.environ.get("POPORY_CF_IMAGE_WIDTH", "0")) or None
-CF_IMAGE_HEIGHT = int(os.environ.get("POPORY_CF_IMAGE_HEIGHT", "0")) or None
+# klein 만 치수를 받는다(schnell 은 1024×1024 고정).
+# **포맷마다 따로 준다.** 한 쌍을 전역으로 쓰면 다른 포맷이 상한다 — 가로 3:2 원본을 쇼츠
+# (9:16)에 쓰면 확대율은 1.875x 그대로인데(이득 0) 가로로 63%가 잘려 구도가 무너진다.
+#
+# 실측(video._pan_headroom):
+#   가로형 1920×1080 프레임 ← 1024²   : 확대 1.875x, 패닝 여유 840px
+#                            ← 1536×1024: 확대 1.250x, 패닝 여유 200px
+#   세로형 1080×1920 프레임 ← 1024²   : 확대 1.875x, 여유 840px
+#                            ← 1024×1536: 확대 1.250x, 여유 200px
+# 3:2·2:3 은 확대를 33% 줄이는 대신 패닝 여유를 840→200px 로 줄인다. 30초 장면 팬은
+# 210→200px 로 거의 그대로고, 53초 장면만 371→200px 로 짧아진다. 화질을 택한 교환이다.
+# 되돌리려면 POPORY_CF_IMAGE_SIZE_LANDSCAPE= (빈 값) 으로 두면 모델 기본 1024² 다.
+def _parse_size(raw: str) -> tuple[int | None, int | None]:
+    """"1536x1024" → (1536, 1024). 빈 값·형식 오류면 (None, None) = 모델 기본."""
+    try:
+        w, h = raw.lower().split("x", 1)
+        return int(w), int(h)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+CF_IMAGE_SIZES = {
+    "landscape": _parse_size(os.environ.get("POPORY_CF_IMAGE_SIZE_LANDSCAPE", "1536x1024")),
+    "portrait": _parse_size(os.environ.get("POPORY_CF_IMAGE_SIZE_PORTRAIT", "1024x1536")),
+    # 캐러셀은 1080×1080 정사각이라 원본도 정사각이어야 한다. 1024² 면 확대 1.055x 로 충분하다.
+    "square": _parse_size(os.environ.get("POPORY_CF_IMAGE_SIZE_SQUARE", "")),
+}
 # 스타일 앵커 — 한 작업의 첫 이미지를 줄여 두고 이후 장면에 참조로 물려 색감·조명을 잇는다.
 # "전 장면 색감·조명 일관" 규칙을 프롬프트 문구가 아니라 모델 입력으로 강제하는 수단이다.
 # klein 만 참조를 받으므로 schnell·로컬 폴백 경로에서는 자연히 비활성이다.
@@ -321,14 +344,15 @@ class StyleAnchor:
             self.b64 = _anchor_b64(img)
 
 
-def _cf_payload(prompt: str, model: str, anchor: "StyleAnchor | None" = None) -> dict:
+def _cf_payload(prompt: str, model: str, anchor: "StyleAnchor | None" = None,
+                shape: str | None = None) -> dict:
     """모델별 요청 본문. 라우트는 지원하지 않는 인자를 400 으로 돌려주므로 섞어 보내지 않는다."""
     body: dict = {"prompt": prompt, "model": model}
     if model != "schnell":
-        if CF_IMAGE_WIDTH:
-            body["width"] = CF_IMAGE_WIDTH
-        if CF_IMAGE_HEIGHT:
-            body["height"] = CF_IMAGE_HEIGHT
+        width, height = CF_IMAGE_SIZES.get(shape or "", (None, None))
+        if width and height:
+            body["width"] = width
+            body["height"] = height
         refs = anchor.reference_images() if anchor else None
         if refs and len(prompt) + len(ANCHOR_PROMPT_PREFIX) <= CF_PROMPT_MAX:
             body["reference_images"] = refs
@@ -344,12 +368,13 @@ def _cf_models() -> list[str]:
     return models
 
 
-def _try_cloudflare(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None) -> bytes | None:
+def _try_cloudflare(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None,
+                    shape: str | None = None) -> bytes | None:
     """CF로 1장. 1순위 모델이 실패하면 폴백 모델까지 시도하고, 그래도 안 되면 None(→로컬 폴백).
     한도(4006/neurons)면 모델을 바꿔도 안 풀리므로 그날 소진 표시 후 즉시 물러난다."""
     for model in _cf_models():
         try:
-            content = client.post_for_bytes(CF_AI_IMAGE_PATH, json=_cf_payload(prompt, model, anchor))
+            content = client.post_for_bytes(CF_AI_IMAGE_PATH, json=_cf_payload(prompt, model, anchor, shape))
             _verify_image(content)
             return content
         except Exception as e:  # noqa: BLE001
@@ -363,11 +388,12 @@ def _try_cloudflare(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor
     return None
 
 
-def _generate_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None):
+def _generate_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None,
+                    shape: str | None = None):
     """배경 1장 생성(검수 없음). 1순위 CF flux-schnell(무료), 한도 소진·실패 시 로컬 폴백.
     깨진 응답은 검증으로 걸러 재시도, 최종 실패만 image_failed 로그+None."""
     if USE_CF_IMAGE and client is not None and not _cf_exhausted_today():
-        img = _try_cloudflare(client, prompt, job_id, anchor)
+        img = _try_cloudflare(client, prompt, job_id, anchor, shape)
         if img is not None:
             return img
     last = ""
@@ -387,7 +413,8 @@ def _generate_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor
     return None
 
 
-def _safe_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None):
+def _safe_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None,
+                shape: str | None = None):
     """배경 1장 생성 + 이상 검수. 얼굴·인체 기형이나 눈 이상이 보이면 프롬프트에서 인물
     위험을 단계적으로 낮춰(뒷모습·실루엣 → 인물 제거) 재생성한다.
 
@@ -398,7 +425,7 @@ def _safe_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | N
     last_img = None
     for round_index in range(IMAGE_REVIEW_ROUNDS + 1):
         p = prompt if round_index == 0 else harden_prompt(prompt, round_index - 1)
-        img = _generate_image(client, p, job_id, anchor)
+        img = _generate_image(client, p, job_id, anchor, shape)
         if img is None:
             break  # 생성 자체가 실패 — 프롬프트를 바꿔도 같으므로 중단(이미 로그됨)
         ok, reason = review_image(img, job_id)
@@ -425,7 +452,8 @@ def _maybe_put_thumbnail(client, job_id: str, meta: dict, portrait: bool,
         out = TMP / f"thumb_{job_id}.jpg"
         res = render_thumbnail(meta.get("thumbnail_copy"), meta.get("thumbnail_image_prompt"), out,
                                portrait=portrait,
-                               image_fetcher=lambda p: _safe_image(client, p, job_id, anchor))
+                               image_fetcher=lambda p: _safe_image(
+                                   client, p, job_id, anchor, "portrait" if portrait else "landscape"))
         if res:
             client.put_binary(f"/api/content/jobs/{job_id}/thumbnail", data=res.read_bytes(), content_type="image/jpeg")
             res.unlink(missing_ok=True)

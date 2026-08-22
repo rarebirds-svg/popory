@@ -100,7 +100,7 @@ def _stub(monkeypatch, gen_results, review_results):
     """_generate_image·review_image 를 순서대로 소비하는 스텁으로 바꾼다."""
     gens, revs, calls = list(gen_results), list(review_results), []
 
-    def fake_gen(client, prompt, job_id="?", anchor=None):
+    def fake_gen(client, prompt, job_id="?", anchor=None, shape=None):
         calls.append(prompt)
         return gens.pop(0) if gens else None
 
