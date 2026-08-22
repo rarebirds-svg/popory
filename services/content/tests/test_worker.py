@@ -608,14 +608,42 @@ def test_cf_dimensions_only_on_klein(monkeypatch, tmp_path):
     """schnell 은 width/height 를 받지 않는다 — 섞어 보내면 라우트가 400 이다."""
     monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
     monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
-    monkeypatch.setattr(worker, "CF_IMAGE_WIDTH", 1536)
-    monkeypatch.setattr(worker, "CF_IMAGE_HEIGHT", 1024)
     png = _png()
     client = _CFClient([RuntimeError("ai-image 502: no image"), png])
     monkeypatch.setattr(worker.requests, "post", lambda *a, **k: None)
-    assert worker._safe_image(client, "p") == png
+    assert worker._safe_image(client, "p", "j1", None, "landscape") == png
     assert client.payloads[0] == {"prompt": "p", "model": "klein-4b", "width": 1536, "height": 1024}
     assert client.payloads[1] == {"prompt": "p", "model": "schnell"}
+
+
+def test_cf_size_per_format(monkeypatch, tmp_path):
+    """포맷마다 다른 치수를 준다. 가로 3:2 를 쇼츠에 쓰면 확대 이득이 0인데 가로로 63%가 잘린다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    got = {}
+    for shape in ("landscape", "portrait", "square"):
+        client = _CFClient(png)
+        worker._safe_image(client, "p", "j1", None, shape)
+        p0 = client.payloads[0]
+        got[shape] = (p0.get("width"), p0.get("height"))
+    assert got["landscape"] == (1536, 1024)
+    assert got["portrait"] == (1024, 1536)
+    assert got["square"] == (None, None), "캐러셀은 1080 정사각이라 원본도 정사각이어야 한다"
+
+
+def test_cf_size_unknown_shape_uses_model_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    client = _CFClient(_png())
+    worker._safe_image(client, "p", "j1", None, None)
+    assert client.payloads[0] == {"prompt": "p", "model": "klein-4b"}
+
+
+def test_parse_size():
+    assert worker._parse_size("1536x1024") == (1536, 1024)
+    assert worker._parse_size("1024X1536") == (1024, 1536)
+    assert worker._parse_size("") == (None, None)
+    assert worker._parse_size("1536") == (None, None)
+    assert worker._parse_size("wide") == (None, None)
 
 
 def test_cf_single_model_when_fallback_disabled(monkeypatch, tmp_path):
