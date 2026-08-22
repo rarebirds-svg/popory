@@ -632,3 +632,114 @@ def test_cf_single_model_when_fallback_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
     assert worker._safe_image(client, "p") == png
     assert client.calls == 1
+
+
+# --- 스타일 앵커 ---
+
+def _anchor_client(results):
+    return _CFClient(results)
+
+
+def test_anchor_absent_on_first_image(monkeypatch, tmp_path):
+    """첫 장면엔 물릴 앵커가 없다 — 그 장면이 앵커가 된다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(True)
+    assert worker._safe_image(client, "p", "j1", anchor) == png
+    assert "reference_images" not in client.payloads[0]
+    assert anchor.b64 is not None
+
+
+def test_anchor_applied_to_later_images(monkeypatch, tmp_path):
+    """두 번째 장면부터 첫 장면을 참조로 물려 색감·조명을 잇는다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(True)
+    worker._safe_image(client, "장면1", "j1", anchor)
+    worker._safe_image(client, "장면2", "j1", anchor)
+    refs = client.payloads[1]["reference_images"]
+    assert refs == [anchor.b64] and len(refs) == 1
+    # 참조만 물리면 모델이 그걸 재현하려 들 수 있다 — 프롬프트가 image 0 을 명시해야 한다.
+    assert client.payloads[1]["prompt"] == worker.ANCHOR_PROMPT_PREFIX + "장면2"
+
+
+def test_anchor_stays_first_image(monkeypatch, tmp_path):
+    """앵커는 첫 장면으로 고정한다 — 매 장면 덮어쓰면 톤이 서서히 흘러간다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    client = _CFClient([_png((1, 1, 1)), _png((250, 250, 250))])
+    anchor = worker.StyleAnchor(True)
+    worker._safe_image(client, "장면1", "j1", anchor)
+    first = anchor.b64
+    worker._safe_image(client, "장면2", "j1", anchor)
+    assert anchor.b64 == first
+
+
+def test_anchor_not_sent_to_schnell(monkeypatch, tmp_path):
+    """schnell 은 참조 이미지를 받지 않는다 — 물려 보내면 라우트가 400 이다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    png = _png()
+    anchor = worker.StyleAnchor(True)
+    anchor.b64 = "QUJD"
+    client = _CFClient([RuntimeError("ai-image 502: no image"), png])
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: None)
+    assert worker._safe_image(client, "p", "j1", anchor) == png
+    assert "reference_images" in client.payloads[0]
+    assert "reference_images" not in client.payloads[1]
+
+
+def test_anchor_disabled_sends_nothing(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(False)
+    worker._safe_image(client, "장면1", "j1", anchor)
+    worker._safe_image(client, "장면2", "j1", anchor)
+    assert anchor.b64 is None
+    assert all("reference_images" not in p for p in client.payloads)
+
+
+def test_anchor_skips_review_rejected_image(monkeypatch, tmp_path):
+    """검수를 끝내 통과 못 한 이미지는 앵커가 되지 않는다 — 기형을 톤 기준으로 삼지 않는다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(worker, "IMAGE_REVIEW_ROUNDS", 0)
+    monkeypatch.setattr(worker, "review_image", lambda img, job_id="?": (False, "얼굴 기형"))
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(True)
+    assert worker._safe_image(client, "p", "j1", anchor) == png  # 마지막 이미지는 그대로 쓴다
+    assert anchor.b64 is None
+
+
+def test_anchor_b64_is_small_enough_for_route():
+    """라우트는 512×512 미만·512KB 상한을 건다. 원본을 그대로 실어 보내면 400 이다."""
+    import base64 as _b64
+    big = io.BytesIO()
+    Image.new("RGB", (1536, 1024), (30, 60, 90)).save(big, format="PNG")
+    out = worker._anchor_b64(big.getvalue())
+    assert out is not None
+    raw = _b64.b64decode(out)
+    assert len(raw) <= worker.ANCHOR_MAX_BYTES
+    w_, h_ = Image.open(io.BytesIO(raw)).size
+    assert max(w_, h_) <= worker.ANCHOR_MAX_PX < 512
+
+
+def test_anchor_b64_survives_broken_bytes():
+    """앵커는 있으면 좋은 것이지 생성을 막을 이유가 아니다."""
+    assert worker._anchor_b64(b"not an image") is None
+
+
+def test_anchor_dropped_when_prompt_too_long(monkeypatch, tmp_path):
+    """접두사까지 붙여 라우트 상한을 넘기느니 앵커를 포기한다 — 400 이면 장면 자체를 잃는다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(True)
+    anchor.b64 = "QUJD"
+    long_prompt = "x" * worker.CF_PROMPT_MAX
+    worker._safe_image(client, long_prompt, "j1", anchor)
+    assert "reference_images" not in client.payloads[0]
+    assert client.payloads[0]["prompt"] == long_prompt
