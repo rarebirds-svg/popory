@@ -13,7 +13,8 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-from popory_content.generate import generate, GenerateError, generate_youtube_post
+from popory_content.generate import (generate, GenerateError, generate_youtube_post,
+                                     set_model_overrides, model_for)
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
 from popory_content.video import make_video, VideoError, render_thumbnail, TMP
 from popory_content.subtitles import to_srt
@@ -44,7 +45,8 @@ def _generate_carousel(*, topic: str, sources: list, style_samples: list, job_id
     from popory_content.generate import run_claude_cli
     sp = build_carousel_system_prompt(style_samples, slide_count=slide_count)
     um = build_carousel_user_message(topic, sources)
-    return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_carousel, job_id=job_id)
+    return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_carousel, job_id=job_id,
+                          model=model_for("carousel"))
 POLL_INTERVAL_SECONDS = 20
 # 서비스 JWT 수명. 60초는 시계 오차·느린 요청에 취약(일시 401 관측) → 여유 상향.
 TOKEN_TTL_SECONDS = 300
@@ -666,6 +668,32 @@ def run_custom_brief_once(client) -> bool:
     return True
 
 
+LLM_MODELS_PATH = "/api/content/llm-models"
+# 어드민에서 모델을 바꾸면 다음 사이클부터 먹는다. 매 사이클 1회 GET 이라 부담이 없고,
+# 워커를 재시작하지 않아도 반영된다는 게 이 방식의 이유다.
+LLM_MODELS_TTL_SECONDS = int(os.environ.get("POPORY_LLM_MODELS_TTL", "60"))
+_llm_models_fetched_at = 0.0
+
+
+def refresh_model_overrides(client, *, force: bool = False) -> None:
+    """포털에서 기능별 모델을 받아 프로세스 전역에 적용한다.
+
+    실패는 삼킨다 — 모델 설정을 못 읽었다고 배치를 멈추면 안 된다. 그 경우 직전 값이
+    그대로 남고, 한 번도 못 받았으면 DEFAULT_MODEL 로 돈다."""
+    global _llm_models_fetched_at
+    now = time.monotonic()
+    if not force and now - _llm_models_fetched_at < LLM_MODELS_TTL_SECONDS:
+        return
+    try:
+        data = client.get(LLM_MODELS_PATH) or {}
+        models = data.get("models")
+        if isinstance(models, dict):
+            set_model_overrides(models)
+            _llm_models_fetched_at = now
+    except Exception as e:  # noqa: BLE001 — 설정 조회 실패가 생성을 막으면 안 된다
+        append_log(LOGS_DIR, {"worker": "content", "status": "llm_models_fetch_failed", "error": str(e)[:200]})
+
+
 def run_cycle(client) -> bool:
     """한 폴 사이클. 생성·유튜브·IG·페이스북 업로드를 매번 각각 1회 시도한다.
     예전엔 생성 큐가 빌 때만 업로드를 claim 해서, 생성 백로그가 있으면 업로드가
@@ -673,6 +701,7 @@ def run_cycle(client) -> bool:
     생성 1건이 도는 동안만 대기하고 그 직후 업로드가 처리된다(무한 starvation 제거).
     저순위 커스텀 브리핑은 다른 큐가 모두 비었을 때만 시도한다. 하나라도 처리하면 True.
     """
+    refresh_model_overrides(client)
     did_gen = run_once(client)
     did_upload = run_upload_once(client)
     did_ig = run_instagram_upload_once(client)

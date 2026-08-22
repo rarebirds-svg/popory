@@ -11,7 +11,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
-from popory_content.generate import run_claude_cli
+from popory_content.generate import run_claude_cli, model_for
 from popory_content.subtitles import scene_offsets, Cue
 from popory_content.tts import synthesize, spoken_text
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
@@ -53,12 +53,15 @@ class VideoError(Exception):
 def generate_scenes(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
                     job_id: str = "adhoc", scene_count: int = 8,
                     image_style_kw: str = "photorealistic, cinematic",
-                    system_prompt_builder=None, user_msg_builder=None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                    system_prompt_builder=None, user_msg_builder=None,
+                    feature: str = "video_script") -> tuple[list[dict[str, Any]], dict[str, Any]]:
     sp_builder = system_prompt_builder or build_video_system_prompt
     um_builder = user_msg_builder or build_video_user_message
     sp = sp_builder(style_samples, scene_count=scene_count, image_style_kw=image_style_kw)
     um = um_builder(topic, sources)
-    return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_video, job_id=job_id)
+    # 롱폼과 쇼츠는 대본 성격이 달라 어드민에서 따로 고를 수 있다(feature 로 갈린다).
+    return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_video, job_id=job_id,
+                          model=model_for(feature))
 
 
 def _run(cmd: list[str]) -> None:
@@ -661,6 +664,7 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
                system_prompt_builder=None, user_msg_builder=None) -> tuple[Path, list[dict[str, Any]], dict[str, Any], int, int, list[Cue]]:
     scenes, meta = generate_scenes(topic=topic, sources=sources, style_samples=style_samples,
                                    job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw,
-                                   system_prompt_builder=system_prompt_builder, user_msg_builder=user_msg_builder)
+                                   system_prompt_builder=system_prompt_builder, user_msg_builder=user_msg_builder,
+                                   feature="shorts_script" if portrait else "video_script")
     mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice, portrait=portrait)
     return mp4, scenes, meta, img_missing, img_total, cues
