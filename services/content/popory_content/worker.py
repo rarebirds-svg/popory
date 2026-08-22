@@ -181,9 +181,20 @@ IMAGEGEN_URL = os.environ.get("POPORY_IMAGEGEN_URL", "http://localhost:8765/gene
 # 로컬 fp32 SDXL/SD 생성은 맥미니 16GB 메모리 압박에서 장면당 ~110초가 걸린다.
 # 120초는 빠듯해 종종 read timeout → 재시도 낭비 → 단색 폴백을 유발했다. 여유 상향.
 IMAGE_TIMEOUT_SECONDS = int(os.environ.get("POPORY_IMAGEGEN_TIMEOUT", "300"))
-# 1순위 = Cloudflare flux-schnell(무료 ~10k neurons/일). 한도 소진(4006)이면 로컬 RealVisXL 폴백.
+# 1순위 = Cloudflare(무료 ~10k neurons/일). klein-4b → schnell → 로컬 RealVisXL 순으로 물러선다.
+# 한도 소진(4006)은 두 모델이 같은 뉴런 풀을 쓰므로 모델을 바꿔도 안 풀린다 — CF 경로 전체를 접는다.
 USE_CF_IMAGE = os.environ.get("POPORY_USE_CF_IMAGE", "1") != "0"
 CF_AI_IMAGE_PATH = "/api/content/ai-image"
+# 2026-08-22 실호출로 규약 검증 후 klein-4b 로 전환했다. schnell 보다 한 세대 뒤 모델이라
+# 손·얼굴 기형이 덜하다. 되돌리려면 POPORY_CF_IMAGE_MODEL=schnell 하나면 된다(배포 불필요).
+CF_IMAGE_MODEL = os.environ.get("POPORY_CF_IMAGE_MODEL", "klein-4b")
+# klein 이 실패했을 때 물러설 모델. 같은 무료 한도라 로컬(장당 ~18초)보다 먼저 시도할 값어치가 있다.
+# 빈 값이면 물러서지 않고 바로 로컬로 간다.
+CF_IMAGE_FALLBACK_MODEL = os.environ.get("POPORY_CF_IMAGE_FALLBACK_MODEL", "schnell")
+# klein 만 치수를 받는다(schnell 은 1024×1024 고정). 미설정이면 모델 기본값 — 정사각 원본의
+# 세로 여유를 video.py 배경 패닝이 쓰고 있어서, 종횡비 변경은 별도 판단거리다.
+CF_IMAGE_WIDTH = int(os.environ.get("POPORY_CF_IMAGE_WIDTH", "0")) or None
+CF_IMAGE_HEIGHT = int(os.environ.get("POPORY_CF_IMAGE_HEIGHT", "0")) or None
 CF_QUOTA_FILE = LOGS_DIR / "cf_quota.json"
 # 포털 readiness 하트비트(생성 가능 여부 페이지용).
 HEARTBEAT_PATH = "/api/content/worker-heartbeat"
@@ -262,24 +273,49 @@ def heartbeat_loop(client, stop: threading.Event) -> None:
         stop.wait(HEARTBEAT_INTERVAL_SECONDS)
 
 
-def _try_cloudflare(client, prompt: str) -> bytes | None:
-    """CF flux-schnell로 1장. 한도(4006/neurons)면 그날 소진 표시 후 None(→로컬 폴백). 그 외 실패도 None."""
-    try:
-        content = client.post_for_bytes(CF_AI_IMAGE_PATH, json={"prompt": prompt})
-        _verify_image(content)
-        return content
-    except Exception as e:  # noqa: BLE001
-        msg = str(e)
-        if "4006" in msg or "neuron" in msg.lower():
-            _mark_cf_exhausted()
-        return None
+def _cf_payload(prompt: str, model: str) -> dict:
+    """모델별 요청 본문. 라우트는 지원하지 않는 인자를 400 으로 돌려주므로 섞어 보내지 않는다."""
+    body: dict = {"prompt": prompt, "model": model}
+    if model != "schnell":
+        if CF_IMAGE_WIDTH:
+            body["width"] = CF_IMAGE_WIDTH
+        if CF_IMAGE_HEIGHT:
+            body["height"] = CF_IMAGE_HEIGHT
+    return body
+
+
+def _cf_models() -> list[str]:
+    """시도할 CF 모델 순서. 폴백이 없거나 1순위와 같으면 한 번만 시도한다."""
+    models = [CF_IMAGE_MODEL]
+    if CF_IMAGE_FALLBACK_MODEL and CF_IMAGE_FALLBACK_MODEL != CF_IMAGE_MODEL:
+        models.append(CF_IMAGE_FALLBACK_MODEL)
+    return models
+
+
+def _try_cloudflare(client, prompt: str, job_id: str = "?") -> bytes | None:
+    """CF로 1장. 1순위 모델이 실패하면 폴백 모델까지 시도하고, 그래도 안 되면 None(→로컬 폴백).
+    한도(4006/neurons)면 모델을 바꿔도 안 풀리므로 그날 소진 표시 후 즉시 물러난다."""
+    for model in _cf_models():
+        try:
+            content = client.post_for_bytes(CF_AI_IMAGE_PATH, json=_cf_payload(prompt, model))
+            _verify_image(content)
+            return content
+        except Exception as e:  # noqa: BLE001
+            msg = str(e)
+            if "4006" in msg or "neuron" in msg.lower():
+                _mark_cf_exhausted()
+                return None
+            # 모델별로 남긴다 — klein 만 계속 실패하면 전환을 되돌릴 근거가 여기 쌓인다.
+            append_log(LOGS_DIR, {"worker": "content", "status": "cf_image_failed",
+                                  "job": job_id, "model": model, "error": msg[:200]})
+    return None
 
 
 def _generate_image(client, prompt: str, job_id: str = "?"):
     """배경 1장 생성(검수 없음). 1순위 CF flux-schnell(무료), 한도 소진·실패 시 로컬 폴백.
     깨진 응답은 검증으로 걸러 재시도, 최종 실패만 image_failed 로그+None."""
     if USE_CF_IMAGE and client is not None and not _cf_exhausted_today():
-        img = _try_cloudflare(client, prompt)
+        img = _try_cloudflare(client, prompt, job_id)
         if img is not None:
             return img
     last = ""

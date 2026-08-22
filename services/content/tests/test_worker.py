@@ -338,14 +338,18 @@ class _CFClient:
     """post_for_bytes만 가진 가짜 PortalClient(CF flux 경로 테스트용)."""
 
     def __init__(self, result):
-        self.result = result  # bytes 또는 raise할 Exception
+        # bytes·Exception 하나거나, 호출 순서대로 돌려줄 리스트(모델 폴백 검증용)
+        self.result = result
         self.calls = 0
+        self.payloads = []
 
     def post_for_bytes(self, path, *, json):
         self.calls += 1
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
+        self.payloads.append(json)
+        out = self.result[self.calls - 1] if isinstance(self.result, list) else self.result
+        if isinstance(out, Exception):
+            raise out
+        return out
 
 
 def test_safe_image_uses_cloudflare_first(monkeypatch, tmp_path):
@@ -557,3 +561,74 @@ def test_auth_failure_sends_notification(monkeypatch):
     with pytest.raises(SystemExit):
         worker.run_once(client)
     assert sent == [True]
+
+
+def test_cf_uses_klein_by_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: None)
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 1
+    assert client.payloads[0] == {"prompt": "p", "model": "klein-4b"}
+
+
+def test_cf_falls_back_to_schnell_before_local(monkeypatch, tmp_path):
+    """klein 실패는 로컬(장당 ~18초)로 곧장 가지 않고 같은 무료 한도의 schnell 을 먼저 쓴다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    png = _png((4, 5, 6))
+    client = _CFClient([RuntimeError("ai-image 502: no image"), png])
+    local = {"n": 0}
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: local.__setitem__("n", local["n"] + 1))
+    assert worker._safe_image(client, "p") == png
+    assert [c["model"] for c in client.payloads] == ["klein-4b", "schnell"]
+    assert local["n"] == 0
+
+
+def test_cf_quota_skips_fallback_model(monkeypatch, tmp_path):
+    """한도는 두 모델이 같은 뉴런 풀을 쓰므로 모델을 바꿔도 안 풀린다 — 두 번째 호출을 낭비하지 않는다."""
+    from popory_content.portal_client import PortalError
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    client = _CFClient(PortalError("ai-image 500: 4006: daily free allocation of 10,000 neurons", exit_code=4))
+    png = _png((7, 8, 9))
+
+    class Resp:
+        status_code = 200
+        content = png
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 1
+    assert worker._cf_exhausted_today() is True
+
+
+def test_cf_dimensions_only_on_klein(monkeypatch, tmp_path):
+    """schnell 은 width/height 를 받지 않는다 — 섞어 보내면 라우트가 400 이다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(worker, "CF_IMAGE_WIDTH", 1536)
+    monkeypatch.setattr(worker, "CF_IMAGE_HEIGHT", 1024)
+    png = _png()
+    client = _CFClient([RuntimeError("ai-image 502: no image"), png])
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: None)
+    assert worker._safe_image(client, "p") == png
+    assert client.payloads[0] == {"prompt": "p", "model": "klein-4b", "width": 1536, "height": 1024}
+    assert client.payloads[1] == {"prompt": "p", "model": "schnell"}
+
+
+def test_cf_single_model_when_fallback_disabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(worker, "CF_IMAGE_FALLBACK_MODEL", "")
+    client = _CFClient(RuntimeError("ai-image 502: no image"))
+    png = _png()
+
+    class Resp:
+        status_code = 200
+        content = png
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 1
