@@ -298,8 +298,16 @@ def _append_silence(src: Path, seconds: float, out: Path) -> None:
 # 세로는 1080px에 46px 폰트라 18자가 한계다. 이 값이 곧 자막 조각의 분할 기준이 된다.
 SUB_WRAP_LANDSCAPE, SUB_WRAP_PORTRAIT = 30, 18
 # 자막 블록 상단 y(화면 아래에서 뺀 값). 항상 한 줄이라 블록 높이가 일정해, 예전 다줄 시절처럼
-# 아래로 자라 화면 밖으로 밀릴 걱정이 없다. 세로는 쇼츠 UI 오버레이 영역을 피해 더 위에 둔다.
-SUB_Y_LANDSCAPE, SUB_Y_PORTRAIT = 175, 305
+# 아래로 자라 화면 밖으로 밀릴 걱정이 없다.
+#
+# 세로(쇼츠)는 **YouTube 자체 UI를 피해야 한다.** 프레임 하단 약 20%를 재생기가 제목·채널명·
+# 설명·CTA 로 덮는다. 예전 305 는 그 영역 한복판이라 번인 자막과 YouTube 제목이 겹쳐 둘 다
+# 안 읽혔다(2026-08-22 실제 업로드분에서 확인). 안전 영역 위로 올린다.
+PORTRAIT_UI_SAFE_BOTTOM = 384      # 1920 의 20% — 재생기 UI 가 덮는 하단 띠
+SUB_LINE_H_PORTRAIT = 60           # 46px 폰트 한 줄 높이(외곽선 포함)
+SUB_GAP_PORTRAIT = 56              # UI 띠와 자막 사이 여백
+SUB_Y_LANDSCAPE = 175
+SUB_Y_PORTRAIT = PORTRAIT_UI_SAFE_BOTTOM + SUB_LINE_H_PORTRAIT + SUB_GAP_PORTRAIT  # 500
 
 
 def _wrap_chunks(sentence: str, width: int) -> list[str]:
