@@ -7,14 +7,16 @@ import type { AppVars } from "../middleware/session";
 const WORKER_AREA = "content-worker";
 type Vars = AppVars & ServiceVars;
 
-// 두 모델은 호출 규약이 다르다. schnell 은 JSON 입력 + base64 출력,
-// klein-4b 는 multipart 입력(참조 이미지 지원) + 바이너리 출력이다.
+// 두 모델은 입력 규약이 다르다. schnell 은 JSON, klein-4b 는 multipart(참조 이미지 지원)다.
+// 출력은 2026-08-22 실호출 기준 둘 다 base64 JPEG 를 JSON 으로 감싸 준다 — 문서만 보면 klein 이
+// 바이너리를 줄 것 같지만 아니었다. 그래도 imageBytes() 는 바이너리까지 받아 둔다(모델은 바뀐다).
 const MODELS = { schnell: "@cf/black-forest-labs/flux-1-schnell", "klein-4b": "@cf/black-forest-labs/flux-2-klein-4b" } as const;
 type ModelKey = keyof typeof MODELS;
 
 const MAX_PROMPT = 1500;
 const MAX_REFS = 4; // klein 은 input_image_0..3 까지만 받는다.
 const MAX_REF_BYTES = 512 * 1024; // 참조 이미지는 512×512 미만 권고 — 바이트 상한으로 대신 막는다.
+// 실측(2026-08-22)상 요청한 치수가 스냅 없이 그대로 나온다. 1536×1024 요청 → 1536×1024.
 const DIM_MIN = 256;
 const DIM_MAX = 1920;
 const MAX_STEPS = 8; // schnell 문서 상한. 다만 1~4 스텝 증류 모델이라 4 초과는 이득이 거의 없다.
@@ -51,7 +53,7 @@ export function sniffImageMime(b: Uint8Array): string | null {
   return null;
 }
 
-// 모델마다 응답 모양이 달라 한 곳에서 바이트로 정규화한다.
+// 응답 모양이 모델·시점마다 달라 한 곳에서 바이트로 정규화한다. 지금은 둘 다 첫 분기로 떨어진다.
 export async function imageBytes(out: unknown): Promise<Uint8Array | null> {
   if (!out) return null;
   if (typeof out === "object" && typeof (out as { image?: unknown }).image === "string") return fromBase64((out as { image: string }).image);
