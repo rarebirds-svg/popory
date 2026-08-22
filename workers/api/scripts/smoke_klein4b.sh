@@ -19,6 +19,24 @@ OUT="${OUT_DIR:-${TMPDIR:-/tmp}/klein-smoke}"
 PROMPT="${PROMPT:-A quiet reading nook by a rain-streaked window, a closed hardcover book resting on a worn wooden stool, warm lamp light from the left, photorealistic, cinematic, shallow depth of field}"
 mkdir -p "$OUT"
 
+# 매직 바이트 → 확장자. .out 그대로 두면 macOS 가 압축 파일로 오해해 미리보기가 안 열린다.
+ext_of() {
+  case "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')" in
+    ffd8ff*) echo jpg ;;
+    89504e47) echo png ;;
+    52494646) echo webp ;;
+    *) echo "" ;;
+  esac
+}
+
+# 판별한 형식대로 확장자를 붙여 옮기고 최종 경로를 찍는다.
+save_as() {
+  local f="$1" name="$2" ext
+  ext=$(ext_of "$f")
+  [ -n "$ext" ] || return 0
+  mv -f "$f" "$OUT/$name.$ext" && printf '  저장      %s\n' "$OUT/$name.$ext"
+}
+
 # 응답을 파일로 받아 형식·크기·치수를 실측한다. 라우트가 매직 바이트로 판별하는 것과 같은 방식이다.
 report() {
   local name="$1" body="$2" hdr="$3" code="$4"
@@ -38,9 +56,9 @@ report() {
     return 1
   fi
   case "$magic" in
-    ffd8ff*) printf '  형식      JPEG (바이너리)\n'; printf '  치수      %s\n' "$(file -b "$body")" ;;
-    89504e47) printf '  형식      PNG (바이너리)\n'; printf '  치수      %s\n' "$(file -b "$body")" ;;
-    52494646) printf '  형식      WebP 추정 (바이너리)\n' ;;
+    ffd8ff*) printf '  형식      JPEG (바이너리)\n'; printf '  치수      %s\n' "$(file -b "$body")"; save_as "$body" "$name" ;;
+    89504e47) printf '  형식      PNG (바이너리)\n'; printf '  치수      %s\n' "$(file -b "$body")"; save_as "$body" "$name" ;;
+    52494646) printf '  형식      WebP 추정 (바이너리)\n'; save_as "$body" "$name" ;;
     7b22*|7b0a*) # JSON 응답 — schnell 처럼 base64 를 감싸 주는 경우
       printf '  형식      JSON (base64 래핑)\n'
       local keys img
@@ -50,6 +68,7 @@ report() {
       # openssl 로 디코드한다 — macOS 의 BSD base64 는 -d 가 아니라 -D 다.
       if jq -r '.result.image // empty' <"$body" 2>/dev/null | openssl base64 -d -A >"$img" 2>/dev/null && [ -s "$img" ]; then
         printf '  디코드    %s bytes / %s\n' "$(wc -c <"$img" | tr -d ' ')" "$(file -b "$img")"
+        save_as "$img" "$name"
       fi ;;
     *) printf '  형식      ??? — 라우트라면 502 로 떨어뜨릴 응답이다\n' ;;
   esac
@@ -58,7 +77,7 @@ report() {
 probe() {
   local name="$1"; shift
   local body="$OUT/$name.out" hdr="$OUT/$name.hdr" code rc
-  rm -f "$body" "$hdr"
+  rm -f "$body" "$hdr" "$OUT/$name.decoded" "$OUT/$name.jpg" "$OUT/$name.png" "$OUT/$name.webp"
   code=$(curl -sS -o "$body" -D "$hdr" -w '%{http_code}' --max-time 180 \
     -H "Authorization: Bearer ${CF_API_TOKEN}" "$@")
   rc=$?
@@ -89,9 +108,11 @@ probe klein-1920x1088 "$API/@cf/black-forest-labs/flux-2-klein-4b" \
 echo
 echo "== 4. klein-4b 참조 이미지 — 장면 간 스타일 앵커가 실제로 먹는지"
 REF="$OUT/ref-512.png"
-# 2번이 JSON(base64)으로 왔다면 .out 은 텍스트다 — 디코드본이 있으면 그걸 쓴다.
-SRC="$OUT/klein-default.out"
-[ -s "$OUT/klein-default.decoded" ] && SRC="$OUT/klein-default.decoded"
+# 2번 결과가 어떤 이름으로 남았든 집는다 — JSON 응답이면 .out 은 텍스트고 디코드본이 실제 이미지다.
+SRC=""
+for cand in "$OUT/klein-default.jpg" "$OUT/klein-default.png" "$OUT/klein-default.webp" "$OUT/klein-default.decoded" "$OUT/klein-default.out"; do
+  [ -s "$cand" ] && { SRC="$cand"; break; }
+done
 if [ -s "$SRC" ] && command -v sips >/dev/null 2>&1; then
   sips -Z 480 "$SRC" --out "$REF" >/dev/null 2>&1
 elif [ -s "$SRC" ] && command -v magick >/dev/null 2>&1; then
@@ -107,12 +128,14 @@ else
 fi
 
 echo
-echo "== 확인할 것 =="
+echo "== 2026-08-22 실측 =="
 cat <<'NOTE'
-  1. klein 응답이 바이너리인가 JSON(base64)인가 → 라우트 imageBytes() 가 둘 다 받는다. 실제로 뭐가 오는지 기록할 것.
-  2. content-type 이 image/jpeg 인가 image/png 인가 → sniffImageMime() 판별과 일치해야 한다.
-  3. 3번의 치수가 요청값과 같은가 → 다르면 width/height 가 무시되거나 32 배수로 스냅되는 것이다.
-  4. 4번이 200 이면 참조 이미지 규약(input_image_0, 512px 미만)이 맞는 것이다.
-  5. 결과 이미지는 OUT_DIR(기본 $TMPDIR/klein-smoke)에 남는다 — schnell 과 나란히 놓고
-     손·얼굴·질감을 눈으로 비교할 것. 얼굴 회피 정책을 되돌릴 수 있는지가 여기서 갈린다.
+  네 경로 모두 200. 워커 바인딩(env.AI.run)으로도 같은 결과를 확인했다.
+  - 응답은 klein 도 base64 를 JSON 으로 감싸 준다. 문서만 보면 바이너리 같지만 아니다.
+  - 형식은 schnell·klein 모두 JPEG. 라우트가 image/png 로 못박던 게 실제 버그였다.
+  - width/height 는 스냅 없이 그대로 반영된다(1536×1024 요청 → 1536×1024).
+  - 참조 이미지(input_image_0)는 256×256 앵커 약 59KB 로 통과. 512KB 상한에 여유가 크다.
+
+  다시 돌릴 때 볼 것: 위 네 줄이 그대로인가, 그리고 결과 이미지의 손·얼굴·질감이
+  schnell 보다 나은가. 얼굴 회피 정책을 되돌릴 수 있는지가 거기서 갈린다.
 NOTE
