@@ -1,4 +1,5 @@
 # 포털 큐에서 컨텐츠 작업을 claim → claude 생성 → 결과 회신. __main__ 은 무한 poll 루프.
+import base64
 import datetime
 import json
 import os
@@ -88,9 +89,10 @@ def run_once(client) -> bool:
     try:
         if platform == "youtube":
             opts = parse_options(job.get("params_json"))
+            anchor = StyleAnchor(IMAGE_STYLE_ANCHOR)  # 작업마다 새로 — 톤이 작업 밖으로 새지 않게
             mp4, scenes, meta, img_missing, img_total, cues = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
-                image_fetcher=lambda p: _safe_image(client, p, job_id),
+                image_fetcher=lambda p: _safe_image(client, p, job_id, anchor),
                 scene_count=SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
@@ -98,13 +100,14 @@ def run_once(client) -> bool:
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
-            _maybe_put_thumbnail(client, job_id, meta, portrait=False)
+            _maybe_put_thumbnail(client, job_id, meta, portrait=False, anchor=anchor)
             _finalize_video(client, job_id, script, meta, img_missing, img_total)
         elif platform == "shorts":
             opts = parse_shorts_options(job.get("params_json"))
+            anchor = StyleAnchor(IMAGE_STYLE_ANCHOR)
             mp4, scenes, meta, img_missing, img_total, cues = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
-                image_fetcher=lambda p: _safe_image(client, p, job_id),
+                image_fetcher=lambda p: _safe_image(client, p, job_id, anchor),
                 scene_count=SHORT_SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
@@ -115,7 +118,7 @@ def run_once(client) -> bool:
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
-            _maybe_put_thumbnail(client, job_id, meta, portrait=True)
+            _maybe_put_thumbnail(client, job_id, meta, portrait=True, anchor=anchor)
             _finalize_video(client, job_id, script, meta, img_missing, img_total)
         elif platform == "instagram-image":
             import json as _json
@@ -131,8 +134,9 @@ def run_once(client) -> bool:
                 topic=job["topic"], sources=sources, style_samples=samples,
                 job_id=job_id, slide_count=slide_count,
             )
+            anchor = StyleAnchor(IMAGE_STYLE_ANCHOR)
             images = render_carousel(
-                slides, image_fetcher=lambda p: _safe_image(client, p)
+                slides, image_fetcher=lambda p: _safe_image(client, p, job_id, anchor)
             )
             client.put_carousel(job_id, images)
             caption = meta.get("caption", "")
@@ -195,6 +199,16 @@ CF_IMAGE_FALLBACK_MODEL = os.environ.get("POPORY_CF_IMAGE_FALLBACK_MODEL", "schn
 # 세로 여유를 video.py 배경 패닝이 쓰고 있어서, 종횡비 변경은 별도 판단거리다.
 CF_IMAGE_WIDTH = int(os.environ.get("POPORY_CF_IMAGE_WIDTH", "0")) or None
 CF_IMAGE_HEIGHT = int(os.environ.get("POPORY_CF_IMAGE_HEIGHT", "0")) or None
+# 스타일 앵커 — 한 작업의 첫 이미지를 줄여 두고 이후 장면에 참조로 물려 색감·조명을 잇는다.
+# "전 장면 색감·조명 일관" 규칙을 프롬프트 문구가 아니라 모델 입력으로 강제하는 수단이다.
+# klein 만 참조를 받으므로 schnell·로컬 폴백 경로에서는 자연히 비활성이다.
+IMAGE_STYLE_ANCHOR = os.environ.get("POPORY_IMAGE_STYLE_ANCHOR", "1") != "0"
+ANCHOR_MAX_PX = 480            # 라우트가 요구하는 512×512 미만
+ANCHOR_MAX_BYTES = 400 * 1024  # 라우트 상한 512KB 안쪽
+# 참조를 넣는 것만으로는 부족하다 — 실측에서 참조가 제대로 먹은 호출은 프롬프트가 image 0 을
+# 명시했다. 명시 없이 이미지만 물리면 모델이 참조를 재현하려 들 수 있다.
+ANCHOR_PROMPT_PREFIX = "Match the color grading, lighting and overall mood of image 0. "
+CF_PROMPT_MAX = 1500  # 라우트 상한. 접두사를 붙여 넘기면 400 이라 그럴 땐 앵커를 포기한다.
 CF_QUOTA_FILE = LOGS_DIR / "cf_quota.json"
 # 포털 readiness 하트비트(생성 가능 여부 페이지용).
 HEARTBEAT_PATH = "/api/content/worker-heartbeat"
@@ -273,7 +287,41 @@ def heartbeat_loop(client, stop: threading.Event) -> None:
         stop.wait(HEARTBEAT_INTERVAL_SECONDS)
 
 
-def _cf_payload(prompt: str, model: str) -> dict:
+def _anchor_b64(img: bytes) -> str | None:
+    """참조 이미지로 쓸 수 있게 줄여 base64 로 만든다. 실패하면 None — 앵커는 있으면 좋은
+    것이지 생성을 막을 이유가 아니다."""
+    try:
+        im = Image.open(BytesIO(img)).convert("RGB")
+        im.thumbnail((ANCHOR_MAX_PX, ANCHOR_MAX_PX))
+        buf = BytesIO()
+        im.save(buf, format="JPEG", quality=85)
+        raw = buf.getvalue()
+        if not raw or len(raw) > ANCHOR_MAX_BYTES:
+            return None
+        return base64.b64encode(raw).decode()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class StyleAnchor:
+    """한 작업 안에서만 사는 스타일 앵커. 첫 이미지를 잡아 두고 이후 장면에 물린다.
+
+    작업마다 새로 만든다 — 어제 영상의 톤이 오늘 영상에 새면 안 된다."""
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+        self.b64: str | None = None
+
+    def reference_images(self) -> list[str] | None:
+        return [self.b64] if (self.enabled and self.b64) else None
+
+    def adopt(self, img: bytes) -> None:
+        """첫 이미지만 앵커로 잡는다. 이후 장면이 앵커를 덮어쓰면 톤이 서서히 흘러간다."""
+        if self.enabled and self.b64 is None:
+            self.b64 = _anchor_b64(img)
+
+
+def _cf_payload(prompt: str, model: str, anchor: "StyleAnchor | None" = None) -> dict:
     """모델별 요청 본문. 라우트는 지원하지 않는 인자를 400 으로 돌려주므로 섞어 보내지 않는다."""
     body: dict = {"prompt": prompt, "model": model}
     if model != "schnell":
@@ -281,6 +329,10 @@ def _cf_payload(prompt: str, model: str) -> dict:
             body["width"] = CF_IMAGE_WIDTH
         if CF_IMAGE_HEIGHT:
             body["height"] = CF_IMAGE_HEIGHT
+        refs = anchor.reference_images() if anchor else None
+        if refs and len(prompt) + len(ANCHOR_PROMPT_PREFIX) <= CF_PROMPT_MAX:
+            body["reference_images"] = refs
+            body["prompt"] = ANCHOR_PROMPT_PREFIX + prompt
     return body
 
 
@@ -292,12 +344,12 @@ def _cf_models() -> list[str]:
     return models
 
 
-def _try_cloudflare(client, prompt: str, job_id: str = "?") -> bytes | None:
+def _try_cloudflare(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None) -> bytes | None:
     """CF로 1장. 1순위 모델이 실패하면 폴백 모델까지 시도하고, 그래도 안 되면 None(→로컬 폴백).
     한도(4006/neurons)면 모델을 바꿔도 안 풀리므로 그날 소진 표시 후 즉시 물러난다."""
     for model in _cf_models():
         try:
-            content = client.post_for_bytes(CF_AI_IMAGE_PATH, json=_cf_payload(prompt, model))
+            content = client.post_for_bytes(CF_AI_IMAGE_PATH, json=_cf_payload(prompt, model, anchor))
             _verify_image(content)
             return content
         except Exception as e:  # noqa: BLE001
@@ -311,11 +363,11 @@ def _try_cloudflare(client, prompt: str, job_id: str = "?") -> bytes | None:
     return None
 
 
-def _generate_image(client, prompt: str, job_id: str = "?"):
+def _generate_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None):
     """배경 1장 생성(검수 없음). 1순위 CF flux-schnell(무료), 한도 소진·실패 시 로컬 폴백.
     깨진 응답은 검증으로 걸러 재시도, 최종 실패만 image_failed 로그+None."""
     if USE_CF_IMAGE and client is not None and not _cf_exhausted_today():
-        img = _try_cloudflare(client, prompt, job_id)
+        img = _try_cloudflare(client, prompt, job_id, anchor)
         if img is not None:
             return img
     last = ""
@@ -335,7 +387,7 @@ def _generate_image(client, prompt: str, job_id: str = "?"):
     return None
 
 
-def _safe_image(client, prompt: str, job_id: str = "?"):
+def _safe_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None):
     """배경 1장 생성 + 이상 검수. 얼굴·인체 기형이나 눈 이상이 보이면 프롬프트에서 인물
     위험을 단계적으로 낮춰(뒷모습·실루엣 → 인물 제거) 재생성한다.
 
@@ -346,11 +398,14 @@ def _safe_image(client, prompt: str, job_id: str = "?"):
     last_img = None
     for round_index in range(IMAGE_REVIEW_ROUNDS + 1):
         p = prompt if round_index == 0 else harden_prompt(prompt, round_index - 1)
-        img = _generate_image(client, p, job_id)
+        img = _generate_image(client, p, job_id, anchor)
         if img is None:
             break  # 생성 자체가 실패 — 프롬프트를 바꿔도 같으므로 중단(이미 로그됨)
         ok, reason = review_image(img, job_id)
         if ok:
+            # 검수를 통과한 장면만 앵커가 된다. 기형 의심 이미지를 톤 기준으로 삼지 않는다.
+            if anchor is not None:
+                anchor.adopt(img)
             return img
         last_img = img
         append_log(LOGS_DIR, {"worker": "content", "status": "image_rejected", "job": job_id,
@@ -361,12 +416,16 @@ def _safe_image(client, prompt: str, job_id: str = "?"):
     return last_img
 
 
-def _maybe_put_thumbnail(client, job_id: str, meta: dict, portrait: bool) -> None:
-    """메타에 썸네일 키가 있으면 렌더 후 PUT. 실패는 로그만(영상 흐름 유지)."""
+def _maybe_put_thumbnail(client, job_id: str, meta: dict, portrait: bool,
+                         anchor: "StyleAnchor | None" = None) -> None:
+    """메타에 썸네일 키가 있으면 렌더 후 PUT. 실패는 로그만(영상 흐름 유지).
+
+    영상과 같은 앵커를 물린다 — 썸네일만 톤이 다르면 클릭해서 들어온 화면이 딴 영상 같다."""
     try:
         out = TMP / f"thumb_{job_id}.jpg"
         res = render_thumbnail(meta.get("thumbnail_copy"), meta.get("thumbnail_image_prompt"), out,
-                               portrait=portrait, image_fetcher=lambda p: _safe_image(client, p, job_id))
+                               portrait=portrait,
+                               image_fetcher=lambda p: _safe_image(client, p, job_id, anchor))
         if res:
             client.put_binary(f"/api/content/jobs/{job_id}/thumbnail", data=res.read_bytes(), content_type="image/jpeg")
             res.unlink(missing_ok=True)
