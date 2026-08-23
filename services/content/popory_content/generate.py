@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from popory_content.contract import parse_generation, ContractError
+from popory_content.names import normalize_names
 from popory_content.prompt import build_system_prompt, build_user_message
 from popory_content.youtube_post_prompt import build_youtube_post_system_prompt, build_youtube_post_user_message
 from popory_content.youtube_post_contract import parse_youtube_post
@@ -91,7 +92,9 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
                     time.sleep(wait); continue
                 raise GenerateError(f"claude CLI exit {result.returncode} (시도 {attempt}): {tail}")
             try:
-                return parse(result.stdout)
+                # 인명 표기 교정은 parse 앞에 둔다 — 여기가 claude 출력이 지나는 유일한
+                # 길목이라 제목·대본·태그·설명이 한 번에 같은 표기로 맞춰진다.
+                return parse(normalize_names(result.stdout))
             except Exception as e:  # noqa: BLE001 — 파싱 실패도 재시도 대상
                 if not last:
                     wait = _retry_backoff(attempt); _log_retry(attempt, wait, "parse 실패")
