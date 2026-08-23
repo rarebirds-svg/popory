@@ -13,6 +13,7 @@ import { mountAdminJobLogs } from "./routes/admin_job_logs";
 import { mountAdminActivity } from "./routes/admin_activity";
 import { mountAdminOverview } from "./routes/admin_overview";
 import { mountAdminBriefCategories } from "./routes/admin_brief_categories";
+import { mountAdminLlmModels } from "./routes/admin_llm_models";
 import { mountJwks } from "./routes/jwks";
 import { mountGo } from "./routes/go";
 import { mountPublished } from "./routes/published";
@@ -62,6 +63,7 @@ export function createApp() {
   mountAdminActivity(app);
   mountAdminOverview(app);
   mountAdminBriefCategories(app);
+  mountAdminLlmModels(app);
   mountJwks(app);
   mountGo(app);
   mountPublished(app);

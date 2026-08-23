@@ -11,14 +11,15 @@ import re
 import tempfile
 from pathlib import Path
 
-from popory_content.generate import run_claude_cli
+from popory_content.generate import run_claude_cli, model_for
 
 # 검수 on/off. 0 이면 항상 통과(비용·지연 회피용 비상 스위치).
 ENABLED = os.environ.get("POPORY_IMAGE_REVIEW", "1") != "0"
 # 본문 생성(1200초·4회)보다 훨씬 짧게 — 장면당 24장을 도는 경로라 지연이 누적된다.
 TIMEOUT_SECONDS = int(os.environ.get("POPORY_IMAGE_REVIEW_TIMEOUT", "90"))
 MAX_ATTEMPTS = int(os.environ.get("POPORY_IMAGE_REVIEW_ATTEMPTS", "2"))
-MODEL = os.environ.get("POPORY_IMAGE_REVIEW_MODEL", "claude-sonnet-4-6")
+# 어드민(LLM 모델)에서 고른 값을 쓰되, env 를 주면 그게 우선한다 — 현장에서 급히 되돌릴 통로.
+MODEL_ENV = os.environ.get("POPORY_IMAGE_REVIEW_MODEL")
 
 _VERDICT = re.compile(r"<image_review>\s*(.+?)\s*</image_review>", re.S)
 
@@ -80,7 +81,7 @@ def review_image(png: bytes, job_id: str = "?") -> tuple[bool, str]:
             user_msg=f"다음 이미지를 검수하세요: {tmp}",
             parse=_parse,
             job_id=f"review-{job_id}",
-            model=MODEL,
+            model=MODEL_ENV or model_for("image_review"),
             timeout_seconds=TIMEOUT_SECONDS,
             max_attempts=MAX_ATTEMPTS,
             allowed_tools=("Read",),

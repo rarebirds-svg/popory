@@ -5,6 +5,7 @@ import pytest
 from PIL import Image
 
 from popory_content import worker
+from popory_content import generate as gen
 
 
 def _png(color=(10, 20, 30)) -> bytes:
@@ -771,3 +772,68 @@ def test_anchor_dropped_when_prompt_too_long(monkeypatch, tmp_path):
     worker._safe_image(client, long_prompt, "j1", anchor)
     assert "reference_images" not in client.payloads[0]
     assert client.payloads[0]["prompt"] == long_prompt
+
+
+# --- 기능별 LLM 모델 ---
+
+class _ModelClient:
+    """get 만 가진 가짜 PortalClient(모델 설정 조회용)."""
+
+    def __init__(self, result):
+        self.result = result
+        self.calls = 0
+
+    def get(self, path):
+        self.calls += 1
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def _reset_models(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(worker, "_llm_models_fetched_at", 0.0)
+    gen.set_model_overrides(None)
+
+
+def test_model_for_falls_back_to_default():
+    gen.set_model_overrides(None)
+    assert gen.model_for("blog") == gen.DEFAULT_MODEL
+    assert gen.model_for("모르는기능") == gen.DEFAULT_MODEL
+
+
+def test_refresh_applies_overrides(monkeypatch, tmp_path):
+    _reset_models(monkeypatch, tmp_path)
+    client = _ModelClient({"models": {"blog": "claude-opus-5", "image_review": "claude-haiku-4-5"}})
+    worker.refresh_model_overrides(client, force=True)
+    assert gen.model_for("blog") == "claude-opus-5"
+    assert gen.model_for("image_review") == "claude-haiku-4-5"
+    assert gen.model_for("translate") == gen.DEFAULT_MODEL
+    gen.set_model_overrides(None)
+
+
+def test_refresh_survives_portal_failure(monkeypatch, tmp_path):
+    """설정을 못 읽었다고 배치를 멈추면 안 된다 — 직전 값이 남는다."""
+    _reset_models(monkeypatch, tmp_path)
+    worker.refresh_model_overrides(_ModelClient({"models": {"blog": "claude-opus-5"}}), force=True)
+    worker.refresh_model_overrides(_ModelClient(RuntimeError("portal down")), force=True)
+    assert gen.model_for("blog") == "claude-opus-5"
+    gen.set_model_overrides(None)
+
+
+def test_refresh_is_throttled(monkeypatch, tmp_path):
+    """매 사이클 호출되지만 TTL 안에서는 포털을 다시 찌르지 않는다."""
+    _reset_models(monkeypatch, tmp_path)
+    client = _ModelClient({"models": {"blog": "claude-sonnet-5"}})
+    worker.refresh_model_overrides(client, force=True)
+    worker.refresh_model_overrides(client)
+    assert client.calls == 1
+    gen.set_model_overrides(None)
+
+
+def test_refresh_ignores_malformed_payload(monkeypatch, tmp_path):
+    _reset_models(monkeypatch, tmp_path)
+    worker.refresh_model_overrides(_ModelClient({"models": "nope"}), force=True)
+    assert gen.model_for("blog") == gen.DEFAULT_MODEL
+    worker.refresh_model_overrides(_ModelClient(None), force=True)
+    assert gen.model_for("blog") == gen.DEFAULT_MODEL
