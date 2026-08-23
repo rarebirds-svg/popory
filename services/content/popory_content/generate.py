@@ -15,7 +15,7 @@ from popory_content.reply_contract import parse_reply
 
 CLAUDE_BIN = "/opt/homebrew/bin/claude"
 # 기본 모델. 포털 어드민(LLM 모델)에서 기능별로 덮어쓰며, 그 설정을 못 읽으면 여기로 돌아온다.
-DEFAULT_MODEL = os.environ.get("POPORY_CLAUDE_MODEL", "claude-sonnet-4-6")
+DEFAULT_MODEL = os.environ.get("POPORY_CLAUDE_MODEL", "claude-sonnet-5")
 
 # 기능키 → 모델. 워커가 작업을 집을 때마다 포털에서 받아 채운다(set_model_overrides).
 # 프로세스 전역인 이유: 대본·번역·검수 호출부가 서로 다른 모듈에 흩어져 있어 포털 클라이언트를
