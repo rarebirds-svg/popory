@@ -52,5 +52,5 @@ def parse_shorts_options(params_json: str | None) -> dict:
             opts["image_style"] = data["image_style"]
         targets = data.get("upload_targets", [])
         if isinstance(targets, list):
-            opts["upload_targets"] = [t for t in targets if t in ("youtube", "instagram")]
+            opts["upload_targets"] = [t for t in targets if t in ("youtube", "instagram", "facebook")]
     return opts

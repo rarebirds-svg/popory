@@ -11,7 +11,7 @@ export const ContentJobOptionsSchema = z.object({
   length: z.enum(["3", "5", "7", "10", "15", "30", "60"]).optional(),
   voice: z.enum(["female-calm", "female-bright", "male"]).optional(),
   image_style: z.enum(["photo", "illust", "watercolor", "minimal"]).optional(),
-  upload_targets: z.array(z.enum(["youtube", "instagram"])).max(2).optional(),
+  upload_targets: z.array(z.enum(["youtube", "instagram", "facebook"])).max(3).optional(),
   slide_count: z.number().int().min(3).max(10).optional(),
 });
 
@@ -62,7 +62,7 @@ export const TopicPlatformSchema = z.object({
     length: z.enum(["3", "5", "7", "10", "15", "30", "60"]).optional(),
     voice: z.enum(["female-calm", "female-bright", "male"]).optional(),
     image_style: z.enum(["photo", "illust", "watercolor", "minimal"]).optional(),
-    upload_targets: z.array(z.enum(["youtube", "instagram"])).max(2).optional(),
+    upload_targets: z.array(z.enum(["youtube", "instagram", "facebook"])).max(3).optional(),
     slide_count: z.number().int().min(3).max(10).optional(),
   }).optional(),
 });
