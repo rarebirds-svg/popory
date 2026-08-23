@@ -89,6 +89,36 @@ describe("POST /api/content/topics", () => {
     expect(res.status).toBe(401);
   });
 
+  it("쇼츠 업로드 대상 3개(유튜브·인스타·페이스북)를 그대로 받는다", async () => {
+    // 폼은 세 곳을 기본 체크로 보낸다 — 스키마가 2개/2종만 허용하면 전 요청이 400 이 됐다.
+    const ck = await userCookie();
+    const res = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST",
+      headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({
+        topic: "보도 셰퍼의 돈 - 보도 셰퍼",
+        platforms: [{
+          platform: "shorts",
+          options: { length: "60", voice: "male", image_style: "photo", upload_targets: ["youtube", "instagram", "facebook"] },
+        }],
+      }),
+    });
+    expect(res.status).toBe(201);
+    const { topic_id } = await res.json<{ topic_id: string }>();
+    const job = await env.DB.prepare("SELECT params_json FROM content_jobs WHERE topic_id=?").bind(topic_id).first<{ params_json: string }>();
+    expect(JSON.parse(job!.params_json).upload_targets).toEqual(["youtube", "instagram", "facebook"]);
+  });
+
+  it("400 본문에 어떤 필드가 막혔는지 담는다", async () => {
+    const ck = await userCookie();
+    const res = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "t", platforms: [{ platform: "kakao" }] }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("platforms.0.platform");
+  });
+
   it("platforms 빈 배열은 400", async () => {
     const ck = await userCookie();
     const res = await SELF.fetch("https://example.com/api/content/topics", {
