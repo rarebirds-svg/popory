@@ -8,6 +8,7 @@ from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log
 from popory_content.recommend_weekly import generate_items
+from popory_content.names import normalize_names
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 AREA = "content-worker"
@@ -74,19 +75,23 @@ def run() -> int:
                                   "error": "추천 생성 후에도 대기열이 비어 있습니다 (전량 중복)"})
             return 4
     rec = recs[0]
+    # 이 시점의 추천은 포털에 이미 저장된 행이라 claude CLI 를 다시 거치지 않는다. 교정
+    # 이전에 쌓인 표기가 그대로 주제·저자로 굳는 걸 막으려 등록 직전에 한 번 더 통과시킨다.
+    topic = normalize_names(rec["title"])
+    author = normalize_names(rec.get("author") or "") or None
     try:
         out = client.post("/api/content/topics/service-create", json={
             "owner_sub": owner_sub,
-            "topic": rec["title"],
-            "author": rec.get("author"),
+            "topic": topic,
+            "author": author,
             "category_slug": "book-review",
             "platforms": [{"platform": "naver-blog"}, {"platform": "youtube"}, {"platform": "shorts"}, {"platform": "youtube-post"}],
             "recommendation_id": rec["id"],
         })
     except PortalError as e:
-        append_log(LOGS_DIR, {"cli": "auto_create", "status": "create_fail", "topic": rec["title"], "error": str(e)})
+        append_log(LOGS_DIR, {"cli": "auto_create", "status": "create_fail", "topic": topic, "error": str(e)})
         return 0
-    append_log(LOGS_DIR, {"cli": "auto_create", "status": "ok", "topic": rec["title"], "topic_id": out.get("topic_id"), "job_ids": out.get("job_ids")})
+    append_log(LOGS_DIR, {"cli": "auto_create", "status": "ok", "topic": topic, "topic_id": out.get("topic_id"), "job_ids": out.get("job_ids")})
     return 0
 
 

@@ -56,6 +56,20 @@ Cloudflare 대시보드 → Workers & Pages → `popory-api-prod` → Settings �
 curl https://api.poporyfamily.com/health   # → ok
 ```
 
+## 6.5 GitHub 에서 배포하기 (맥미니 없이)
+
+이동 중·외부에서는 로컬 wrangler 를 쓸 수 없다. GitHub Actions 의 **deploy** 워크플로를
+수동 실행하면 같은 일을 한다 — Actions 탭 → deploy → Run workflow(휴대폰 브라우저에서도 된다).
+
+- `target` — both / api / portal
+- `migrate` — 스키마 변경이 있는 배포에서만 켠다(D1 마이그레이션을 먼저 적용)
+
+필요한 저장소 시크릿(Settings → Secrets and variables → Actions):
+`CLOUDFLARE_API_TOKEN`(Workers Scripts:Edit · Pages:Edit · D1:Edit), `CLOUDFLARE_ACCOUNT_ID`.
+
+수동(workflow_dispatch)인 이유는 배포 시점을 사람이 고르는 지금 방식을 유지하기 위해서다.
+자동으로 바꾸려면 `.github/workflows/deploy.yml` 의 `on:` 에 push 브랜치를 추가한다.
+
 ## 7. 포털(Pages) 배포
 
 Cloudflare 대시보드 → Workers & Pages → Create → Pages:

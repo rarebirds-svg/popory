@@ -1,0 +1,64 @@
+# prod 배포를 GitHub 에서 수동 실행한다 — 외부·이동 중(휴대폰)에도 배포할 수 있게.
+#
+# 자동(main push) 이 아니라 수동(workflow_dispatch)인 이유. 배포 시점을 사람이 고르는 지금
+# 방식을 유지하되, 맥미니 앞에 있어야만 배포되는 제약만 없앤다. 자동으로 바꾸려면 아래
+# `on:` 에 push 브랜치를 추가하면 된다.
+#
+# 필요한 저장소 시크릿:
+#   CLOUDFLARE_API_TOKEN   — Workers Scripts:Edit, Pages:Edit, D1:Edit 권한
+#   CLOUDFLARE_ACCOUNT_ID  — 대시보드 Account details 의 32자리 hex
+name: deploy
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "배포 대상"
+        type: choice
+        default: both
+        options: [both, api, portal]
+      migrate:
+        description: "D1 마이그레이션 먼저 적용 (스키마 변경이 있을 때만)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 배포 전에 테스트를 한 번 더 돈다. 수동 실행은 main 이 아닌 브랜치도 고를 수 있어서,
+      # CI 를 통과하지 않은 커밋이 prod 로 나가는 걸 여기서 막는다.
+      - name: 테스트
+        run: pnpm --filter @popory/api test
+
+      - name: D1 마이그레이션
+        if: ${{ inputs.migrate }}
+        run: pnpm --filter @popory/api exec wrangler d1 migrations apply popory-portal --env prod --remote --config ../../infra/wrangler/api.toml
+
+      - name: API 워커 배포
+        if: ${{ inputs.target == 'both' || inputs.target == 'api' }}
+        run: pnpm --filter @popory/api exec wrangler deploy --env prod --config ../../infra/wrangler/api.toml
+
+      # 포털은 Pages 프로젝트에 Git 연결이 없어 빌드도 여기서 한다.
+      # --branch main 을 명시해야 프로덕션 배포로 잡힌다(생략하면 프리뷰로 갈 수 있다).
+      - name: 포털 빌드
+        if: ${{ inputs.target == 'both' || inputs.target == 'portal' }}
+        run: pnpm --filter @popory/portal build:cf
+
+      - name: 포털 배포
+        if: ${{ inputs.target == 'both' || inputs.target == 'portal' }}
+        run: pnpm --filter @popory/portal exec wrangler pages deploy .vercel/output/static --project-name popory-portal --branch main --commit-dirty=true
