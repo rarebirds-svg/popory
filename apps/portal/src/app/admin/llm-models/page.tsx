@@ -2,21 +2,10 @@
 import { headers } from "next/headers";
 import { API_BASE } from "@/lib/env";
 import { saveModels } from "./actions";
-import { Button } from "../_components/Button";
+import { ModelForm, type FeatureRow, type ModelOption } from "./ModelForm";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
-
-interface ModelOption { id: string; label: string; note: string }
-interface FeatureRow {
-  key: string;
-  label: string;
-  description: string;
-  model: string;
-  overridden: boolean;
-  updated_at: number | null;
-  updated_by: string | null;
-}
 
 async function fetchConfig(): Promise<{ default_model: string; models: ModelOption[]; features: FeatureRow[] }> {
   const cookie = (await headers()).get("cookie") ?? "";
@@ -25,14 +14,10 @@ async function fetchConfig(): Promise<{ default_model: string; models: ModelOpti
   return res.json();
 }
 
-function updatedLabel(row: FeatureRow): string {
-  if (!row.overridden || !row.updated_at) return "기본값";
-  const when = new Date(row.updated_at * 1000).toLocaleDateString("ko-KR");
-  return row.updated_by ? `${when} · ${row.updated_by}` : when;
-}
-
 export default async function LlmModelsPage() {
   const { default_model, models, features } = await fetchConfig();
+  // 저장 후 서버 값이 바뀌면 폼을 리마운트해 useState 초기값을 다시 잡는다.
+  const signature = features.map((f) => `${f.key}=${f.model}`).join("|");
   return (
     <main>
       <h1 className="text-xl font-semibold">LLM 모델</h1>
@@ -44,33 +29,7 @@ export default async function LlmModelsPage() {
         호출은 맥미니의 claude CLI 를 거치므로 <strong>Claude 플랜에 포함된 모델만</strong> 실제로 돕니다.
         플랜에 없는 모델을 고르면 그 기능이 생성 단계에서 실패합니다(로그의 <code className="font-mono text-xs">claude CLI exit 1</code>).
       </p>
-
-      <form action={saveModels} className="mt-6">
-        <ul className="space-y-4">
-          {features.map((f) => (
-            <li key={f.key} className="border-b border-popory-border pb-4">
-              <div className="flex flex-wrap items-baseline gap-2">
-                <label htmlFor={`model:${f.key}`} className="text-sm font-semibold text-popory-fg">{f.label}</label>
-                <span className="text-xs text-popory-muted">{f.description}</span>
-                <span className="ml-auto text-xs text-popory-muted">{updatedLabel(f)}</span>
-              </div>
-              <select
-                id={`model:${f.key}`}
-                name={`model:${f.key}`}
-                defaultValue={f.model}
-                className="mt-2 w-full rounded border border-popory-border bg-popory-bg px-2 py-1.5 text-sm text-popory-fg"
-              >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}{m.id === default_model ? " (기본값)" : ""} — {m.note}
-                  </option>
-                ))}
-              </select>
-            </li>
-          ))}
-        </ul>
-        <Button type="submit" variant="primary" className="mt-6">저장</Button>
-      </form>
+      <ModelForm key={signature} features={features} models={models} defaultModel={default_model} action={saveModels} />
     </main>
   );
 }

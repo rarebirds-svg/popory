@@ -3,7 +3,7 @@
 // 워커는 파이썬이라 이 파일을 직접 못 읽는다. 그래서 카탈로그는 여기 한 곳에 두고
 // API 가 양쪽에 내려준다 — 목록이 갈라지면 어드민에서 고른 값이 워커에서 안 먹는다.
 
-export const DEFAULT_MODEL = "claude-sonnet-4-6";
+export const DEFAULT_MODEL = "claude-sonnet-5";
 
 export type FeatureKey =
   | "blog" | "video_script" | "shorts_script" | "carousel"
@@ -27,8 +27,8 @@ export const MODELS: { id: string; label: string; note: string }[] = [
   { id: "claude-opus-4-8", label: "Opus 4.8", note: "Opus 계열 직전 세대" },
   { id: "claude-opus-4-7", label: "Opus 4.7", note: "Opus 계열" },
   { id: "claude-opus-4-6", label: "Opus 4.6", note: "Opus 계열 구세대" },
-  { id: "claude-sonnet-5", label: "Sonnet 5", note: "Sonnet 최신. 4.6 대비 품질 상향" },
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", note: "현재 기본값. 품질·속도 균형" },
+  { id: "claude-sonnet-5", label: "Sonnet 5", note: "현재 기본값. Sonnet 최신" },
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", note: "직전 기본값. 품질·속도 균형" },
   { id: "claude-haiku-4-5", label: "Haiku 4.5", note: "가장 빠르고 가볍다. 이진 판정(검수)에 적합" },
 ];
 
