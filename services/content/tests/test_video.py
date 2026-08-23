@@ -75,8 +75,8 @@ def test_spans_from_durations_single():
     assert _spans_from_durations([5.0], 0.5) == [(0.0, 5.0)]
 
 
-def test_master_audio_copies_video_without_scale(tmp_path, monkeypatch):
-    # scale 없으면 비디오는 copy(기존 동작 유지)
+def test_master_audio_copies_video(tmp_path, monkeypatch):
+    # 마스터 단계는 오디오만 손댄다 — 비디오를 재인코딩하면 3세대 손실이 붙는다.
     cmds = []
     monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
     _video._master_audio(tmp_path / "in.mp4", tmp_path / "out.mp4", None)
@@ -85,15 +85,32 @@ def test_master_audio_copies_video_without_scale(tmp_path, monkeypatch):
     assert not any("scale=" in str(a) for a in cmd)
 
 
-def test_master_audio_portrait_scales_to_half(tmp_path, monkeypatch):
-    # portrait 출력은 540×960으로 다운스케일 재인코딩(쇼츠 절반 크기)
+def test_master_audio_with_bgm_still_copies_video(tmp_path, monkeypatch):
+    # BGM 이 붙어도 비디오는 copy 여야 한다(쇼츠 다운스케일 회귀 방지).
     cmds = []
     monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
-    _video._master_audio(tmp_path / "in.mp4", tmp_path / "out.mp4", None,
-                         scale=(_video.PORTRAIT_OUT_W, _video.PORTRAIT_OUT_H))
-    graph = cmds[0][cmds[0].index("-filter_complex") + 1]
-    assert "scale=540:960" in graph
-    assert "libx264" in cmds[0] and "copy" not in cmds[0]
+    _video._master_audio(tmp_path / "in.mp4", tmp_path / "out.mp4", tmp_path / "bgm.mp3")
+    cmd = cmds[0]
+    assert "copy" in cmd and "libx264" not in cmd
+    assert not any("scale=" in str(a) for a in cmd)
+
+
+def test_x264_q_shorts_richer_than_longform():
+    # 쇼츠(60초 상한)는 롱폼(10분)보다 후하게 — 1080×1920 에 구워 넣은 글자가 뭉개지지 않게.
+    long_q, short_q = _video._x264_q(portrait=False), _video._x264_q(portrait=True)
+    assert int(short_q[short_q.index("-crf") + 1]) < int(long_q[long_q.index("-crf") + 1])
+    short_rate = int(short_q[short_q.index("-maxrate") + 1].rstrip("k"))
+    long_rate = int(long_q[long_q.index("-maxrate") + 1].rstrip("k"))
+    assert short_rate > long_rate
+    # 60초 × maxrate 가 Cloudflare 업로드 한도(100MB)를 넘지 않아야 한다.
+    assert short_rate * 60 / 8 / 1000 < 100
+
+
+def test_bufsize_derives_from_maxrate():
+    # env 로 maxrate 만 바꿔도 VBV 버퍼가 어긋나지 않는다.
+    assert _video._bufsize("6000k") == "12000k"
+    assert _video._bufsize("1200k") == "2400k"
+    assert _video._bufsize("weird") == "weird"
 
 
 def test_deepen_voice_disabled_returns_original(tmp_path, monkeypatch):

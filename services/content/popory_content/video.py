@@ -25,12 +25,17 @@ FONT_PATH = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
 FONT_INDEX_BOLD = 6  # .ttc 안의 Bold face 인덱스(0=Regular, 2=Medium, 4=SemiBold, 6=Bold)
 LANDSCAPE_W, LANDSCAPE_H = 1920, 1080
 PORTRAIT_W, PORTRAIT_H = 1080, 1920
-PORTRAIT_OUT_W, PORTRAIT_OUT_H = 540, 960   # 쇼츠 최종 출력 크기 — 렌더는 1080×1920, 출력만 절반으로 다운스케일(파일 축소)
 THUMB_W, THUMB_H = 1280, 720
-# H.264 품질/용량 상한. 슬라이드쇼(정지+느린 줌)는 CRF 28에서도 화질 충분하고, maxrate로
-# 비트레이트 상한을 둬 긴 영상도 Cloudflare 업로드 한도(100MB)를 넘지 않게 한다. env로 튜닝.
-_X264_Q = ["-crf", os.environ.get("POPORY_VIDEO_CRF", "28"),
-           "-maxrate", os.environ.get("POPORY_VIDEO_MAXRATE", "1200k"), "-bufsize", "2400k"]
+# H.264 품질/용량 상한. **렌더 해상도 그대로 내보낸다.** 쇼츠를 540×960으로 줄여 내보내던
+# 예전 방식은 유튜브가 폰 화면으로 되키우면서 구워 넣은 헤드라인·자막을 뭉갰다 — 글리프
+# 가장자리는 고주파라 축소→확대에 가장 먼저 무너진다. 용량은 maxrate가 잡으므로 축소로
+# 얻는 것도 없었다(60초 쇼츠는 상한을 다 써도 100MB 한도의 한참 아래다).
+# 롱폼은 10분까지 가므로 Cloudflare 업로드 한도(100MB) 안에 들어오려면 상한이 빡빡하고,
+# 쇼츠는 60초라 같은 한도 안에서 훨씬 후하게 줄 수 있다. 둘을 나눠 잡는 이유다. env로 튜닝.
+_LONGFORM_CRF = os.environ.get("POPORY_VIDEO_CRF", "28")
+_LONGFORM_MAXRATE = os.environ.get("POPORY_VIDEO_MAXRATE", "1200k")
+_SHORTS_CRF = os.environ.get("POPORY_SHORTS_CRF", "23")
+_SHORTS_MAXRATE = os.environ.get("POPORY_SHORTS_MAXRATE", "6000k")
 THUMB_PW, THUMB_PH = 1080, 1920
 BG = (11, 31, 58)
 HEAD_COLOR = (255, 255, 255)
@@ -48,6 +53,20 @@ BGM_ENABLED = os.environ.get("POPORY_BGM_ENABLED", "0") == "1"
 
 class VideoError(Exception):
     """영상 생성 실패(say/ffmpeg/ffprobe/폰트 오류)."""
+
+
+def _bufsize(maxrate: str) -> str:
+    """VBV 버퍼는 maxrate의 2배. env로 maxrate만 바꿔도 짝이 어긋나지 않게 파생시킨다."""
+    try:
+        return f"{int(maxrate.rstrip('kK')) * 2}k"
+    except ValueError:
+        return maxrate
+
+
+def _x264_q(portrait: bool = False) -> list[str]:
+    """포맷별 H.264 품질 인자. 쇼츠는 길이 상한이 짧아 롱폼보다 후한 비트레이트를 쓴다."""
+    crf, maxrate = (_SHORTS_CRF, _SHORTS_MAXRATE) if portrait else (_LONGFORM_CRF, _LONGFORM_MAXRATE)
+    return ["-crf", crf, "-maxrate", maxrate, "-bufsize", _bufsize(maxrate)]
 
 
 def generate_scenes(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
@@ -474,34 +493,28 @@ def _pick_bgm(bgm_dir: Path, job_id: str) -> Path | None:
     return files[zlib.crc32(job_id.encode()) % len(files)]
 
 
-def _master_audio(src: Path, out: Path, bgm: Path | None, scale: tuple[int, int] | None = None) -> None:
-    """loudnorm(-14 LUFS) + (BGM 있으면) amix. 비디오는 기본 copy.
-    scale=(w,h)면 그 크기로 비디오를 다운스케일 재인코딩한다 — 쇼츠(portrait) 출력을
-    절반(540×960)으로 줄일 때 사용. 렌더는 1080×1920 기준 그대로라 레이아웃·자막 비율은
-    보존되고 최종 프레임만 축소된다.
+def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
+    """loudnorm(-14 LUFS) + (BGM 있으면) amix. **비디오는 항상 copy** — 여기서 다시 인코딩하면
+    장면·xfade에 이은 3세대 손실이 붙는다. 예전엔 쇼츠를 540×960으로 줄이는 분기가 있었으나
+    구워 넣은 자막을 뭉개기만 해서 걷어냈다(_x264_q 주석 참고).
     BGM 소스 자체가 작아(mean ~-34dB) 예전 volume=0.15 + amix 기본 normalize(입력당 ÷2)는
     BGM을 ~-40dB로 묻어 사실상 안 들렸다. normalize=0(내레이션 원음 유지) + volume=3.5로
     BGM을 갭 기준 ~-15dB(말소리보다 ~2dB 아래)의 강한 배경 베드로 올린다.
     이 값이 실질 상한 — 더 키우면 BGM이 내레이션보다 커져 말소리가 묻힌다."""
-    if scale:
-        vfilt = f"[0:v]scale={scale[0]}:{scale[1]}:flags=bicubic,format=yuv420p[v]"
-        vmap, vcodec = "[v]", ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
-    else:
-        vfilt, vmap, vcodec = None, "0:v", ["-c:v", "copy"]
     if bgm:
         afilt = ("[1:a]volume=3.5[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix];"
                  "[mix]loudnorm=I=-14:TP=-1.5:LRA=11[a]")
         cmd = [
             FFMPEG_BIN, "-y", "-i", str(src), "-stream_loop", "-1", "-i", str(bgm),
-            "-filter_complex", f"{afilt};{vfilt}" if vfilt else afilt,
-            "-map", vmap, "-map", "[a]", *vcodec, "-c:a", "aac", "-shortest", str(out),
+            "-filter_complex", afilt,
+            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", str(out),
         ]
     else:
         afilt = "[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[a]"
         cmd = [
             FFMPEG_BIN, "-y", "-i", str(src),
-            "-filter_complex", f"{afilt};{vfilt}" if vfilt else afilt,
-            "-map", vmap, "-map", "[a]", *vcodec, "-c:a", "aac", str(out),
+            "-filter_complex", afilt,
+            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", str(out),
         ]
     _run(cmd)
 
@@ -625,7 +638,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             FFMPEG_BIN, "-y", *inputs,
             "-filter_complex", graph,
             "-map", f"[{prev}]", "-map", "1:a",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_X264_Q, "-t", f"{dur:.3f}",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_x264_q(portrait), "-t", f"{dur:.3f}",
             "-c:a", "aac", "-shortest", str(clip),
         ])
         clips.append(clip)
@@ -642,12 +655,11 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         cmd += [
             "-filter_complex", graph,
             "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_X264_Q, "-c:a", "aac", str(joined),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_x264_q(portrait), "-c:a", "aac", str(joined),
         ]
         _run(cmd)
     out = work / "out.mp4"
-    _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id) if BGM_ENABLED else None,
-                  scale=(PORTRAIT_OUT_W, PORTRAIT_OUT_H) if portrait else None)
+    _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id) if BGM_ENABLED else None)
     offsets = scene_offsets(clip_durations, XFADE_TD)
     cues: list[Cue] = []
     for off, local in zip(offsets, scene_local_cues):
