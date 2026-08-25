@@ -320,5 +320,20 @@ def test_synthesize_uses_ssml_and_rate(monkeypatch):
     assert ssml and ssml.startswith("<speak>")
     assert "십육" in ssml  # 숫자를 한자어 수사 평문으로 변환
     assert "markup" not in payload["input"]
-    assert payload["audioConfig"]["speakingRate"] == tts.SPEAKING_RATE  # Chirp3-HD 튜닝값 1.06
+    assert payload["audioConfig"]["speakingRate"] == tts.SPEAKING_RATE
     assert payload["voice"]["name"] == "ko-KR-Chirp3-HD-Aoede"
+
+
+def test_speaking_rate_matches_default_voice_family():
+    """말속도는 기본 남성 화자의 계열과 짝이 맞아야 한다 — 1.0=Neural2, 1.06=Chirp3-HD.
+
+    cb48d04 머지에서 options.py 는 Neural2-C, tts.py 는 1.06 으로 갈려 실제 내레이션이
+    Neural2-C 를 Chirp3-HD 속도로 읽었다. 한쪽만 바뀌는 재발을 여기서 잡는다.
+    """
+    from popory_content.options import VOICE
+
+    expected = 1.06 if "Chirp3-HD" in VOICE["male"] else 1.0
+    assert tts.SPEAKING_RATE == expected, (
+        f'VOICE["male"]={VOICE["male"]} 인데 SPEAKING_RATE={tts.SPEAKING_RATE} 다. '
+        "화자 계열을 바꿨으면 말속도도 같이 바꿔야 한다."
+    )
