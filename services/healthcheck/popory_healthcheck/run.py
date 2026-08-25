@@ -66,7 +66,7 @@ def _brief_categories() -> list[tuple[str, str]]:
     return out
 
 
-def gather() -> list[tuple[str, str, str]]:
+def gather(mode: str = "pm") -> list[tuple[str, str, str]]:
     log_text = _read_log(_yesterday()) + "\n" + _read_log(_today())
     log_path = _recent_log_path()
     out = []
@@ -74,7 +74,11 @@ def gather() -> list[tuple[str, str, str]]:
     out.append(("API", *checks.check_http("API", API)))
     # 브리핑보다 앞에 둔다 — 인증이 죽으면 브리핑 실패는 결과일 뿐이라 원인이 먼저 보여야 한다.
     out.append(("Claude인증", *checks.check_claude_auth(*claude_auth.current_state(), time.time())))
-    out.append(("브리핑", *checks.check_briefs_published(BRIEF_URL_TEMPLATE, _brief_categories(), _today())))
+    # 오전(09:00) 점검은 브리핑 생성 창(08:00 + 0~120분 지터 + 생성 시간)과 겹친다.
+    # 오늘자가 아직 없어도 전일자가 확인되면 정상으로 본다 — 오늘자 확정 판정은 21:00 pm이 한다.
+    brief_fallback = _yesterday() if mode == "am" else None
+    out.append(("브리핑", *checks.check_briefs_published(
+        BRIEF_URL_TEMPLATE, _brief_categories(), _today(), brief_fallback)))
     out.append(("워커데몬", *checks.check_daemon("com.popory.content-worker")))
     out.append(("이미지데몬", *checks.check_daemon("com.popory.imagegen")))
     out.append(("워커로그", *checks.check_log_freshness(log_path, 24 * 3600)))
@@ -120,7 +124,7 @@ def _send_digest(sections: dict, mode: str) -> int:
 
 
 def run(mode: str) -> int:
-    results = gather()
+    results = gather(mode)
     # 이상이 없어도 항상 보낸다 — 침묵이 "정상"과 "발송기 고장"을 구분하지 못하면 안 된다.
     rc = _send_digest(report.fold_sections(results), mode)
     _save_state(results)

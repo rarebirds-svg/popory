@@ -75,8 +75,8 @@ def test_spans_from_durations_single():
     assert _spans_from_durations([5.0], 0.5) == [(0.0, 5.0)]
 
 
-def test_master_audio_copies_video_without_scale(tmp_path, monkeypatch):
-    # scale 없으면 비디오는 copy(기존 동작 유지)
+def test_master_audio_copies_video(tmp_path, monkeypatch):
+    # 마스터 단계는 오디오만 손댄다 — 비디오를 재인코딩하면 3세대 손실이 붙는다.
     cmds = []
     monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
     _video._master_audio(tmp_path / "in.mp4", tmp_path / "out.mp4", None)
@@ -85,15 +85,32 @@ def test_master_audio_copies_video_without_scale(tmp_path, monkeypatch):
     assert not any("scale=" in str(a) for a in cmd)
 
 
-def test_master_audio_portrait_scales_to_half(tmp_path, monkeypatch):
-    # portrait 출력은 540×960으로 다운스케일 재인코딩(쇼츠 절반 크기)
+def test_master_audio_with_bgm_still_copies_video(tmp_path, monkeypatch):
+    # BGM 이 붙어도 비디오는 copy 여야 한다(쇼츠 다운스케일 회귀 방지).
     cmds = []
     monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
-    _video._master_audio(tmp_path / "in.mp4", tmp_path / "out.mp4", None,
-                         scale=(_video.PORTRAIT_OUT_W, _video.PORTRAIT_OUT_H))
-    graph = cmds[0][cmds[0].index("-filter_complex") + 1]
-    assert "scale=540:960" in graph
-    assert "libx264" in cmds[0] and "copy" not in cmds[0]
+    _video._master_audio(tmp_path / "in.mp4", tmp_path / "out.mp4", tmp_path / "bgm.mp3")
+    cmd = cmds[0]
+    assert "copy" in cmd and "libx264" not in cmd
+    assert not any("scale=" in str(a) for a in cmd)
+
+
+def test_x264_q_shorts_richer_than_longform():
+    # 쇼츠(60초 상한)는 롱폼(10분)보다 후하게 — 1080×1920 에 구워 넣은 글자가 뭉개지지 않게.
+    long_q, short_q = _video._x264_q(portrait=False), _video._x264_q(portrait=True)
+    assert int(short_q[short_q.index("-crf") + 1]) < int(long_q[long_q.index("-crf") + 1])
+    short_rate = int(short_q[short_q.index("-maxrate") + 1].rstrip("k"))
+    long_rate = int(long_q[long_q.index("-maxrate") + 1].rstrip("k"))
+    assert short_rate > long_rate
+    # 60초 × maxrate 가 Cloudflare 업로드 한도(100MB)를 넘지 않아야 한다.
+    assert short_rate * 60 / 8 / 1000 < 100
+
+
+def test_bufsize_derives_from_maxrate():
+    # env 로 maxrate 만 바꿔도 VBV 버퍼가 어긋나지 않는다.
+    assert _video._bufsize("6000k") == "12000k"
+    assert _video._bufsize("1200k") == "2400k"
+    assert _video._bufsize("weird") == "weird"
 
 
 def test_deepen_voice_disabled_returns_original(tmp_path, monkeypatch):
@@ -507,3 +524,26 @@ def test_global_cues_offset_by_scene(monkeypatch):
         cues += [(off + st, off + en, t) for (st, en, t) in scene]
     assert cues[0] == (0.0, 2.0, "첫 문장")
     assert cues[1] == (4.6, 6.1, "둘째 문장")  # 5.0 - 0.4 = 4.6 오프셋
+
+
+# --- 쇼츠 자막 위치 (폰트 없이 상수만 검사) ---
+
+def test_portrait_subtitle_clears_youtube_ui_band():
+    """쇼츠 번인 자막이 재생기 UI 띠를 침범하면 YouTube 제목과 겹쳐 둘 다 안 읽힌다.
+    2026-08-22 업로드분에서 실제로 그랬다(자막이 UI 안으로 139px 들어가 있었다)."""
+    top = _video.PORTRAIT_H - _video.SUB_Y_PORTRAIT
+    bottom = top + _video.SUB_LINE_H_PORTRAIT
+    ui_top = _video.PORTRAIT_H - _video.PORTRAIT_UI_SAFE_BOTTOM
+    assert bottom <= ui_top, f"자막 하단 {bottom} 이 UI 안전선 {ui_top} 을 침범한다"
+    assert top > _video.PORTRAIT_H * 0.6, f"자막 상단 {top} 이 너무 높다 — 화면 중앙을 가린다"
+
+
+def test_portrait_subtitle_stays_inside_scrim():
+    """자막은 하단 스크림 그라데이션 안에 있어야 밝은 배경에서도 읽힌다."""
+    scrim_top = _video.PORTRAIT_H - int(_video.PORTRAIT_H * 0.4)
+    assert _video.PORTRAIT_H - _video.SUB_Y_PORTRAIT > scrim_top
+
+
+def test_landscape_subtitle_unchanged():
+    """가로형은 재생기 UI 가 재생 중 숨으므로 기존 위치를 유지한다."""
+    assert _video.SUB_Y_LANDSCAPE == 175

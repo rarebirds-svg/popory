@@ -86,6 +86,19 @@ def test_append_subscribe_cta_no_brand_dup():
     assert append_subscribe_cta(out) == out  # 멱등
 
 
+def test_narration_demands_ending_variety():
+    """2026-08 톤 단조로움 개선 — 문장별 TTS 합성이라 어미가 같으면 모든 문장이 같은 억양으로
+    끝난다. 어미 다양화(해요체 혼용·수사 의문문)를 프롬프트에서 강제한다."""
+    from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
+    for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
+        assert "어미" in sp and "다양하게" in sp     # 어미 다양화 지시
+        assert "물음표" in sp                        # 수사 의문문(상승조) 유도
+        assert "~죠" in sp                           # 해요체 혼용 예시
+    sp = build_video_system_prompt([])
+    assert "3문장 이상 연달아" in sp                 # 같은 어미 3연속 금지(롱폼)
+    assert "콜론 종결 금지" in sp                    # 마침표·물음표 외 종결 금지 유지
+
+
 def test_video_and_shorts_prompts_avoid_faces():
     """2026-08 정책 전환 — 얼굴 허용에서 얼굴 회피로. 생성 모델이 얼굴·눈·손을 기형으로
     만드는 빈도가 높아, 사후 검수(image_review)로 거르기 전에 애초에 덜 만들게 유도한다."""

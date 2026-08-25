@@ -5,6 +5,7 @@ import pytest
 from PIL import Image
 
 from popory_content import worker
+from popory_content import generate as gen
 
 
 def _png(color=(10, 20, 30)) -> bytes:
@@ -338,14 +339,18 @@ class _CFClient:
     """post_for_bytes만 가진 가짜 PortalClient(CF flux 경로 테스트용)."""
 
     def __init__(self, result):
-        self.result = result  # bytes 또는 raise할 Exception
+        # bytes·Exception 하나거나, 호출 순서대로 돌려줄 리스트(모델 폴백 검증용)
+        self.result = result
         self.calls = 0
+        self.payloads = []
 
     def post_for_bytes(self, path, *, json):
         self.calls += 1
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
+        self.payloads.append(json)
+        out = self.result[self.calls - 1] if isinstance(self.result, list) else self.result
+        if isinstance(out, Exception):
+            raise out
+        return out
 
 
 def test_safe_image_uses_cloudflare_first(monkeypatch, tmp_path):
@@ -557,3 +562,278 @@ def test_auth_failure_sends_notification(monkeypatch):
     with pytest.raises(SystemExit):
         worker.run_once(client)
     assert sent == [True]
+
+
+def test_cf_uses_klein_by_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: None)
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 1
+    assert client.payloads[0] == {"prompt": "p", "model": "klein-4b"}
+
+
+def test_cf_falls_back_to_schnell_before_local(monkeypatch, tmp_path):
+    """klein 실패는 로컬(장당 ~18초)로 곧장 가지 않고 같은 무료 한도의 schnell 을 먼저 쓴다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    png = _png((4, 5, 6))
+    client = _CFClient([RuntimeError("ai-image 502: no image"), png])
+    local = {"n": 0}
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: local.__setitem__("n", local["n"] + 1))
+    assert worker._safe_image(client, "p") == png
+    assert [c["model"] for c in client.payloads] == ["klein-4b", "schnell"]
+    assert local["n"] == 0
+
+
+def test_cf_quota_skips_fallback_model(monkeypatch, tmp_path):
+    """한도는 두 모델이 같은 뉴런 풀을 쓰므로 모델을 바꿔도 안 풀린다 — 두 번째 호출을 낭비하지 않는다."""
+    from popory_content.portal_client import PortalError
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    client = _CFClient(PortalError("ai-image 500: 4006: daily free allocation of 10,000 neurons", exit_code=4))
+    png = _png((7, 8, 9))
+
+    class Resp:
+        status_code = 200
+        content = png
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 1
+    assert worker._cf_exhausted_today() is True
+
+
+def test_cf_dimensions_only_on_klein(monkeypatch, tmp_path):
+    """schnell 은 width/height 를 받지 않는다 — 섞어 보내면 라우트가 400 이다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    png = _png()
+    client = _CFClient([RuntimeError("ai-image 502: no image"), png])
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: None)
+    assert worker._safe_image(client, "p", "j1", None, "landscape") == png
+    assert client.payloads[0] == {"prompt": "p", "model": "klein-4b", "width": 1536, "height": 1024}
+    assert client.payloads[1] == {"prompt": "p", "model": "schnell"}
+
+
+def test_cf_size_per_format(monkeypatch, tmp_path):
+    """포맷마다 다른 치수를 준다. 가로 3:2 를 쇼츠에 쓰면 확대 이득이 0인데 가로로 63%가 잘린다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    got = {}
+    for shape in ("landscape", "portrait", "square"):
+        client = _CFClient(png)
+        worker._safe_image(client, "p", "j1", None, shape)
+        p0 = client.payloads[0]
+        got[shape] = (p0.get("width"), p0.get("height"))
+    assert got["landscape"] == (1536, 1024)
+    assert got["portrait"] == (1024, 1536)
+    assert got["square"] == (None, None), "캐러셀은 1080 정사각이라 원본도 정사각이어야 한다"
+
+
+def test_cf_size_unknown_shape_uses_model_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    client = _CFClient(_png())
+    worker._safe_image(client, "p", "j1", None, None)
+    assert client.payloads[0] == {"prompt": "p", "model": "klein-4b"}
+
+
+def test_parse_size():
+    assert worker._parse_size("1536x1024") == (1536, 1024)
+    assert worker._parse_size("1024X1536") == (1024, 1536)
+    assert worker._parse_size("") == (None, None)
+    assert worker._parse_size("1536") == (None, None)
+    assert worker._parse_size("wide") == (None, None)
+
+
+def test_cf_single_model_when_fallback_disabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(worker, "CF_IMAGE_FALLBACK_MODEL", "")
+    client = _CFClient(RuntimeError("ai-image 502: no image"))
+    png = _png()
+
+    class Resp:
+        status_code = 200
+        content = png
+
+    monkeypatch.setattr(worker.requests, "post", lambda url, json=None, timeout=None: Resp())
+    assert worker._safe_image(client, "p") == png
+    assert client.calls == 1
+
+
+# --- 스타일 앵커 ---
+
+def _anchor_client(results):
+    return _CFClient(results)
+
+
+def test_anchor_absent_on_first_image(monkeypatch, tmp_path):
+    """첫 장면엔 물릴 앵커가 없다 — 그 장면이 앵커가 된다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(True)
+    assert worker._safe_image(client, "p", "j1", anchor) == png
+    assert "reference_images" not in client.payloads[0]
+    assert anchor.b64 is not None
+
+
+def test_anchor_applied_to_later_images(monkeypatch, tmp_path):
+    """두 번째 장면부터 첫 장면을 참조로 물려 색감·조명을 잇는다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(True)
+    worker._safe_image(client, "장면1", "j1", anchor)
+    worker._safe_image(client, "장면2", "j1", anchor)
+    refs = client.payloads[1]["reference_images"]
+    assert refs == [anchor.b64] and len(refs) == 1
+    # 참조만 물리면 모델이 그걸 재현하려 들 수 있다 — 프롬프트가 image 0 을 명시해야 한다.
+    assert client.payloads[1]["prompt"] == worker.ANCHOR_PROMPT_PREFIX + "장면2"
+
+
+def test_anchor_stays_first_image(monkeypatch, tmp_path):
+    """앵커는 첫 장면으로 고정한다 — 매 장면 덮어쓰면 톤이 서서히 흘러간다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    client = _CFClient([_png((1, 1, 1)), _png((250, 250, 250))])
+    anchor = worker.StyleAnchor(True)
+    worker._safe_image(client, "장면1", "j1", anchor)
+    first = anchor.b64
+    worker._safe_image(client, "장면2", "j1", anchor)
+    assert anchor.b64 == first
+
+
+def test_anchor_not_sent_to_schnell(monkeypatch, tmp_path):
+    """schnell 은 참조 이미지를 받지 않는다 — 물려 보내면 라우트가 400 이다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    png = _png()
+    anchor = worker.StyleAnchor(True)
+    anchor.b64 = "QUJD"
+    client = _CFClient([RuntimeError("ai-image 502: no image"), png])
+    monkeypatch.setattr(worker.requests, "post", lambda *a, **k: None)
+    assert worker._safe_image(client, "p", "j1", anchor) == png
+    assert "reference_images" in client.payloads[0]
+    assert "reference_images" not in client.payloads[1]
+
+
+def test_anchor_disabled_sends_nothing(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(False)
+    worker._safe_image(client, "장면1", "j1", anchor)
+    worker._safe_image(client, "장면2", "j1", anchor)
+    assert anchor.b64 is None
+    assert all("reference_images" not in p for p in client.payloads)
+
+
+def test_anchor_skips_review_rejected_image(monkeypatch, tmp_path):
+    """검수를 끝내 통과 못 한 이미지는 앵커가 되지 않는다 — 기형을 톤 기준으로 삼지 않는다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(worker, "IMAGE_REVIEW_ROUNDS", 0)
+    monkeypatch.setattr(worker, "review_image", lambda img, job_id="?": (False, "얼굴 기형"))
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(True)
+    assert worker._safe_image(client, "p", "j1", anchor) == png  # 마지막 이미지는 그대로 쓴다
+    assert anchor.b64 is None
+
+
+def test_anchor_b64_is_small_enough_for_route():
+    """라우트는 512×512 미만·512KB 상한을 건다. 원본을 그대로 실어 보내면 400 이다."""
+    import base64 as _b64
+    big = io.BytesIO()
+    Image.new("RGB", (1536, 1024), (30, 60, 90)).save(big, format="PNG")
+    out = worker._anchor_b64(big.getvalue())
+    assert out is not None
+    raw = _b64.b64decode(out)
+    assert len(raw) <= worker.ANCHOR_MAX_BYTES
+    w_, h_ = Image.open(io.BytesIO(raw)).size
+    assert max(w_, h_) <= worker.ANCHOR_MAX_PX < 512
+
+
+def test_anchor_b64_survives_broken_bytes():
+    """앵커는 있으면 좋은 것이지 생성을 막을 이유가 아니다."""
+    assert worker._anchor_b64(b"not an image") is None
+
+
+def test_anchor_dropped_when_prompt_too_long(monkeypatch, tmp_path):
+    """접두사까지 붙여 라우트 상한을 넘기느니 앵커를 포기한다 — 400 이면 장면 자체를 잃는다."""
+    monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
+    png = _png()
+    client = _CFClient(png)
+    anchor = worker.StyleAnchor(True)
+    anchor.b64 = "QUJD"
+    long_prompt = "x" * worker.CF_PROMPT_MAX
+    worker._safe_image(client, long_prompt, "j1", anchor)
+    assert "reference_images" not in client.payloads[0]
+    assert client.payloads[0]["prompt"] == long_prompt
+
+
+# --- 기능별 LLM 모델 ---
+
+class _ModelClient:
+    """get 만 가진 가짜 PortalClient(모델 설정 조회용)."""
+
+    def __init__(self, result):
+        self.result = result
+        self.calls = 0
+
+    def get(self, path):
+        self.calls += 1
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def _reset_models(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(worker, "_llm_models_fetched_at", 0.0)
+    gen.set_model_overrides(None)
+
+
+def test_model_for_falls_back_to_default():
+    gen.set_model_overrides(None)
+    assert gen.model_for("blog") == gen.DEFAULT_MODEL
+    assert gen.model_for("모르는기능") == gen.DEFAULT_MODEL
+
+
+def test_refresh_applies_overrides(monkeypatch, tmp_path):
+    _reset_models(monkeypatch, tmp_path)
+    client = _ModelClient({"models": {"blog": "claude-opus-5", "image_review": "claude-haiku-4-5"}})
+    worker.refresh_model_overrides(client, force=True)
+    assert gen.model_for("blog") == "claude-opus-5"
+    assert gen.model_for("image_review") == "claude-haiku-4-5"
+    assert gen.model_for("translate") == gen.DEFAULT_MODEL
+    gen.set_model_overrides(None)
+
+
+def test_refresh_survives_portal_failure(monkeypatch, tmp_path):
+    """설정을 못 읽었다고 배치를 멈추면 안 된다 — 직전 값이 남는다."""
+    _reset_models(monkeypatch, tmp_path)
+    worker.refresh_model_overrides(_ModelClient({"models": {"blog": "claude-opus-5"}}), force=True)
+    worker.refresh_model_overrides(_ModelClient(RuntimeError("portal down")), force=True)
+    assert gen.model_for("blog") == "claude-opus-5"
+    gen.set_model_overrides(None)
+
+
+def test_refresh_is_throttled(monkeypatch, tmp_path):
+    """매 사이클 호출되지만 TTL 안에서는 포털을 다시 찌르지 않는다."""
+    _reset_models(monkeypatch, tmp_path)
+    client = _ModelClient({"models": {"blog": "claude-sonnet-5"}})
+    worker.refresh_model_overrides(client, force=True)
+    worker.refresh_model_overrides(client)
+    assert client.calls == 1
+    gen.set_model_overrides(None)
+
+
+def test_refresh_ignores_malformed_payload(monkeypatch, tmp_path):
+    _reset_models(monkeypatch, tmp_path)
+    worker.refresh_model_overrides(_ModelClient({"models": "nope"}), force=True)
+    assert gen.model_for("blog") == gen.DEFAULT_MODEL
+    worker.refresh_model_overrides(_ModelClient(None), force=True)
+    assert gen.model_for("blog") == gen.DEFAULT_MODEL

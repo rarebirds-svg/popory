@@ -4,7 +4,7 @@ from popory_healthcheck import run as runmod
 
 
 def _stub_gather(results):
-    return lambda: results
+    return lambda mode="pm": results
 
 
 def _stub_send(sent):
@@ -122,6 +122,27 @@ def test_gather_uses_yesterday_auto_create_in_morning(tmp_path, monkeypatch):
     results = runmod.gather()
     routine = next(r for r in results if r[0] == "콘텐츠루틴")
     assert routine[1] == "ok", f"expected ok, got {routine}"
+
+
+def test_gather_am_passes_yesterday_fallback_to_brief_check(tmp_path, monkeypatch):
+    """am은 브리핑 점검에 전일자 폴백을 넘기고(생성 창 경합 방지), pm은 넘기지 않는다."""
+    captured = {}
+
+    def fake_briefs(tpl, cats, today, fallback=None):
+        captured["fallback"] = fallback
+        return ("ok", "stub")
+
+    monkeypatch.setattr(runmod.checks, "check_briefs_published", fake_briefs)
+    monkeypatch.setattr(runmod, "WORKER_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(tmp_path))
+    monkeypatch.setattr(runmod, "_today", lambda: "2026-08-25")
+    monkeypatch.setattr(runmod, "_yesterday", lambda: "2026-08-24")
+    monkeypatch.setattr(runmod.claude_auth, "current_state", lambda: (True, None))
+
+    runmod.gather("am")
+    assert captured["fallback"] == "2026-08-24"
+    runmod.gather("pm")
+    assert captured["fallback"] is None
 
 
 def test_gather_includes_claude_auth(tmp_path, monkeypatch):

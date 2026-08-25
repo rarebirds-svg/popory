@@ -46,6 +46,13 @@ def test_parse_shorts_options_all_fields():
     assert opts["upload_targets"] == ["youtube", "instagram"]
 
 
+def test_parse_shorts_options_keeps_facebook_target():
+    import json
+    params = json.dumps({"upload_targets": ["youtube", "instagram", "facebook", "tiktok"]})
+    opts = parse_shorts_options(params)
+    assert opts["upload_targets"] == ["youtube", "instagram", "facebook"]
+
+
 def test_short_scene_count_keys():
     assert set(SHORT_SCENE_COUNT.keys()) == {"15", "30", "60"}
     assert SHORT_SCENE_COUNT["15"] == 3
