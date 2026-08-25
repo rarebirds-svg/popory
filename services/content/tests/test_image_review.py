@@ -35,20 +35,25 @@ def test_parse_malformed_raises(bad):
 
 # --- fail-open ---
 
-def test_review_disabled_passes(monkeypatch):
+def test_review_disabled_passes_but_marks_unavailable(monkeypatch):
     monkeypatch.setattr(ir, "ENABLED", False)
-    assert ir.review_image(b"PNG", "j1") == (True, "")
+    ok, reason = ir.review_image(b"PNG", "j1")
+    assert ok is True and ir.is_unavailable(reason)
 
 
-def test_review_empty_bytes_passes():
-    assert ir.review_image(b"", "j1") == (True, "")
+def test_review_empty_bytes_passes_but_marks_unavailable():
+    ok, reason = ir.review_image(b"", "j1")
+    assert ok is True and ir.is_unavailable(reason)
 
 
-def test_review_cli_failure_passes(monkeypatch):
-    """CLI 가 죽어도 통과시켜야 한다 — 검수 실패로 배치가 멈추면 안 된다."""
+def test_review_cli_failure_passes_but_marks_unavailable(monkeypatch):
+    """CLI 가 죽어도 통과시키되(fail-open), 판정을 못 했다는 사실은 남겨야 한다 —
+    구분이 없으면 인증 만료된 날 전량이 조용히 통과하는데 아무도 모른다."""
     monkeypatch.setattr(ir, "ENABLED", True)
     monkeypatch.setattr(ir, "run_claude_cli", lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
-    assert ir.review_image(b"PNG", "j1") == (True, "")
+    ok, reason = ir.review_image(b"PNG", "j1")
+    assert ok is True
+    assert ir.is_unavailable(reason) and "boom" in reason
 
 
 def test_review_passes_read_tool_and_temp_path(monkeypatch):
@@ -120,7 +125,8 @@ def test_safe_image_regenerates_with_hardened_prompt_on_reject(monkeypatch):
     calls = _stub(monkeypatch, [b"BAD", b"GOOD"], [(False, "얼굴 기형"), (True, "")])
     assert w._safe_image(None, "A man reading", "j1") == b"GOOD"
     assert len(calls) == 2
-    assert calls[0] == "A man reading"
+    assert calls[0].startswith("A man reading")
+    assert ir.SAFE_PEOPLE_SUFFIX in calls[0], "0라운드부터 인물 정책이 붙는다"
     assert "silhouette" in calls[1], "재생성은 인물 위험을 낮춘 프롬프트로 해야 한다"
 
 
@@ -144,3 +150,147 @@ def test_safe_image_rounds_zero_disables_regeneration(monkeypatch):
     calls = _stub(monkeypatch, [b"BAD"], [(False, "기형")])
     assert w._safe_image(None, "p", "j1") == b"BAD"
     assert len(calls) == 1, "라운드 0 이면 검수만 하고 재생성은 안 한다"
+
+
+def test_normal_verdicts_are_not_marked_unavailable():
+    """정상 판정과 fail-open 이 섞이면 집계가 무의미해진다."""
+    assert not ir.is_unavailable("")
+    assert not ir.is_unavailable("얼굴 기형")
+    assert ir.is_unavailable(f"{ir.UNAVAILABLE_PREFIX}: RuntimeError: boom")
+
+
+def test_worker_logs_when_review_unavailable(monkeypatch):
+    """검수를 못 한 통과는 image_review_error 로 드러나야 한다."""
+    logged = []
+    monkeypatch.setattr(w, "_generate_image",
+                        lambda c, p, job_id="?", anchor=None, shape=None: b"IMG")
+    monkeypatch.setattr(w, "review_image",
+                        lambda img, job_id="?": (True, f"{ir.UNAVAILABLE_PREFIX}: 죽음"))
+    monkeypatch.setattr(w, "append_log", lambda d, rec: logged.append(rec))
+    assert w._safe_image(None, "p", "j1") == b"IMG"
+    assert any(r.get("status") == "image_review_error" for r in logged)
+
+
+def test_worker_does_not_log_error_on_normal_pass(monkeypatch):
+    logged = []
+    monkeypatch.setattr(w, "_generate_image",
+                        lambda c, p, job_id="?", anchor=None, shape=None: b"IMG")
+    monkeypatch.setattr(w, "review_image", lambda img, job_id="?": (True, ""))
+    monkeypatch.setattr(w, "append_log", lambda d, rec: logged.append(rec))
+    w._safe_image(None, "p", "j1")
+    assert not any(r.get("status") == "image_review_error" for r in logged)
+
+
+# --- 판정 기준(SYSTEM_PROMPT) ---
+# 실제로 통과해버린 두 장을 기준 삼아 회귀를 막는다.
+#  - 머리 없는 몸통 + 피부톤 튀는 손 (팔짱 포즈)
+#  - 두 팔이 한 소매로 융합 + 한쪽 손 소실 (턱 괴기 포즈)
+# 둘 다 얼굴은 멀쩡해서, 얼굴·눈 위주 기준으로는 걸리지 않았다.
+
+def test_system_prompt_traces_limbs_not_gestalt():
+    """게슈탈트 판정이 아니라 어깨→손 사슬을 적게 강제해야 한다."""
+    p = ir.SYSTEM_PROMPT
+    assert "어깨 → 상완 → 팔꿈치 → 전완 → 손목 → 손" in p
+    assert "모든 인물" in p
+
+
+def test_system_prompt_rejects_missing_and_fused_parts():
+    p = ir.SYSTEM_PROMPT
+    assert "[결손]" in p and "[융합·분기]" in p
+    # 프레임 밖 크롭과 구분하는 기준이 있어야 과잉 차단이 안 난다
+    assert "프레임 밖으로 잘린 것과 구분" in p
+    # 머리 없는 몸통이 "얼굴 안 보이는 인물"로 새지 않게 못 박는다
+    assert "머리 자체가 없는 몸통은 여기 해당하지 않습니다" in p
+    # 애매하면 ok 의 예외
+    assert "결손·융합은 예외" in p
+
+
+def test_system_prompt_covers_skin_tone_and_ignores_text():
+    p = ir.SYSTEM_PROMPT
+    assert "[색·재질]" in p
+    assert "글자가 뭉개진 것은 ok" in p
+
+
+def test_retry_hint_bans_folded_arm_poses():
+    """재생성 힌트가 팔짱·턱 괴기를 명시적으로 막아야 한다."""
+    r0 = ir.harden_prompt("A woman at a desk", 0)
+    assert "no crossed arms" in r0
+    assert "no chin resting on a hand" in r0
+
+
+# --- 생성 프롬프트 인물 정책 ---
+
+@pytest.mark.parametrize("prompt", [
+    "A man reading by a window",
+    "Two students at a desk",
+    "A quiet cafe with people talking",
+    "Her hands on an open book",
+])
+def test_person_prompts_get_safe_composition(prompt):
+    """사람을 지우면 장면이 죽으므로 대신 실패 표면(크고 선명한 인체)을 없앤다."""
+    out = ir.apply_people_policy(prompt)
+    assert ir.SAFE_PEOPLE_SUFFIX in out
+    assert ir.NO_PEOPLE_SUFFIX not in out
+    assert "out of focus" in out and "no visible hands" in out
+
+
+@pytest.mark.parametrize("prompt", [
+    "An empty library at dusk, warm lamplight",
+    "A worn paperback on a wooden table",
+    "Rain on a window, blurred street lights",
+])
+def test_peopleless_prompts_get_no_people(prompt):
+    """모델이 멋대로 인물을 그려 넣는 걸 막는다 — 사람이 없으면 기형도 없다."""
+    out = ir.apply_people_policy(prompt)
+    assert ir.NO_PEOPLE_SUFFIX in out
+    assert ir.SAFE_PEOPLE_SUFFIX not in out
+
+
+def test_people_policy_keeps_original_prompt():
+    out = ir.apply_people_policy("A worn paperback on a table.")
+    assert out.startswith("A worn paperback on a table.")
+
+
+def test_people_policy_never_stacks_both_suffixes():
+    """두 접미사가 겹치면 '이렇게 그려라'와 '빼라'가 한 프롬프트에서 충돌한다."""
+    for prompt in ("A man reading", "An empty room"):
+        out = ir.apply_people_policy(prompt)
+        assert (ir.SAFE_PEOPLE_SUFFIX in out) != (ir.NO_PEOPLE_SUFFIX in out)
+
+
+def test_safe_image_does_not_stack_policy_on_retry(monkeypatch):
+    """재생성 라운드엔 harden_prompt 만 붙는다 — 정책과 겹치면 지시가 모순된다."""
+    calls = _stub(monkeypatch, [b"A", b"B"], [(False, "기형"), (True, "")])
+    w._safe_image(None, "A man reading", "j1")
+    assert ir.SAFE_PEOPLE_SUFFIX not in calls[1]
+    assert ir.NO_PEOPLE_SUFFIX not in calls[1]
+
+
+# --- has_person 단어 경계 ---
+# 부분일치로 짜면 "the "⊃"he ", "this "⊃"his ", "many"⊃"man" 이라 사실상 전량이
+# 사람 있음으로 분류되고 "사람 그리지 마라" 분기가 통째로 죽는다. 회귀를 고정한다.
+
+@pytest.mark.parametrize("prompt", [
+    "A worn paperback on the table",
+    "Rain on the window, blurred lights",
+    "A quiet room in this old house",
+    "A manuscript and many letters",
+    "A wooden surface under warm light",
+    "Sunlight over the other shelf",
+    "A German edition bound in leather",
+])
+def test_has_person_false_on_lookalike_words(prompt):
+    assert ir.has_person(prompt) is False, f"오탐: {prompt}"
+
+
+@pytest.mark.parametrize("prompt", [
+    "A man reading by a window",
+    "Two students at a desk",
+    "Her hands on an open book",
+    "A crowd on the street",
+    "People talking in a cafe",
+    "A child near the shelf",
+    "Readers waiting in line",
+])
+def test_has_person_true_on_real_people(prompt):
+    assert ir.has_person(prompt) is True, f"미탐: {prompt}"

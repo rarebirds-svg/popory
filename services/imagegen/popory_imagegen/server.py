@@ -5,6 +5,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from popory_imagegen import model
 from popory_imagegen.model import ModelManager, build_pipe
 
 
@@ -23,8 +24,12 @@ def make_server(manager, host: str = "127.0.0.1", port: int = 8765) -> Threading
 
         def do_GET(self) -> None:
             if self.path == "/health":
+                # guidance·negative_active 를 같이 노출한다 — CFG 가 꺼져 있으면 기형 방지
+                # 네거티브가 조용히 무효라, 밖에서 보이지 않으면 아무도 모른다.
                 self._json(200, {"loaded": getattr(manager, "loaded", False),
-                                 "model": os.environ.get("POPORY_IMAGEGEN_MODEL", "realvisxl")})
+                                 "model": os.environ.get("POPORY_IMAGEGEN_MODEL", "realvisxl"),
+                                 "guidance": model.GUIDANCE,
+                                 "negative_active": model.negative_active(model.GUIDANCE)})
             else:
                 self._json(404, {"error": "not found"})
 

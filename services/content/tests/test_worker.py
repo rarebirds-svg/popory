@@ -571,7 +571,8 @@ def test_cf_uses_klein_by_default(monkeypatch, tmp_path):
     monkeypatch.setattr(worker.requests, "post", lambda *a, **k: None)
     assert worker._safe_image(client, "p") == png
     assert client.calls == 1
-    assert client.payloads[0] == {"prompt": "p", "model": "klein-4b"}
+    # _safe_image 는 생성 직전에 인물 정책 접미사를 항상 붙인다(image_review.apply_people_policy)
+    assert client.payloads[0] == {"prompt": worker.apply_people_policy("p"), "model": "klein-4b"}
 
 
 def test_cf_falls_back_to_schnell_before_local(monkeypatch, tmp_path):
@@ -613,8 +614,9 @@ def test_cf_dimensions_only_on_klein(monkeypatch, tmp_path):
     client = _CFClient([RuntimeError("ai-image 502: no image"), png])
     monkeypatch.setattr(worker.requests, "post", lambda *a, **k: None)
     assert worker._safe_image(client, "p", "j1", None, "landscape") == png
-    assert client.payloads[0] == {"prompt": "p", "model": "klein-4b", "width": 1536, "height": 1024}
-    assert client.payloads[1] == {"prompt": "p", "model": "schnell"}
+    p = worker.apply_people_policy("p")
+    assert client.payloads[0] == {"prompt": p, "model": "klein-4b", "width": 1536, "height": 1024}
+    assert client.payloads[1] == {"prompt": p, "model": "schnell"}
 
 
 def test_cf_size_per_format(monkeypatch, tmp_path):
@@ -636,7 +638,7 @@ def test_cf_size_unknown_shape_uses_model_default(monkeypatch, tmp_path):
     monkeypatch.setattr(worker, "CF_QUOTA_FILE", tmp_path / "cf_quota.json")
     client = _CFClient(_png())
     worker._safe_image(client, "p", "j1", None, None)
-    assert client.payloads[0] == {"prompt": "p", "model": "klein-4b"}
+    assert client.payloads[0] == {"prompt": worker.apply_people_policy("p"), "model": "klein-4b"}
 
 
 def test_parse_size():
@@ -691,7 +693,7 @@ def test_anchor_applied_to_later_images(monkeypatch, tmp_path):
     refs = client.payloads[1]["reference_images"]
     assert refs == [anchor.b64] and len(refs) == 1
     # 참조만 물리면 모델이 그걸 재현하려 들 수 있다 — 프롬프트가 image 0 을 명시해야 한다.
-    assert client.payloads[1]["prompt"] == worker.ANCHOR_PROMPT_PREFIX + "장면2"
+    assert client.payloads[1]["prompt"] == worker.ANCHOR_PROMPT_PREFIX + worker.apply_people_policy("장면2")
 
 
 def test_anchor_stays_first_image(monkeypatch, tmp_path):
@@ -771,7 +773,7 @@ def test_anchor_dropped_when_prompt_too_long(monkeypatch, tmp_path):
     long_prompt = "x" * worker.CF_PROMPT_MAX
     worker._safe_image(client, long_prompt, "j1", anchor)
     assert "reference_images" not in client.payloads[0]
-    assert client.payloads[0]["prompt"] == long_prompt
+    assert client.payloads[0]["prompt"] == worker.apply_people_policy(long_prompt)
 
 
 # --- 기능별 LLM 모델 ---

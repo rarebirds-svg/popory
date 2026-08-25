@@ -62,3 +62,26 @@ def test_maybe_unload_when_not_loaded_is_noop():
     mgr, state = make_manager()
     mgr.maybe_unload()
     assert state["loads"] == 0
+
+
+# --- guidance / negative_prompt 실효성 ---
+
+def test_negative_active_only_above_one():
+    """diffusers 는 guidance_scale > 1 에서만 CFG 를 켠다 — 0.0 이면 NEGATIVE_DEFAULT 가 무효다."""
+    from popory_imagegen.model import negative_active
+    assert negative_active(0.0) is False
+    assert negative_active(1.0) is False
+    assert negative_active(1.5) is True
+
+
+def test_guidance_reads_env(monkeypatch):
+    import importlib
+    from popory_imagegen import model as m
+    monkeypatch.setenv("POPORY_IMAGEGEN_GUIDANCE", "1.8")
+    importlib.reload(m)
+    try:
+        assert m.GUIDANCE == 1.8
+        assert m.negative_active(m.GUIDANCE) is True
+    finally:
+        monkeypatch.delenv("POPORY_IMAGEGEN_GUIDANCE")
+        importlib.reload(m)
