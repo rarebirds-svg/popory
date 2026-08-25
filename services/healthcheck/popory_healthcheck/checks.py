@@ -20,39 +20,59 @@ def check_http(name: str, url: str, warn_ms: int = 3000) -> tuple[str, str]:
     return ("ok", f"{name} 정상 — {resp.status_code}, {ms}ms")
 
 
-def check_brief_published(url: str, today: str) -> tuple[str, str]:
+def _has_date(text: str, date: str) -> bool:
+    return date in text or date.replace("-", ".") in text
+
+
+def check_brief_published(url: str, today: str, fallback: str | None = None) -> tuple[str, str]:
+    """fallback(전일자)이 주어지면 오전 점검이다 — 브리핑은 08:00 기동 + 0~120분 지터 +
+    생성 시간 뒤에야 publish 되므로, 오늘자가 아직 없어도 전일자가 있으면 파이프라인은
+    살아 있는 것으로 보고 "pending"을 반환한다(경보 아님)."""
     try:
         resp = requests.get(url, timeout=10)
     except requests.RequestException as e:
         return ("fail", f"브리핑 페이지 연결 실패 — {e}")
     if resp.status_code >= 400:
         return ("fail", f"브리핑 페이지 HTTP {resp.status_code}")
-    dotted = today.replace("-", ".")
-    if today in resp.text or dotted in resp.text:
+    if _has_date(resp.text, today):
         return ("ok", f"오늘자 브리핑 배포됨 — {today}")
+    if fallback is not None and _has_date(resp.text, fallback):
+        return ("pending", f"오늘자 생성 창 대기 — 전일자 {fallback} 확인")
     return ("warn", f"오늘자 브리핑 미확인 — {today}")
 
 
 def check_briefs_published(
-    url_template: str, categories: list[tuple[str, str]], today: str
+    url_template: str,
+    categories: list[tuple[str, str]],
+    today: str,
+    fallback: str | None = None,
 ) -> tuple[str, str]:
-    """카테고리별로 브리핑 페이지를 확인하고, 미확인·조회 실패 카테고리 이름을 모두 나열한다."""
+    """카테고리별로 브리핑 페이지를 확인하고, 미확인·조회 실패 카테고리 이름을 모두 나열한다.
+
+    fallback(전일자)이 주어지면 오전 점검 — 오늘자가 없어도 전일자가 확인되는 카테고리는
+    생성 창 대기로 보고 정상 처리한다. 전일자까지 없으면 그대로 미확인 경보."""
     if not categories:
         return ("warn", f"브리핑 카테고리 목록 없음 — {today}")
     missing: list[str] = []
     failed: list[str] = []
+    pending = 0
     for slug, name in categories:
-        status, _msg = check_brief_published(url_template.format(slug=slug), today)
+        status, _msg = check_brief_published(url_template.format(slug=slug), today, fallback)
         if status == "fail":
             failed.append(name)
         elif status == "warn":
             missing.append(name)
+        elif status == "pending":
+            pending += 1
     parts = []
     if missing:
         parts.append(f"미확인 {', '.join(missing)}")
     if failed:
         parts.append(f"조회 실패 {', '.join(failed)}")
     if not parts:
+        if pending:
+            done = len(categories) - pending
+            return ("ok", f"오늘자 브리핑 {done}개 배포·{pending}개 생성 창 대기(전일자 확인) — {today}")
         return ("ok", f"오늘자 브리핑 배포됨 — {len(categories)}개 카테고리 전부, {today}")
     status = "fail" if failed else "warn"
     detail = " / ".join(parts)
