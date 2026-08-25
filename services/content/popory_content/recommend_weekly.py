@@ -4,7 +4,7 @@ import re
 import sys
 from pathlib import Path
 
-from popory_content.generate import run_claude_cli, GenerateError
+from popory_content.generate import run_claude_cli, model_for, GenerateError
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log
@@ -74,6 +74,7 @@ def build_user_msg(known_titles: list[str]) -> str:
 def generate_items(known_titles: list[str]) -> list[dict]:
     """claude CLI로 추천 목록을 생성한다. 프롬프트·파싱·건수 규약을 auto_create 폴백과 공유한다."""
     return run_claude_cli(system_prompt=SYSTEM_PROMPT, user_msg=build_user_msg(known_titles),
+                          model=model_for("recommend"),
                           parse=_parse, job_id="recommend")
 
 

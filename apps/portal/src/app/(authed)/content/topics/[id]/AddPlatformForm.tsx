@@ -33,6 +33,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   const [shorts, setShorts] = useState(false);
   const [shToYoutube, setShToYoutube] = useState(true);
   const [shToInsta, setShToInsta] = useState(true);
+  const [shToFacebook, setShToFacebook] = useState(true);
   const [instaImage, setInstaImage] = useState(false);
   const [ytPost, setYtPost] = useState(false);
 
@@ -50,7 +51,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (noneSelected) { setErr({ message: "하나 이상의 유형을 선택해 주세요.", detail: "", retryable: false }); return; }
-    if (shorts && !shToYoutube && !shToInsta) { setErr({ message: "쇼츠 업로드 대상을 하나 이상 선택해 주세요.", detail: "", retryable: false }); return; }
+    if (shorts && !shToYoutube && !shToInsta && !shToFacebook) { setErr({ message: "쇼츠 업로드 대상을 하나 이상 선택해 주세요.", detail: "", retryable: false }); return; }
     setErr(null);
     setSubmitting(true);
     try {
@@ -61,6 +62,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
         const targets: string[] = [];
         if (shToYoutube) targets.push("youtube");
         if (shToInsta) targets.push("instagram");
+        if (shToFacebook) targets.push("facebook");
         platforms.push({ platform: "shorts", options: { length: shLength, voice: shVoice, image_style: shStyle, upload_targets: targets } });
       }
       if (instaImage) platforms.push({ platform: "instagram-image", options: { slide_count: slideCount } });
@@ -114,7 +116,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
         </label>
         <label className={shortsDisabled ? CHECK_DISABLED : CHECK_LABEL}>
           <input type="checkbox" checked={shorts} disabled={shortsDisabled} onChange={(e) => setShorts(e.target.checked)} />
-          쇼츠 영상{shortsDisabled ? " (이미 있음)" : <span className="text-popory-muted"> · 유튜브·인스타 업로드</span>}
+          쇼츠 영상{shortsDisabled ? " (이미 있음)" : <span className="text-popory-muted"> · 유튜브·인스타·페이스북 업로드</span>}
         </label>
         <label className={instaImageDisabled ? CHECK_DISABLED : CHECK_LABEL}>
           <input type="checkbox" checked={instaImage} disabled={instaImageDisabled} onChange={(e) => setInstaImage(e.target.checked)} />
@@ -165,6 +167,10 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
               <label className={CHECK_LABEL}>
                 <input type="checkbox" checked={shToInsta} onChange={(e) => setShToInsta(e.target.checked)} />
                 인스타
+              </label>
+              <label className={CHECK_LABEL}>
+                <input type="checkbox" checked={shToFacebook} onChange={(e) => setShToFacebook(e.target.checked)} />
+                페이스북
               </label>
             </div>
           </div>

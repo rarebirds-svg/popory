@@ -161,6 +161,50 @@ def test_briefs_warn_when_no_categories():
     assert "카테고리" in msg
 
 
+# ── 오전 점검 폴백: 생성 창(08:00~10:00 지터 + 생성 시간)과 겹치면 전일자로 판정 ──
+
+@responses.activate
+def test_briefs_am_ok_when_only_yesterday_present():
+    """오전 09:00 시나리오: 오늘자는 아직 없지만 전일자가 있으면 생성 창 대기 — 경보 아님."""
+    for slug, _ in CATS:
+        _brief_page(slug, "<li>2026-07-11 어제자</li>")
+    status, msg = checks.check_briefs_published(TPL, CATS, "2026-07-12", fallback="2026-07-11")
+    assert status == "ok"
+    assert "대기" in msg
+
+
+@responses.activate
+def test_briefs_am_mixed_published_and_pending_ok():
+    _brief_page("realestate", "<li>2026-07-12 오늘자</li>")
+    _brief_page("naver", "<li>2026-07-11 어제자</li>")
+    _brief_page("antitrust", "<li>2026-07-11 어제자</li>")
+    status, msg = checks.check_briefs_published(TPL, CATS, "2026-07-12", fallback="2026-07-11")
+    assert status == "ok"
+    assert "1개 배포" in msg
+    assert "2개 생성 창 대기" in msg
+
+
+@responses.activate
+def test_briefs_am_warn_when_yesterday_also_missing():
+    """전일자까지 없으면 파이프라인이 실제로 멈춘 것 — 오전에도 그대로 경보."""
+    _brief_page("realestate", "<li>2026-07-12 오늘자</li>")
+    _brief_page("naver", "<li>2026-07-01 옛글</li>")
+    _brief_page("antitrust", "<li>2026-07-11 어제자</li>")
+    status, msg = checks.check_briefs_published(TPL, CATS, "2026-07-12", fallback="2026-07-11")
+    assert status == "warn"
+    assert "네이버" in msg
+    assert "부동산" not in msg
+
+
+@responses.activate
+def test_briefs_pm_warn_without_fallback_even_if_yesterday_present():
+    """pm(확정 판정)은 폴백 없이 오늘자만 본다 — 기존 동작 유지."""
+    for slug, _ in CATS:
+        _brief_page(slug, "<li>2026-07-11 어제자</li>")
+    status, _msg = checks.check_briefs_published(TPL, CATS, "2026-07-12")
+    assert status == "warn"
+
+
 # ── 자원 한도: 어떤 자원이 걸렸는지 이름을 메시지에 담는다 ──
 
 def test_scan_markers_names_claude_session_limit():

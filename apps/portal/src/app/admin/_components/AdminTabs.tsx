@@ -11,6 +11,7 @@ const TABS = [
   { href: "/admin/status", label: "상태" },
   { href: "/admin/whitelist", label: "화이트리스트" },
   { href: "/admin/brief-categories", label: "브리핑 카테고리" },
+  { href: "/admin/llm-models", label: "LLM 모델" },
 ];
 
 export function AdminTabs() {

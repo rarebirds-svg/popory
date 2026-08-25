@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from popory_content.contract import parse_generation, ContractError
+from popory_content.names import normalize_names
 from popory_content.prompt import build_system_prompt, build_user_message
 from popory_content.youtube_post_prompt import build_youtube_post_system_prompt, build_youtube_post_user_message
 from popory_content.youtube_post_contract import parse_youtube_post
@@ -14,7 +15,25 @@ from popory_content.reply_prompt import build_reply_system_prompt, build_reply_u
 from popory_content.reply_contract import parse_reply
 
 CLAUDE_BIN = "/opt/homebrew/bin/claude"
-DEFAULT_MODEL = "claude-sonnet-4-6"
+# 기본 모델. 포털 어드민(LLM 모델)에서 기능별로 덮어쓰며, 그 설정을 못 읽으면 여기로 돌아온다.
+DEFAULT_MODEL = os.environ.get("POPORY_CLAUDE_MODEL", "claude-sonnet-5")
+
+# 기능키 → 모델. 워커가 작업을 집을 때마다 포털에서 받아 채운다(set_model_overrides).
+# 프로세스 전역인 이유: 대본·번역·검수 호출부가 서로 다른 모듈에 흩어져 있어 포털 클라이언트를
+# 거기까지 실어 나르면 시그니처만 번져 나간다. 읽기 전용 조회라 스레드에서도 안전하다.
+_MODEL_OVERRIDES: dict[str, str] = {}
+
+
+def set_model_overrides(mapping: dict[str, str] | None) -> None:
+    """포털에서 받은 기능별 모델로 교체한다. None·빈 값이면 전부 기본값으로 되돌린다."""
+    _MODEL_OVERRIDES.clear()
+    if mapping:
+        _MODEL_OVERRIDES.update({k: v for k, v in mapping.items() if isinstance(v, str) and v})
+
+
+def model_for(feature: str) -> str:
+    """기능에 쓸 모델. 설정이 없거나 못 읽었으면 기본값."""
+    return _MODEL_OVERRIDES.get(feature) or DEFAULT_MODEL
 # 일시 실패(사용량 한도·네트워크·CLI 비제로 종료·파싱) 내성. 모두 env 오버라이드.
 TIMEOUT_SECONDS = int(os.environ.get("POPORY_CLAUDE_TIMEOUT", "1200"))
 MAX_ATTEMPTS = int(os.environ.get("POPORY_CLAUDE_MAX_ATTEMPTS", "4"))
@@ -73,7 +92,9 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
                     time.sleep(wait); continue
                 raise GenerateError(f"claude CLI exit {result.returncode} (시도 {attempt}): {tail}")
             try:
-                return parse(result.stdout)
+                # 인명 표기 교정은 parse 앞에 둔다 — 여기가 claude 출력이 지나는 유일한
+                # 길목이라 제목·대본·태그·설명이 한 번에 같은 표기로 맞춰진다.
+                return parse(normalize_names(result.stdout))
             except Exception as e:  # noqa: BLE001 — 파싱 실패도 재시도 대상
                 if not last:
                     wait = _retry_backoff(attempt); _log_retry(attempt, wait, "parse 실패")
@@ -85,29 +106,31 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
 
 
 def generate(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
-             model: str = DEFAULT_MODEL, job_id: str = "adhoc") -> tuple[str, dict[str, Any]]:
+             model: str | None = None, job_id: str = "adhoc") -> tuple[str, dict[str, Any]]:
     sp = build_system_prompt(style_samples)
     um = build_user_message(topic, sources)
     try:
-        return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_generation, job_id=job_id, model=model)
+        return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_generation, job_id=job_id,
+                              model=model or model_for("blog"))
     except ContractError as e:  # 방어적: run_claude_cli 가 이미 GenerateError 로 감쌈
         raise GenerateError(str(e)) from e
 
 
-def generate_youtube_post(*, topic: str, model: str = DEFAULT_MODEL,
+def generate_youtube_post(*, topic: str, model: str | None = None,
                           job_id: str = "adhoc") -> tuple[str, dict[str, Any]]:
     sp = build_youtube_post_system_prompt()
     um = build_youtube_post_user_message(topic)
     try:
-        return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_youtube_post, job_id=job_id, model=model)
+        return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_youtube_post, job_id=job_id,
+                              model=model or model_for("youtube_post"))
     except ContractError as e:  # 방어적: run_claude_cli 가 이미 GenerateError 로 감쌈
         raise GenerateError(str(e)) from e
 
 
-def generate_reply(*, comment_text: str, topic: str, model: str = DEFAULT_MODEL,
+def generate_reply(*, comment_text: str, topic: str, model: str | None = None,
                    job_id: str = "adhoc") -> dict:
     """댓글 하나에 대한 답글 초안 또는 스킵 판정. 짧은 호출이라 타임아웃·툴을 줄인다."""
     sp = build_reply_system_prompt()
     um = build_reply_user_message(comment_text, topic)
     return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_reply, job_id=job_id,
-                          model=model, timeout_seconds=180, allowed_tools=())
+                          model=model or model_for("reply"), timeout_seconds=180, allowed_tools=())

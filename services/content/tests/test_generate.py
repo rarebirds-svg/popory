@@ -114,3 +114,9 @@ def test_generate_youtube_post_wires_prompt_and_parser(monkeypatch):
     assert captured["parse"] is generate.parse_youtube_post
     assert "책 - 저자" in captured["user_msg"]
     assert "post_markdown" in captured["system_prompt"]
+
+
+def test_normalizes_author_names_before_parse(harness):
+    # 인명 교정은 parse 앞에 걸려야 한다 — 계약 파서가 이미 고쳐진 문자열을 본다.
+    harness["install"]([(0, "보도 새퍼의 돈", "")])
+    assert run_claude_cli(system_prompt="s", user_msg="u", parse=lambda x: x.strip()) == "보도 섀퍼의 돈"

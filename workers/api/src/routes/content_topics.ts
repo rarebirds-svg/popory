@@ -6,6 +6,7 @@ import { requireAuth, type AppVars } from "../middleware/session";
 import { requireService, type ServiceVars } from "../middleware/service_auth";
 import { deleteContentJob } from "../db/content_delete";
 import { withD1Retry } from "../db/d1_retry";
+import { zodDetail } from "../lib/zod_error";
 
 function ulid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -17,8 +18,8 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
   app.post("/api/content/topics", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
-    const parsed = TopicCreateSchema.safeParse(await c.req.json());
-    if (!parsed.success) return c.text("bad request", 400);
+    const parsed = TopicCreateSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.text(zodDetail(parsed.error), 400);
     const { topic, style_profile_id, sources, platforms, category_id } = parsed.data;
     if (style_profile_id) {
       const sp = await c.env.DB.prepare("SELECT id FROM style_profiles WHERE id=? AND owner_sub=?")
@@ -70,7 +71,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     const svc = c.get("service")!;
     if (svc.area !== "content-worker") return c.text("forbidden", 403);
     const parsed = TopicServiceCreateSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) return c.text("bad request", 400);
+    if (!parsed.success) return c.text(zodDetail(parsed.error), 400);
     const { owner_sub, topic, author, category_slug, platforms, recommendation_id } = parsed.data;
     let categoryId: string | null = null;
     if (category_slug) {
@@ -152,7 +153,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
       .bind(topicId).first<{ id: string; owner_sub: string; topic: string; category_id: string | null }>();
     if (!topic || topic.owner_sub !== u.sub) return c.text("not found", 404);
     const parsed = TopicAddJobsSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) return c.text("bad request", 400);
+    if (!parsed.success) return c.text(zodDetail(parsed.error), 400);
     const { platforms, style_profile_id } = parsed.data;
     if (style_profile_id) {
       const sp = await c.env.DB.prepare("SELECT id FROM style_profiles WHERE id=? AND owner_sub=?")

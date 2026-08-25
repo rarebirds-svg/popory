@@ -6,13 +6,14 @@ import re
 from functools import partial
 from typing import Callable
 
-from popory_content.generate import run_claude_cli, GenerateError
+from popory_content.generate import run_claude_cli, model_for, GenerateError
 
 LANGS = ("en", "zh", "ja")
 
 # 자막 번역은 실패해도 무방한 부가 단계 — 본문 생성용 무거운 설정(20분·4회·도구) 대신
 # 짧은 타임아웃·단일 시도·도구 비활성으로 워커를 오래 막지 않게 한다.
 _TRANSLATE_RUNNER = partial(run_claude_cli, timeout_seconds=120, max_attempts=1, allowed_tools=())
+# 모델은 호출 시점에 읽는다 — partial 로 굳히면 어드민에서 바꿔도 프로세스 재시작 전엔 안 먹는다.
 
 _SYSTEM = (
     "당신은 자막 번역가입니다. 한국어 문장 목록을 받아 각 언어로 번역합니다. "
@@ -52,6 +53,7 @@ def translate_lines(ko_lines: list[str], langs=LANGS, *, job_id: str = "adhoc",
     )
     try:
         return runner(system_prompt=_SYSTEM, user_msg=user_msg,
-                      parse=_build_parse(len(ko_lines), langs), job_id=job_id)
+                      parse=_build_parse(len(ko_lines), langs), job_id=job_id,
+                      model=model_for("translate"))
     except GenerateError:
         return None

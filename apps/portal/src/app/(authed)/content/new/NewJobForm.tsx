@@ -152,7 +152,7 @@ export function NewJobForm({ profiles, initialTopic = "", categories, defaultCat
           </label>
           <label className={CHECK_LABEL}>
             <input type="checkbox" checked={shorts} onChange={(e) => setShorts(e.target.checked)} />
-            쇼츠 영상 <span className="text-popory-muted">· 유튜브·인스타 업로드</span>
+            쇼츠 영상 <span className="text-popory-muted">· 유튜브·인스타·페이스북 업로드</span>
           </label>
           <label className={CHECK_LABEL}>
             <input type="checkbox" checked={instaImage} onChange={(e) => setInstaImage(e.target.checked)} />

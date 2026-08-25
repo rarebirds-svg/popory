@@ -7,6 +7,7 @@ import { requireService, type ServiceVars } from "../middleware/service_auth";
 import { verifyAreaToken } from "@popory/auth";
 import { loadJwks } from "../db/signing_keys";
 import { deleteContentJob } from "../db/content_delete";
+import { zodDetail } from "../lib/zod_error";
 
 function ulid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -30,8 +31,8 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
   app.post("/api/content/jobs", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
-    const parsed = ContentJobCreateSchema.safeParse(await c.req.json());
-    if (!parsed.success) return c.text("bad request", 400);
+    const parsed = ContentJobCreateSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.text(zodDetail(parsed.error), 400);
     if (parsed.data.style_profile_id) {
       const sp = await c.env.DB.prepare(
         "SELECT id FROM style_profiles WHERE id=? AND owner_sub=?",
@@ -56,7 +57,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
 
   app.post("/api/content/jobs/service-create", requireService, async (c) => {
     const parsed = JobServiceCreateSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) return c.text("bad request", 400);
+    if (!parsed.success) return c.text(zodDetail(parsed.error), 400);
     const { owner_sub, topic, platform, options, recommendation_id } = parsed.data;
     const id = ulid();
     const now = Math.floor(Date.now() / 1000);
@@ -116,8 +117,8 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
   app.patch("/api/content/jobs/:id", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
-    const parsed = ContentJobEditSchema.safeParse(await c.req.json());
-    if (!parsed.success) return c.text("bad request", 400);
+    const parsed = ContentJobEditSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.text(zodDetail(parsed.error), 400);
     const row = await c.env.DB.prepare("SELECT * FROM content_jobs WHERE id=?").bind(c.req.param("id")).first<ContentJobRow>();
     if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
     if (row.status !== "review" && row.status !== "done") return c.text("not editable", 409);
@@ -220,8 +221,8 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
   app.patch("/api/content/jobs/:id/result", requireService, async (c) => {
     const svc = c.get("service")!;
     if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
-    const parsed = ContentJobResultSchema.safeParse(await c.req.json());
-    if (!parsed.success) return c.text("bad request", 400);
+    const parsed = ContentJobResultSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.text(zodDetail(parsed.error), 400);
     const id = c.req.param("id");
     const row = await c.env.DB.prepare("SELECT id, status, platform, auto_upload, category_id FROM content_jobs WHERE id=?").bind(id).first<{ id: string; status: string; platform: string; auto_upload: number; category_id: string | null }>();
     if (!row) return c.text("not found", 404);
