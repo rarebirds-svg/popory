@@ -217,7 +217,8 @@ def _explain(path: Path, model: str | None = None, tile: int = 0) -> None:
     if not path.exists():
         print(f"error: 파일이 없습니다 — {path}", file=sys.stderr)
         sys.exit(2)
-    model = model or ir.MODEL
+    from popory_content.generate import model_for
+    model = model or ir.MODEL_ENV or model_for("image_review")
     print(f"검수 중: {path}")
     print(f"모델: {model}" + (f" / {tile}×{tile} 타일" if tile else "") + "\n" + "-" * 60)
     work = Path(tempfile.mkdtemp(prefix="popory_explain_"))

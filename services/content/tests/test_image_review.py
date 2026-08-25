@@ -162,7 +162,8 @@ def test_normal_verdicts_are_not_marked_unavailable():
 def test_worker_logs_when_review_unavailable(monkeypatch):
     """검수를 못 한 통과는 image_review_error 로 드러나야 한다."""
     logged = []
-    monkeypatch.setattr(w, "_generate_image", lambda c, p, job_id="?": b"IMG")
+    monkeypatch.setattr(w, "_generate_image",
+                        lambda c, p, job_id="?", anchor=None, shape=None: b"IMG")
     monkeypatch.setattr(w, "review_image",
                         lambda img, job_id="?": (True, f"{ir.UNAVAILABLE_PREFIX}: 죽음"))
     monkeypatch.setattr(w, "append_log", lambda d, rec: logged.append(rec))
@@ -172,7 +173,8 @@ def test_worker_logs_when_review_unavailable(monkeypatch):
 
 def test_worker_does_not_log_error_on_normal_pass(monkeypatch):
     logged = []
-    monkeypatch.setattr(w, "_generate_image", lambda c, p, job_id="?": b"IMG")
+    monkeypatch.setattr(w, "_generate_image",
+                        lambda c, p, job_id="?", anchor=None, shape=None: b"IMG")
     monkeypatch.setattr(w, "review_image", lambda img, job_id="?": (True, ""))
     monkeypatch.setattr(w, "append_log", lambda d, rec: logged.append(rec))
     w._safe_image(None, "p", "j1")
