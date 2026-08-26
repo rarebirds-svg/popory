@@ -105,7 +105,8 @@ describe("admin llm-models", () => {
     const c = await cookie("admin");
     const body = await (await SELF.fetch("https://example.com/api/admin/llm-models", { headers: { cookie: c } })).json() as
       { services: { key: string }[]; features: { key: string; service: string; default_model: string }[] };
-    expect(body.services.map((s) => s.key)).toContain("brief");
+    // 브리핑을 맨 위에 둔다 — 화면 순서는 SERVICES 순서를 그대로 따른다.
+    expect(body.services.map((s) => s.key)).toEqual(["brief", "content"]);
     const issue = body.features.find((f) => f.key === "brief_issue")!;
     expect(issue.service).toBe("brief");
     // 설정이 붙었다고 기존 브리핑 모델이 저절로 바뀌면 안 된다.
