@@ -3,7 +3,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
 import { ensureActiveKey, loadActivePrivate } from "../db/signing_keys";
 import { signSession, signAreaToken } from "@popory/auth";
-import { DEFAULT_MODEL } from "../lib/llm_catalog";
+import { DEFAULT_MODEL, defaultModelOf } from "../lib/llm_catalog";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -48,10 +48,12 @@ describe("admin llm-models", () => {
     const c = await cookie("admin");
     const res = await SELF.fetch("https://example.com/api/admin/llm-models", { headers: { cookie: c } });
     expect(res.status).toBe(200);
-    const body = await res.json() as { default_model: string; features: { key: string; model: string; overridden: boolean }[] };
+    const body = await res.json() as { default_model: string; features: { key: string; model: string; default_model: string; overridden: boolean }[] };
     expect(body.default_model).toBe(DEFAULT_MODEL);
     expect(body.features.length).toBeGreaterThan(0);
-    expect(body.features.every((f) => f.model === DEFAULT_MODEL && !f.overridden)).toBe(true);
+    // 기능별 기본값이 따로 있는 것도 있다(브리핑 이슈 생성). 각자 자기 기본값이어야 한다.
+    expect(body.features.every((f) => f.model === defaultModelOf(f.key) && !f.overridden)).toBe(true);
+    expect(body.features.every((f) => f.default_model === defaultModelOf(f.key))).toBe(true);
   });
 
   it("저장하면 그 기능만 바뀐다", async () => {
@@ -97,6 +99,45 @@ describe("admin llm-models", () => {
     expect((await SELF.fetch("https://example.com/api/content/llm-models")).status).toBe(401);
     const wrong = await workerToken("brief");
     expect((await SELF.fetch("https://example.com/api/content/llm-models", { headers: { authorization: `Bearer ${wrong}` } })).status).toBe(403);
+  });
+
+  it("브리핑 이슈 생성 기능이 브리핑 그룹에 있다", async () => {
+    const c = await cookie("admin");
+    const body = await (await SELF.fetch("https://example.com/api/admin/llm-models", { headers: { cookie: c } })).json() as
+      { services: { key: string }[]; features: { key: string; service: string; default_model: string }[] };
+    expect(body.services.map((s) => s.key)).toContain("brief");
+    const issue = body.features.find((f) => f.key === "brief_issue")!;
+    expect(issue.service).toBe("brief");
+    // 설정이 붙었다고 기존 브리핑 모델이 저절로 바뀌면 안 된다.
+    expect(issue.default_model).toBe("claude-sonnet-4-6");
+  });
+
+  it("브리핑 워커는 브리핑 기능만 받는다", async () => {
+    const c = await cookie("admin");
+    await save({ brief_issue: "claude-opus-5" }, c);
+    const token = await workerToken("brief");
+    const res = await SELF.fetch("https://example.com/api/brief/llm-models", { headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { models: Record<string, string> };
+    expect(body.models).toEqual({ brief_issue: "claude-opus-5" });
+  });
+
+  it("브리핑 조회는 brief area 를 요구한다", async () => {
+    expect((await SELF.fetch("https://example.com/api/brief/llm-models")).status).toBe(401);
+    const wrong = await workerToken("content-worker");
+    expect((await SELF.fetch("https://example.com/api/brief/llm-models", { headers: { authorization: `Bearer ${wrong}` } })).status).toBe(403);
+  });
+
+  it("기능별 기본값으로 저장하면 행을 지운다", async () => {
+    const c = await cookie("admin");
+    await save({ brief_issue: "claude-opus-5" }, c);
+    expect((await save({ brief_issue: "claude-sonnet-4-6" }, c)).status).toBe(204);
+    const row = await env.DB.prepare("SELECT feature FROM llm_model_settings WHERE feature = 'brief_issue'").first();
+    expect(row).toBeNull();
+    // 전역 기본값(sonnet-5)은 이 기능에선 명시적 선택이므로 행이 남는다.
+    expect((await save({ brief_issue: DEFAULT_MODEL }, c)).status).toBe(204);
+    const kept = await env.DB.prepare("SELECT model FROM llm_model_settings WHERE feature = 'brief_issue'").first<{ model: string }>();
+    expect(kept?.model).toBe(DEFAULT_MODEL);
   });
 
   it("카탈로그에서 사라진 모델이 남아 있으면 무시한다", async () => {

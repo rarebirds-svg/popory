@@ -25,11 +25,14 @@ from pathlib import Path
 from popory_brief.categories import load_category
 from popory_brief.log import append_log, safe_error, KST
 from popory_brief import limit_detect
+from popory_brief.llm_model import resolve_model
 
 LOGS_DIR = Path(__file__).resolve().parent / "logs"
 # 기본 claude CLI 경로. BRIEF_CLAUDE_BIN 환경변수로 오버라이드 가능(E2E 테스트용 스텁 주입).
 CLAUDE_BIN = os.environ.get("BRIEF_CLAUDE_BIN", "/opt/homebrew/bin/claude")
 DEFAULT_MODEL = "claude-sonnet-4-6"
+# 어드민 LLM 모델 설정의 기능키. 카테고리·커스텀 주제 모두 같은 "이슈 생성" 이다.
+LLM_FEATURE = "brief_issue"
 TIMEOUT_SECONDS = 1800
 
 
@@ -37,7 +40,8 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--category", required=True, help="categories/{slug}/SKILL.md 의 slug")
     p.add_argument("--date", default=None, help="기준 KST 일자 (YYYY-MM-DD). 생략 시 오늘")
-    p.add_argument("--model", default=DEFAULT_MODEL)
+    p.add_argument("--model", default=None,
+                   help="생략 시 어드민(/admin/llm-models)의 brief_issue 설정, 그것도 없으면 기본 모델")
     args = p.parse_args()
 
     if not Path(CLAUDE_BIN).exists():
@@ -73,10 +77,13 @@ def main() -> None:
         f"meta_json의 published_at은 {published_at}을 그대로 사용하세요."
     )
 
+    # 명시한 --model > 어드민 설정 > 코드 기본값. 조회 실패는 기본값으로 흘린다.
+    model = args.model or resolve_model(LLM_FEATURE, DEFAULT_MODEL)
+
     cmd = [
         CLAUDE_BIN,
         "--print",
-        "--model", args.model,
+        "--model", model,
         "--allowed-tools", "WebSearch", "WebFetch",
         "--system-prompt-file", str(sys_prompt_path),
         "--output-format", "text",
