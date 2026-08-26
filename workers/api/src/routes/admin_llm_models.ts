@@ -3,10 +3,11 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { requireAdmin, type AppVars } from "../middleware/session";
 import { requireService, type ServiceVars } from "../middleware/service_auth";
-import { DEFAULT_MODEL, FEATURES, MODELS, MODEL_IDS, FEATURE_KEYS } from "../lib/llm_catalog";
+import { DEFAULT_MODEL, FEATURES, SERVICES, MODELS, MODEL_IDS, FEATURE_KEYS, featuresOf, defaultModelOf, type ServiceKey } from "../lib/llm_catalog";
 
 type HonoEnv = { Bindings: Env; Variables: AppVars & ServiceVars };
-const WORKER_AREA = "content-worker";
+// 서비스별 조회 엔드포인트를 여는 area. 각 서비스는 자기 기능만 읽어간다.
+const SERVICE_AREA: Record<ServiceKey, string> = { content: "content-worker", brief: "brief" };
 
 type Row = { feature: string; model: string; updated_at: number; updated_by: string | null };
 
@@ -29,11 +30,14 @@ export function mountAdminLlmModels(app: Hono<HonoEnv>) {
     return c.json({
       default_model: DEFAULT_MODEL,
       models: MODELS,
+      services: SERVICES,
       features: FEATURES.map((f) => {
         const row = overrides.get(f.key);
         return {
           ...f,
-          model: row?.model ?? DEFAULT_MODEL,
+          // 이 기능의 기본 모델. UI 가 "(기본값)" 표시를 여기에 맞춘다.
+          default_model: defaultModelOf(f.key),
+          model: row?.model ?? defaultModelOf(f.key),
           overridden: row !== undefined,
           updated_at: row?.updated_at ?? null,
           updated_by: row?.updated_by ?? null,
@@ -54,7 +58,7 @@ export function mountAdminLlmModels(app: Hono<HonoEnv>) {
     for (const [feature, raw] of Object.entries(settings)) {
       if (!FEATURE_KEYS.has(feature as never)) return c.json({ error: `unknown feature: ${feature}` }, 400);
       // 기본값으로 되돌리는 건 행 삭제다. 기본값이 바뀌면 따라 움직여야 한다.
-      if (raw === null || raw === "" || raw === DEFAULT_MODEL) {
+      if (raw === null || raw === "" || raw === defaultModelOf(feature)) {
         stmts.push(c.env.DB.prepare(`DELETE FROM llm_model_settings WHERE feature = ?`).bind(feature));
         continue;
       }
@@ -71,12 +75,17 @@ export function mountAdminLlmModels(app: Hono<HonoEnv>) {
   });
 
   // 워커용 — 기능키 → 모델 한 장. 기본값인 기능도 채워 보내 워커가 분기하지 않게 한다.
-  app.get("/api/content/llm-models", requireService, async (c) => {
-    const svc = c.get("service")!;
-    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
-    const overrides = await loadOverrides(c.env);
-    const models: Record<string, string> = {};
-    for (const f of FEATURES) models[f.key] = overrides.get(f.key)?.model ?? DEFAULT_MODEL;
-    return c.json({ default_model: DEFAULT_MODEL, models });
-  });
+  // 서비스마다 자기 기능만 받는다. 브리핑 워커가 컨텐츠 기능키를 받아 헷갈릴 일이 없다.
+  const mountServiceRead = (service: ServiceKey, path: string) => {
+    app.get(path, requireService, async (c) => {
+      const svc = c.get("service")!;
+      if (svc.area !== SERVICE_AREA[service]) return c.text("forbidden", 403);
+      const overrides = await loadOverrides(c.env);
+      const models: Record<string, string> = {};
+      for (const f of featuresOf(service)) models[f.key] = overrides.get(f.key)?.model ?? defaultModelOf(f.key);
+      return c.json({ default_model: DEFAULT_MODEL, models });
+    });
+  };
+  mountServiceRead("content", "/api/content/llm-models");
+  mountServiceRead("brief", "/api/brief/llm-models");
 }

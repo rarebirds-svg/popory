@@ -20,12 +20,15 @@ import urllib.request
 from pathlib import Path
 
 from popory_brief import limit_detect
+from popory_brief.llm_model import resolve_model
 
 BRIEF_DIR = Path(__file__).resolve().parent
 VENV_PY = BRIEF_DIR / ".venv" / "bin" / "python"
 # 기본 claude CLI 경로. BRIEF_CLAUDE_BIN 환경변수로 오버라이드 가능(E2E 테스트용 스텁 주입).
 CLAUDE_BIN = os.environ.get("BRIEF_CLAUDE_BIN", "/opt/homebrew/bin/claude")
 DEFAULT_MODEL = "claude-sonnet-4-6"
+# 어드민 LLM 모델 설정의 기능키. 카테고리·커스텀 주제 모두 같은 "이슈 생성" 이다.
+LLM_FEATURE = "brief_issue"
 TIMEOUT_SECONDS = 1800
 # BRIEF_BACKOFF_SECONDS(csv)로 오버라이드 가능(E2E 테스트는 빈 값). 1차 실패 후 대기 초.
 BACKOFF_SECONDS = [int(s) for s in os.environ.get("BRIEF_BACKOFF_SECONDS", "60,180").split(",") if s.strip()]
@@ -61,7 +64,8 @@ def main() -> None:
     p.add_argument("--topic-id", required=True)
     p.add_argument("--name", required=True)
     p.add_argument("--date", default=None)
-    p.add_argument("--model", default=DEFAULT_MODEL)
+    p.add_argument("--model", default=None,
+                   help="생략 시 어드민(/admin/llm-models)의 brief_issue 설정, 그것도 없으면 기본 모델")
     p.add_argument("--force", action="store_true",
                    help="온디맨드 강제 재생성. 멱등성 가드를 건너뛰고 오늘치를 교체 발행한다")
     args = p.parse_args()
@@ -122,10 +126,13 @@ WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브�
     sys_prompt_path = Path(f"/tmp/brief_system_custom_{args.topic_id}_{date_str}.txt")
     sys_prompt_path.write_text(system_prompt, encoding="utf-8")
 
+    # 명시한 --model > 어드민 설정 > 코드 기본값. 조회 실패는 기본값으로 흘린다.
+    model = args.model or resolve_model(LLM_FEATURE, DEFAULT_MODEL)
+
     cmd = [
         CLAUDE_BIN,
         "--print",
-        "--model", args.model,
+        "--model", model,
         "--allowed-tools", "WebSearch", "WebFetch",
         "--system-prompt-file", str(sys_prompt_path),
         "--output-format", "text",
