@@ -62,7 +62,7 @@ export default async function UserDetailPage({ params }: { params: Promise<{ sub
         <Table head={["생성", "주제", "플랫폼", "상태", "업로드"]}>
           {d.jobs.map((j) => (
             <tr key={j.id} className="border-b border-popory-border">
-              <td className="py-2 pr-4 text-xs text-popory-muted">{formatKst(j.created_at)}</td>
+              <td className="whitespace-nowrap py-2 pr-4 text-xs text-popory-muted">{formatKst(j.created_at)}</td>
               <td className="py-2 pr-4">
                 <Link href={`/content/${j.id}`} className="text-popory-accent">{j.topic ?? "(제목 없음)"}</Link>
               </td>
