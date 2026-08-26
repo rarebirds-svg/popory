@@ -10,10 +10,10 @@ export const DEFAULT_MODEL = "claude-sonnet-5";
 
 export type ServiceKey = "content" | "brief";
 
-// 어드민 화면에서 기능을 묶어 보여줄 순서·이름.
+// 어드민 화면에서 기능을 묶어 보여줄 순서·이름. 이 배열 순서가 화면 순서다.
 export const SERVICES: { key: ServiceKey; label: string; description: string }[] = [
-  { key: "content", label: "컨텐츠 생성", description: "포포리 책방 블로그·영상·인스타" },
   { key: "brief", label: "뉴스 브리핑", description: "카테고리·커스텀 주제 일일 이슈" },
+  { key: "content", label: "컨텐츠 생성", description: "포포리 책방 블로그·영상·인스타" },
 ];
 
 export type FeatureKey =
