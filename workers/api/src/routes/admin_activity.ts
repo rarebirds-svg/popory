@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { requireAdmin, type AppVars } from "../middleware/session";
 
-const KINDS = ["content_job", "topic", "account", "publish"];
+const KINDS = ["content_job", "topic", "category", "brief_topic", "account", "publish"];
 
 // 각 소스를 (ts, id, kind, user_sub, title, status, href) 공통 모양으로 정규화한다.
 // id 는 (ts, id) 복합 커서의 tiebreaker다. 소스마다 PK가 다르므로 접두어를 붙여 전역 유일하게 만든다.
@@ -13,16 +13,23 @@ const SOURCES: Record<string, string> = {
            COALESCE(topic, '(제목 없음)') AS title, status AS status,
            '/content/' || content_jobs.id AS href
       FROM content_jobs`,
+  // 주제·카테고리·브리핑 주제는 서로 다른 행동이다. 한 kind 로 묶으면 컨텐츠를
+  // 만들었을 뿐인데 "카테고리 생성" 으로 읽힌다.
+  //
+  // 컨텐츠 생성은 주제 1행 + 작업 N행을 함께 넣으므로, 작업이 딸린 주제 행은
+  // 같은 행동을 두 번 적은 것이다. 작업 쪽이 상태·링크까지 들고 있으니 그쪽만
+  // 남긴다. 작업이 모두 지워져 홀로 남은 주제는 유일한 흔적이라 계속 보여준다.
   topic: `
     SELECT created_at AS ts, 'topic:' || id AS id, 'topic' AS kind, owner_sub AS user_sub,
            topic AS title, NULL AS status, NULL AS href
       FROM content_topics
-    UNION ALL
-    SELECT created_at AS ts, 'cat:' || id AS id, 'topic' AS kind, owner_sub AS user_sub,
+     WHERE NOT EXISTS (SELECT 1 FROM content_jobs WHERE content_jobs.topic_id = content_topics.id)`,
+  category: `
+    SELECT created_at AS ts, 'cat:' || id AS id, 'category' AS kind, owner_sub AS user_sub,
            name AS title, NULL AS status, NULL AS href
-      FROM content_categories
-    UNION ALL
-    SELECT created_at AS ts, 'ubt:' || id AS id, 'topic' AS kind, sub AS user_sub,
+      FROM content_categories`,
+  brief_topic: `
+    SELECT created_at AS ts, 'ubt:' || id AS id, 'brief_topic' AS kind, sub AS user_sub,
            name AS title, NULL AS status, NULL AS href
       FROM user_brief_topics`,
   account: `

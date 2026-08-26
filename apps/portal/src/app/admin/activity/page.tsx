@@ -13,7 +13,7 @@ import { statusLabel, statusIntent } from "../_lib/labels";
 interface ActivityRow {
   ts: number;
   id: string;
-  kind: "content_job" | "topic" | "account" | "publish";
+  kind: "content_job" | "topic" | "category" | "brief_topic" | "account" | "publish";
   user_sub: string | null;
   user_email: string | null;
   title: string;
@@ -23,9 +23,12 @@ interface ActivityRow {
 
 interface UserRow { sub: string; email: string; }
 
+// 필터 드롭다운 순서도 이 순서를 따른다.
 const KIND_LABEL: Record<string, string> = {
   content_job: "콘텐츠 생성",
-  topic: "주제·카테고리",
+  topic: "주제",
+  category: "카테고리",
+  brief_topic: "브리핑 주제",
   account: "계정·권한",
   publish: "브리핑 발행",
 };
