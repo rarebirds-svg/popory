@@ -94,7 +94,7 @@ export default async function ActivityPage({
         <Table head={["시각", "사용자", "종류", "내용", "상태"]}>
           {items.map((it) => (
             <tr key={it.id} className="border-b border-popory-border">
-              <td className="py-2 pr-4 text-xs text-popory-muted">{formatKst(it.ts)}</td>
+              <td className="whitespace-nowrap py-2 pr-4 text-xs text-popory-muted">{formatKst(it.ts)}</td>
               <td className="py-2 pr-4 text-xs">
                 {it.user_sub ? (
                   <Link href={`/admin/users/${it.user_sub}`} className="text-popory-accent">{it.user_email ?? it.user_sub}</Link>
@@ -102,8 +102,8 @@ export default async function ActivityPage({
                   <span className="text-popory-muted">—</span>
                 )}
               </td>
-              <td className="py-2 pr-4 text-xs text-popory-muted">{KIND_LABEL[it.kind] ?? it.kind}</td>
-              <td className="py-2 pr-4">
+              <td className="whitespace-nowrap py-2 pr-4 text-xs text-popory-muted">{KIND_LABEL[it.kind] ?? it.kind}</td>
+              <td className="w-full py-2 pr-4">
                 {it.href ? <Link href={it.href} className="text-popory-accent">{it.title}</Link> : it.title}
               </td>
               <td className="py-2 text-xs">
