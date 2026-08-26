@@ -4,7 +4,7 @@
 # 방식을 유지하되, 맥미니 앞에 있어야만 배포되는 제약만 없앤다. 자동으로 바꾸려면 아래
 # `on:` 에 push 브랜치를 추가하면 된다.
 #
-# 필요한 저장소 시크릿:
+# 필요한 저장소 시크릿 (설정 절차·권한 표는 infra/secrets.md 의 "GitHub Actions 배포 시크릿"):
 #   CLOUDFLARE_API_TOKEN   — Workers Scripts:Edit, Pages:Edit, D1:Edit 권한
 #   CLOUDFLARE_ACCOUNT_ID  — 대시보드 Account details 의 32자리 hex
 name: deploy
