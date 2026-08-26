@@ -17,6 +17,8 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM published_items");
   await env.DB.exec("DELETE FROM youtube_connections");
   await env.DB.exec("DELETE FROM audit_log");
+  await env.DB.exec("DELETE FROM content_categories");
+  await env.DB.exec("DELETE FROM user_brief_topics");
 });
 
 async function seedUsers() {
@@ -43,7 +45,71 @@ async function seedJob(id: string, owner: string, topic: string, status: string,
   ).bind(id, owner, topic, status, createdAt, createdAt).run();
 }
 
+// 컨텐츠 생성이 실제로 넣는 모양 — 주제 1행 + 그 주제에 딸린 작업 1행.
+async function seedTopicWithJob(topicId: string, jobId: string, owner: string, title: string, createdAt: number) {
+  await env.DB.prepare("INSERT INTO content_topics (id, owner_sub, topic, created_at) VALUES (?,?,?,?)")
+    .bind(topicId, owner, title, createdAt).run();
+  await env.DB.prepare(
+    `INSERT INTO content_jobs (id, owner_sub, topic, platform, status, topic_id, created_at, updated_at)
+     VALUES (?,?,?,'naver-blog','review',?,?,?)`,
+  ).bind(jobId, owner, title, topicId, createdAt, createdAt).run();
+}
+
 describe("GET /api/admin/activity", () => {
+  it("컨텐츠 생성은 로그 1건이다 — 주제 행을 겹쳐 적지 않는다", async () => {
+    // 예전에는 주제 행이 '주제·카테고리' 로 함께 떠서, 카테고리를 만들지 않았는데도
+    // 만든 것처럼 읽혔다.
+    await seedUsers();
+    const ck = await adminCookie();
+    await seedTopicWithJob("t1", "j1", "u1", "미라클 모닝을 읽고", 2000);
+
+    const res = await SELF.fetch("https://example.com/api/admin/activity", { headers: { cookie: ck } });
+    const b = (await res.json()) as { items: { kind: string; title: string }[] };
+    expect(b.items.map((i) => [i.kind, i.title])).toEqual([["content_job", "미라클 모닝을 읽고"]]);
+  });
+
+  it("작업이 모두 지워져 홀로 남은 주제는 계속 보여준다", async () => {
+    await seedUsers();
+    const ck = await adminCookie();
+    await seedTopicWithJob("t1", "j1", "u1", "홀로 남은 주제", 2000);
+    await env.DB.prepare("DELETE FROM content_jobs WHERE id='j1'").run();
+
+    const res = await SELF.fetch("https://example.com/api/admin/activity", { headers: { cookie: ck } });
+    const b = (await res.json()) as { items: { kind: string; title: string }[] };
+    expect(b.items.map((i) => [i.kind, i.title])).toEqual([["topic", "홀로 남은 주제"]]);
+  });
+
+  it("카테고리·브리핑 주제는 각자 다른 kind 로 나온다", async () => {
+    await seedUsers();
+    const ck = await adminCookie();
+    await env.DB.prepare(
+      "INSERT INTO content_categories (id, owner_sub, name, slug, created_at, updated_at) VALUES ('c1','u1','책 리뷰','book-review',3000,3000)",
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO user_brief_topics (id, sub, name, slug, created_at) VALUES ('b1','u1','반도체','semi',2000)",
+    ).run();
+
+    const res = await SELF.fetch("https://example.com/api/admin/activity", { headers: { cookie: ck } });
+    const b = (await res.json()) as { items: { kind: string; title: string }[] };
+    expect(b.items.map((i) => [i.kind, i.title])).toEqual([
+      ["category", "책 리뷰"],
+      ["brief_topic", "반도체"],
+    ]);
+  });
+
+  it("kind=category 는 카테고리만 좁힌다", async () => {
+    await seedUsers();
+    const ck = await adminCookie();
+    await env.DB.prepare(
+      "INSERT INTO content_categories (id, owner_sub, name, slug, created_at, updated_at) VALUES ('c1','u1','책 리뷰','book-review',3000,3000)",
+    ).run();
+    await seedTopicWithJob("t1", "j1", "u1", "미라클 모닝을 읽고", 2000);
+
+    const res = await SELF.fetch("https://example.com/api/admin/activity?kind=category", { headers: { cookie: ck } });
+    const b = (await res.json()) as { items: { kind: string }[] };
+    expect(b.items.map((i) => i.kind)).toEqual(["category"]);
+  });
+
   it("여러 소스를 시간 역순으로 합친다", async () => {
     await seedUsers();
     const ck = await adminCookie();
