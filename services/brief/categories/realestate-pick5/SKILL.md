@@ -2,7 +2,7 @@
 slug: realestate-pick5
 name: 부동산 데일리 뉴스 PICK 5
 delivery_mode: standalone
-subject_template: "📰 [{date}] {name}"
+subject_template: "[{date}] {name}"
 sender_name: "{name}"
 enabled: false
 description: "오늘의 부동산 기사 5건 큐레이션 — 네이버 뉴스 링크 데일리 PICK"
@@ -58,7 +58,7 @@ days: "mon,tue,wed,thu,fri"
 - 항목 안의 줄바꿈은 **각 줄 끝에 공백 2개**(마크다운 hard break)로 만든다. 공백 2개가 없으면 포털·메일에서 여러 줄이 한 줄로 붙어버린다. 아래 템플릿의 제목·핵심내용·시사점 줄 끝에는 실제로 공백 2개가 들어 있다.
 - `🔗` 뒤에는 공백 1칸을 두고 URL을 쓴다 (자동 링크 인식).
 - 항목과 항목 사이는 빈 줄 1개.
-- 본문 맨 앞에 `📰 ...` 헤더 라인을 두지 않는다. 제목은 메일 제목과 포털 타이틀이 담당한다.
+- 본문 맨 앞에 제목·헤더 라인을 두지 않는다. 제목은 메일 제목과 포털 타이틀이 담당한다.
 
 <body_markdown>
 **① 기사 헤드라인 원문**  
