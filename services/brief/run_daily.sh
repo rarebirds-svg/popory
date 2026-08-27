@@ -53,9 +53,18 @@ source "${BRIEF_DIR}/secrets/portal_endpoints.env"
 set +a
 
 # 2) 활성 카테고리 목록 ("slug mode" 한 줄씩)
-CATEGORIES=$("${VENV_PY}" -c "from popory_brief import categories
+#    정규 실행은 frontmatter days 요일 게이트 적용 (없으면 매일).
+#    --only(재시도·수동 실행)는 게이트 없이 지정 카테고리를 그대로 실행한다
+#    — 자정을 넘긴 한도 재시도가 요일 게이트에 걸려 유실되는 것 방지.
+GATE_DATE="${DATE}"
+[ -n "${ONLY_SLUG}" ] && GATE_DATE=""
+CATEGORIES=$(BRIEF_GATE_DATE="${GATE_DATE}" "${VENV_PY}" -c "import datetime, os
+from popory_brief import categories
+gate = os.environ.get('BRIEF_GATE_DATE') or None
+d = datetime.date.fromisoformat(gate) if gate else None
 for c in categories.list_categories():
-    print(c.slug, c.delivery_mode)" 2>&1)
+    if d is None or c.runs_on(d):
+        print(c.slug, c.delivery_mode)" 2>&1)
 SCAN_EXIT=$?
 if [ ${SCAN_EXIT} -ne 0 ]; then
   log "\"abort: categories scan failed exit=${SCAN_EXIT}\""

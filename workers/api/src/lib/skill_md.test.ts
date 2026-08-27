@@ -103,6 +103,27 @@ describe("serializeSkillMd", () => {
     expect(out).toContain("enabled: false");
   });
 
+  it("days 필드 parse → serialize round-trip 보존 (admin 저장 시 소실 방지)", () => {
+    const withDays = SAMPLE.replace(
+      'description: "국토부·한국부동산원·기재부 정책·시장·판례"',
+      'description: "국토부·한국부동산원·기재부 정책·시장·판례"\ndays: "mon,tue,wed,thu,fri"',
+    );
+    const r = parseSkillMd(withDays);
+    expect(r.errors).toEqual([]);
+    expect(r.fields?.days).toBe("mon,tue,wed,thu,fri");
+    const re = serializeSkillMd({ fields: r.fields!, body: r.body });
+    expect(re).toBe(withDays);
+  });
+
+  it("days 없거나 빈 문자열이면 days 줄을 쓰지 않음", () => {
+    const r = parseSkillMd(SAMPLE);
+    expect(r.fields?.days).toBeUndefined();
+    expect(serializeSkillMd({ fields: r.fields!, body: r.body })).not.toContain("days:");
+    expect(
+      serializeSkillMd({ fields: { ...r.fields!, days: "  " }, body: r.body }),
+    ).not.toContain("days:");
+  });
+
   it("sender_name 안의 따옴표·역슬래시 escape round-trip", () => {
     const fields = {
       slug: "x",
@@ -174,6 +195,26 @@ describe("validateFields", () => {
   it("description 빈 문자열 위반", () => {
     expect(validateFields({ ...base, description: "" })).toContainEqual(
       expect.stringContaining("description"),
+    );
+  });
+
+  it("days 유효 토큰 통과 (공백 허용)", () => {
+    expect(validateFields({ ...base, days: "mon,tue,wed,thu,fri" })).toEqual([]);
+    expect(validateFields({ ...base, days: "sat, sun" })).toEqual([]);
+  });
+
+  it("days 없음·빈 문자열은 매일 발행으로 통과", () => {
+    expect(validateFields(base)).toEqual([]);
+    expect(validateFields({ ...base, days: "" })).toEqual([]);
+    expect(validateFields({ ...base, days: "  " })).toEqual([]);
+  });
+
+  it("days 잘못된 토큰 거부", () => {
+    expect(validateFields({ ...base, days: "saturday" })).toContainEqual(
+      expect.stringContaining("days"),
+    );
+    expect(validateFields({ ...base, days: "mon,,fri" })).toContainEqual(
+      expect.stringContaining("days"),
     );
   });
 });

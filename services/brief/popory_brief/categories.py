@@ -7,8 +7,13 @@ API.
     load_category(slug, root=ROOT) -> Category        # 단일 (enabled 무시)
     standalone_categories(root=ROOT) -> list[Category]
     bundled_categories(root=ROOT) -> list[Category]
+
+frontmatter 선택 필드 days. 콤마 구분 요일 토큰(mon~sun), 없거나 비면 매일 발행.
+요일 게이트는 스케줄러(run_daily.sh 정규 실행)에서만 적용하고, load_category 직접
+호출(--only 재시도·온디맨드)은 게이트 없이 그대로 실행된다.
 """
 from __future__ import annotations
+import datetime
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -18,6 +23,8 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent / "categories"
 SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 VALID_MODES = {"standalone", "bundled", "portal_only"}
+# 인덱스가 datetime.date.weekday()와 일치한다 (월=0 … 일=6).
+VALID_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 REQUIRED = ("slug", "name", "delivery_mode", "subject_template", "sender_name", "enabled")
 
 
@@ -30,10 +37,14 @@ class Category:
     sender_name: str
     enabled: bool
     system_prompt: str
+    days: tuple[str, ...] | None = None  # None = 매일
 
     @property
     def area(self) -> str:
         return f"brief-{self.slug}"
+
+    def runs_on(self, d: datetime.date) -> bool:
+        return self.days is None or VALID_DAYS[d.weekday()] in self.days
 
     def subject(self, date: str) -> str:
         return self.subject_template.format(name=self.name, date=date)
@@ -58,6 +69,7 @@ def _parse_skill_md(path: Path) -> Category:
         raise ValueError(f"{path}: invalid slug {meta['slug']!r}")
     if meta["delivery_mode"] not in VALID_MODES:
         raise ValueError(f"{path}: invalid delivery_mode {meta['delivery_mode']!r}")
+    days = _parse_days(meta.get("days"), path)
     return Category(
         slug=str(meta["slug"]),
         name=str(meta["name"]),
@@ -66,7 +78,26 @@ def _parse_skill_md(path: Path) -> Category:
         sender_name=str(meta["sender_name"]),
         enabled=bool(meta["enabled"]),
         system_prompt=body,
+        days=days,
     )
+
+
+def _parse_days(raw, path: Path) -> tuple[str, ...] | None:
+    """days 필드 파싱. 콤마 구분 문자열(yaml 리스트도 허용) → 요일 토큰 tuple, 없거나 비면 None."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        tokens = [t.strip().lower() for t in raw.split(",") if t.strip()]
+    elif isinstance(raw, list):
+        tokens = [str(t).strip().lower() for t in raw if str(t).strip()]
+    else:
+        raise ValueError(f"{path}: invalid days {raw!r}")
+    if not tokens:
+        return None
+    bad = [t for t in tokens if t not in VALID_DAYS]
+    if bad:
+        raise ValueError(f"{path}: invalid days tokens {bad!r} (허용: {','.join(VALID_DAYS)})")
+    return tuple(dict.fromkeys(tokens))  # 중복 제거, 순서 유지
 
 
 def _scan(root: Path = ROOT) -> list[Category]:

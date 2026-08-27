@@ -14,6 +14,7 @@ interface InitialFields {
   sender_name: string;
   enabled: boolean;
   description: string;
+  days?: string;
 }
 
 interface Props {
@@ -35,6 +36,7 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
   const [subjectTemplate, setSubjectTemplate] = useState(initialFields.subject_template);
   const [senderName, setSenderName] = useState(initialFields.sender_name);
   const [enabled, setEnabled] = useState(initialFields.enabled);
+  const [days, setDays] = useState(initialFields.days ?? "");
   const [body, setBody] = useState(initialBody);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -55,6 +57,7 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
             sender_name: senderName,
             enabled,
             description,
+            ...(days.trim() ? { days: days.trim() } : {}),
           },
           body,
           sha: initialSha,
@@ -144,6 +147,15 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           <span className="text-sm text-popory-muted">매일 09:00 KST 자동 실행 포함</span>
         </label>
+      </Field>
+
+      <Field label="발행 요일 (days). 콤마 구분 mon~sun — 비우면 매일. 예. mon,tue,wed,thu,fri">
+        <input
+          value={days}
+          onChange={(e) => setDays(e.target.value)}
+          placeholder="비우면 매일 발행"
+          className={`${INPUT} font-mono`}
+        />
       </Field>
 
       <Field label="System prompt (body)">
