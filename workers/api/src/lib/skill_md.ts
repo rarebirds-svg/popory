@@ -2,7 +2,7 @@
 export interface SkillFields {
   slug: string;
   name: string;
-  delivery_mode: "standalone" | "bundled";
+  delivery_mode: "standalone" | "bundled" | "portal_only";
   subject_template: string;
   sender_name: string;
   enabled: boolean;
@@ -20,7 +20,8 @@ const REQUIRED = ["slug", "name", "delivery_mode", "subject_template", "sender_n
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}$/;
 const VALID_DAYS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 const RESERVED_SLUGS = new Set(["new"]); // /admin/brief-categories/new 정적 라우트 충돌 회피
-const VALID_MODES = new Set(["standalone", "bundled"]);
+// python 로더(popory_brief.categories.VALID_MODES)와 동일해야 admin 저장이 어긋나지 않는다.
+const VALID_MODES = new Set(["standalone", "bundled", "portal_only"]);
 
 export function parseSkillMd(text: string): ParseResult {
   const errors: string[] = [];
@@ -91,7 +92,7 @@ export function validateFields(f: SkillFields): string[] {
   const errs: string[] = [];
   if (!SLUG_RE.test(f.slug)) errs.push(`slug 규칙 위반 (^[a-z][a-z0-9-]{1,30}$)`);
   if (RESERVED_SLUGS.has(f.slug)) errs.push(`slug "${f.slug}"는 예약어 (사용 불가)`);
-  if (!VALID_MODES.has(f.delivery_mode)) errs.push(`delivery_mode 화이트리스트 위반 (standalone|bundled)`);
+  if (!VALID_MODES.has(f.delivery_mode)) errs.push(`delivery_mode 화이트리스트 위반 (standalone|bundled|portal_only)`);
   if (!f.name.trim()) errs.push("name 비어있음");
   if (!f.subject_template.trim()) errs.push("subject_template 비어있음");
   if (!f.sender_name.trim()) errs.push("sender_name 비어있음");
