@@ -161,6 +161,76 @@ def test_standalone_and_bundled_filters(tmp_path):
     assert [c.slug for c in categories.bundled_categories(tmp_path)] == ["beta"]
 
 
+def test_days_absent_runs_every_day(tmp_path):
+    import datetime
+    _write_skill(tmp_path, "foo")
+    c = categories._scan(tmp_path)[0]
+    assert c.days is None
+    for offset in range(7):
+        assert c.runs_on(datetime.date(2026, 8, 24) + datetime.timedelta(days=offset))
+
+
+def test_days_gate_by_weekday(tmp_path):
+    import datetime
+    _write_skill(tmp_path, "foo", frontmatter_yaml=textwrap.dedent("""\
+        slug: foo
+        name: Foo
+        delivery_mode: standalone
+        subject_template: "x"
+        sender_name: "x"
+        enabled: true
+        days: "mon,tue,wed,thu,fri"
+        """))
+    c = categories._scan(tmp_path)[0]
+    assert c.days == ("mon", "tue", "wed", "thu", "fri")
+    assert c.runs_on(datetime.date(2026, 8, 24)) is True    # 월
+    assert c.runs_on(datetime.date(2026, 8, 28)) is True    # 금
+    assert c.runs_on(datetime.date(2026, 8, 29)) is False   # 토
+    assert c.runs_on(datetime.date(2026, 8, 30)) is False   # 일
+
+
+def test_days_empty_string_means_every_day(tmp_path):
+    _write_skill(tmp_path, "foo", frontmatter_yaml=textwrap.dedent("""\
+        slug: foo
+        name: Foo
+        delivery_mode: standalone
+        subject_template: "x"
+        sender_name: "x"
+        enabled: true
+        days: ""
+        """))
+    c = categories._scan(tmp_path)[0]
+    assert c.days is None
+
+
+def test_days_yaml_list_and_dedupe(tmp_path):
+    _write_skill(tmp_path, "foo", frontmatter_yaml=textwrap.dedent("""\
+        slug: foo
+        name: Foo
+        delivery_mode: standalone
+        subject_template: "x"
+        sender_name: "x"
+        enabled: true
+        days: [sat, sat, sun]
+        """))
+    c = categories._scan(tmp_path)[0]
+    assert c.days == ("sat", "sun")
+
+
+def test_days_invalid_token_raises(tmp_path):
+    _write_skill(tmp_path, "foo", frontmatter_yaml=textwrap.dedent("""\
+        slug: foo
+        name: Foo
+        delivery_mode: standalone
+        subject_template: "x"
+        sender_name: "x"
+        enabled: true
+        days: "saturday"
+        """))
+    with pytest.raises(ValueError, match="invalid days tokens"):
+        categories._scan(tmp_path)
+
+
 def test_load_category_by_slug(tmp_path):
     _write_skill(tmp_path, "foo")
     c = categories.load_category("foo", tmp_path)

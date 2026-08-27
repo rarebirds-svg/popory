@@ -7,6 +7,7 @@ export interface SkillFields {
   sender_name: string;
   enabled: boolean;
   description: string;
+  days?: string; // 콤마 구분 요일 토큰(mon~sun). 없거나 비면 매일 발행
 }
 
 export interface ParseResult {
@@ -17,6 +18,7 @@ export interface ParseResult {
 
 const REQUIRED = ["slug", "name", "delivery_mode", "subject_template", "sender_name", "enabled", "description"] as const;
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}$/;
+const VALID_DAYS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 const RESERVED_SLUGS = new Set(["new"]); // /admin/brief-categories/new 정적 라우트 충돌 회피
 const VALID_MODES = new Set(["standalone", "bundled"]);
 
@@ -52,6 +54,7 @@ export function parseSkillMd(text: string): ParseResult {
     enabled: raw.enabled === true || raw.enabled === "true",
     description: String(raw.description),
   };
+  if (raw.days !== undefined) fields.days = String(raw.days);
   return { fields, body, errors: [] };
 }
 
@@ -77,6 +80,8 @@ export function serializeSkillMd(input: { fields: SkillFields; body: string }): 
     `sender_name: "${esc(fields.sender_name)}"`,
     `enabled: ${fields.enabled ? "true" : "false"}`,
     `description: "${esc(fields.description)}"`,
+    // days는 선택 필드 — 비어 있으면(매일 발행) 줄 자체를 남기지 않는다
+    ...(fields.days && fields.days.trim() ? [`days: "${esc(fields.days.trim())}"`] : []),
   ].join("\n");
   const bodyOut = body.startsWith("\n") ? body : "\n" + body;
   return `---\n${fm}\n---\n${bodyOut}`;
@@ -91,5 +96,11 @@ export function validateFields(f: SkillFields): string[] {
   if (!f.subject_template.trim()) errs.push("subject_template 비어있음");
   if (!f.sender_name.trim()) errs.push("sender_name 비어있음");
   if (!f.description.trim()) errs.push("description 비어있음");
+  if (f.days !== undefined && f.days.trim() !== "") {
+    const tokens = f.days.split(",").map((t) => t.trim());
+    if (tokens.some((t) => !VALID_DAYS.has(t))) {
+      errs.push("days 형식 위반 (mon,tue,wed,thu,fri,sat,sun 콤마 구분, 비우면 매일)");
+    }
+  }
   return errs;
 }

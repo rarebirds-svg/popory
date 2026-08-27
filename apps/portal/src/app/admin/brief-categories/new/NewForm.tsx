@@ -54,6 +54,7 @@ export function NewForm() {
   const [subjectTemplate, setSubjectTemplate] = useState(DEFAULT_SUBJECT);
   const [senderName, setSenderName] = useState(DEFAULT_SENDER);
   const [enabled, setEnabled] = useState(false);
+  const [days, setDays] = useState("");
   const [body, setBody] = useState("");
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -74,6 +75,7 @@ export function NewForm() {
             sender_name: senderName,
             enabled,
             description,
+            ...(days.trim() ? { days: days.trim() } : {}),
           },
           body,
         }),
@@ -160,6 +162,15 @@ export function NewForm() {
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           <span className="text-sm text-popory-muted">본문 완성 전이라면 비활성 권장 (편집 페이지에서 후에 활성화)</span>
         </label>
+      </Field>
+
+      <Field label="발행 요일 (days). 콤마 구분 mon~sun — 비우면 매일. 예. mon,tue,wed,thu,fri">
+        <input
+          value={days}
+          onChange={(e) => setDays(e.target.value)}
+          placeholder="비우면 매일 발행"
+          className={`${INPUT} font-mono`}
+        />
       </Field>
 
       <Field label="System prompt (body)">
