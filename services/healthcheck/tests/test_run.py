@@ -76,21 +76,22 @@ def test_read_log_returns_empty_when_missing(tmp_path, monkeypatch):
 
 # ── 브리핑 카테고리 목록 로딩 ──
 
-def _write_skill(root, slug, name, enabled="true"):
+def _write_skill(root, slug, name, enabled="true", days=None):
     d = root / slug
     d.mkdir()
+    days_line = f'days: "{days}"\n' if days else ""
     (d / "SKILL.md").write_text(
-        f"---\nslug: {slug}\nname: {name}\ndelivery_mode: bundled\nenabled: {enabled}\n---\n본문\n",
+        f"---\nslug: {slug}\nname: {name}\ndelivery_mode: bundled\nenabled: {enabled}\n{days_line}---\n본문\n",
         encoding="utf-8",
     )
 
 
 def test_brief_categories_reads_slug_and_name(tmp_path, monkeypatch):
-    """카테고리 디렉토리의 SKILL.md 프론트매터에서 (slug, name)을 읽는다."""
+    """카테고리 디렉토리의 SKILL.md 프론트매터에서 (slug, name, days)를 읽는다."""
     _write_skill(tmp_path, "realestate", "부동산")
     _write_skill(tmp_path, "naver", "네이버")
     monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(tmp_path))
-    assert runmod._brief_categories() == [("naver", "네이버"), ("realestate", "부동산")]
+    assert runmod._brief_categories() == [("naver", "네이버", None), ("realestate", "부동산", None)]
 
 
 def test_brief_categories_skips_disabled(tmp_path, monkeypatch):
@@ -98,7 +99,34 @@ def test_brief_categories_skips_disabled(tmp_path, monkeypatch):
     _write_skill(tmp_path, "realestate", "부동산")
     _write_skill(tmp_path, "naver", "네이버", enabled="false")
     monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(tmp_path))
-    assert runmod._brief_categories() == [("realestate", "부동산")]
+    assert runmod._brief_categories() == [("realestate", "부동산", None)]
+
+
+def test_brief_categories_reads_days(tmp_path, monkeypatch):
+    """days 프론트매터(따옴표 포함)를 요일 tuple로 읽는다."""
+    _write_skill(tmp_path, "realestate", "부동산", days="sat")
+    _write_skill(tmp_path, "pick5", "부동산 PICK 5", days="mon,tue,wed,thu,fri")
+    monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(tmp_path))
+    assert runmod._brief_categories() == [
+        ("pick5", "부동산 PICK 5", ("mon", "tue", "wed", "thu", "fri")),
+        ("realestate", "부동산", ("sat",)),
+    ]
+
+
+def test_parse_days_invalid_tokens_fail_open():
+    """파싱 불능 days는 매일 발행으로 취급한다 — 점검을 줄이지 않는 방향."""
+    assert runmod._parse_days(None) is None
+    assert runmod._parse_days("") is None
+    assert runmod._parse_days('"saturday"') is None
+    assert runmod._parse_days('"sat, sun"') == ("sat", "sun")
+
+
+def test_prev_scheduled_daily_and_weekly():
+    """직전 발행 예정일 — 매일 발행이면 전일, 주 1회면 지난 발행일."""
+    from datetime import date
+    assert runmod._prev_scheduled(None, date(2026, 8, 29)) == "2026-08-28"
+    assert runmod._prev_scheduled(("sat",), date(2026, 8, 29)) == "2026-08-22"      # 토→지난 토
+    assert runmod._prev_scheduled(("mon", "fri"), date(2026, 8, 31)) == "2026-08-28"  # 월→지난 금
 
 
 def test_brief_categories_empty_when_dir_missing(tmp_path, monkeypatch):
@@ -124,25 +152,73 @@ def test_gather_uses_yesterday_auto_create_in_morning(tmp_path, monkeypatch):
     assert routine[1] == "ok", f"expected ok, got {routine}"
 
 
-def test_gather_am_passes_yesterday_fallback_to_brief_check(tmp_path, monkeypatch):
-    """am은 브리핑 점검에 전일자 폴백을 넘기고(생성 창 경합 방지), pm은 넘기지 않는다."""
+def test_gather_am_passes_per_category_fallback_to_brief_check(tmp_path, monkeypatch):
+    """am은 카테고리별 직전 발행 예정일을 폴백으로 넘기고(생성 창 경합 방지), pm은 넘기지 않는다.
+    요일제 카테고리는 발행 요일이 아니면 점검 대상에서 빠진다."""
     captured = {}
 
-    def fake_briefs(tpl, cats, today, fallback=None):
-        captured["fallback"] = fallback
+    def fake_briefs(tpl, cats, today):
+        captured["cats"] = cats
         return ("ok", "stub")
 
+    skill_dir = tmp_path / "cats"
+    skill_dir.mkdir()
+    _write_skill(skill_dir, "naver", "네이버")                    # 매일
+    _write_skill(skill_dir, "realestate", "부동산", days="sat")   # 주 1회 — 화요일엔 건너뜀
     monkeypatch.setattr(runmod.checks, "check_briefs_published", fake_briefs)
     monkeypatch.setattr(runmod, "WORKER_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(tmp_path))
-    monkeypatch.setattr(runmod, "_today", lambda: "2026-08-25")
+    monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(skill_dir))
+    monkeypatch.setattr(runmod, "_today", lambda: "2026-08-25")   # 화요일
     monkeypatch.setattr(runmod, "_yesterday", lambda: "2026-08-24")
     monkeypatch.setattr(runmod.claude_auth, "current_state", lambda: (True, None))
 
     runmod.gather("am")
-    assert captured["fallback"] == "2026-08-24"
+    assert captured["cats"] == [("naver", "네이버", "2026-08-24")]
     runmod.gather("pm")
-    assert captured["fallback"] is None
+    assert captured["cats"] == [("naver", "네이버", None)]
+
+
+def test_gather_am_weekly_category_gets_last_scheduled_fallback(tmp_path, monkeypatch):
+    """토요일 오전엔 주 1회 카테고리도 점검 대상이고, 폴백은 전일이 아니라 지난 토요일이다."""
+    captured = {}
+
+    def fake_briefs(tpl, cats, today):
+        captured["cats"] = cats
+        return ("ok", "stub")
+
+    skill_dir = tmp_path / "cats"
+    skill_dir.mkdir()
+    _write_skill(skill_dir, "realestate", "부동산", days="sat")
+    monkeypatch.setattr(runmod.checks, "check_briefs_published", fake_briefs)
+    monkeypatch.setattr(runmod, "WORKER_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(skill_dir))
+    monkeypatch.setattr(runmod, "_today", lambda: "2026-08-29")   # 토요일
+    monkeypatch.setattr(runmod, "_yesterday", lambda: "2026-08-28")
+    monkeypatch.setattr(runmod.claude_auth, "current_state", lambda: (True, None))
+
+    runmod.gather("am")
+    assert captured["cats"] == [("realestate", "부동산", "2026-08-22")]
+
+
+def test_gather_ok_when_no_category_due_today(tmp_path, monkeypatch):
+    """오늘 발행 예정 카테고리가 하나도 없으면 미확인 경보 대신 ok로 넘어간다."""
+    def fake_briefs(tpl, cats, today):
+        raise AssertionError("발행 예정이 없는 날은 브리핑 점검을 호출하지 않아야 한다")
+
+    skill_dir = tmp_path / "cats"
+    skill_dir.mkdir()
+    _write_skill(skill_dir, "realestate", "부동산", days="sat")
+    monkeypatch.setattr(runmod.checks, "check_briefs_published", fake_briefs)
+    monkeypatch.setattr(runmod, "WORKER_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(runmod, "BRIEF_CATEGORY_DIR", str(skill_dir))
+    monkeypatch.setattr(runmod, "_today", lambda: "2026-08-25")   # 화요일
+    monkeypatch.setattr(runmod, "_yesterday", lambda: "2026-08-24")
+    monkeypatch.setattr(runmod.claude_auth, "current_state", lambda: (True, None))
+
+    results = runmod.gather("pm")
+    brief = next(r for r in results if r[0] == "브리핑")
+    assert brief[1] == "ok"
+    assert "없" in brief[2]
 
 
 def test_gather_includes_claude_auth(tmp_path, monkeypatch):
