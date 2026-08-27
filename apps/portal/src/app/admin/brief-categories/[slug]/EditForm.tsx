@@ -9,7 +9,7 @@ import { Button } from "../../_components/Button";
 interface InitialFields {
   slug: string;
   name: string;
-  delivery_mode: "standalone" | "bundled";
+  delivery_mode: "standalone" | "bundled" | "portal_only";
   subject_template: string;
   sender_name: string;
   enabled: boolean;
@@ -32,7 +32,7 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
 
   const [name, setName] = useState(initialFields.name);
   const [description, setDescription] = useState(initialFields.description);
-  const [deliveryMode, setDeliveryMode] = useState<"standalone" | "bundled">(initialFields.delivery_mode);
+  const [deliveryMode, setDeliveryMode] = useState<"standalone" | "bundled" | "portal_only">(initialFields.delivery_mode);
   const [subjectTemplate, setSubjectTemplate] = useState(initialFields.subject_template);
   const [senderName, setSenderName] = useState(initialFields.sender_name);
   const [enabled, setEnabled] = useState(initialFields.enabled);
@@ -126,11 +126,12 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
       <Field label="전송 모드 (delivery_mode)">
         <select
           value={deliveryMode}
-          onChange={(e) => setDeliveryMode(e.target.value as "standalone" | "bundled")}
+          onChange={(e) => setDeliveryMode(e.target.value as "standalone" | "bundled" | "portal_only")}
           className={INPUT}
         >
           <option value="standalone">standalone (카테고리당 1통)</option>
           <option value="bundled">bundled (수신자별 묶음 1통)</option>
+          <option value="portal_only">portal_only (메일 없이 포털 발행만)</option>
         </select>
       </Field>
 

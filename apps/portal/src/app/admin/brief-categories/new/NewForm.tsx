@@ -50,7 +50,7 @@ export function NewForm() {
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [deliveryMode, setDeliveryMode] = useState<"standalone" | "bundled">("bundled");
+  const [deliveryMode, setDeliveryMode] = useState<"standalone" | "bundled" | "portal_only">("bundled");
   const [subjectTemplate, setSubjectTemplate] = useState(DEFAULT_SUBJECT);
   const [senderName, setSenderName] = useState(DEFAULT_SENDER);
   const [enabled, setEnabled] = useState(false);
@@ -141,11 +141,12 @@ export function NewForm() {
       <Field label="전송 모드 (delivery_mode)">
         <select
           value={deliveryMode}
-          onChange={(e) => setDeliveryMode(e.target.value as "standalone" | "bundled")}
+          onChange={(e) => setDeliveryMode(e.target.value as "standalone" | "bundled" | "portal_only")}
           className={INPUT}
         >
           <option value="standalone">standalone (카테고리당 1통)</option>
           <option value="bundled">bundled (수신자별 묶음 1통)</option>
+          <option value="portal_only">portal_only (메일 없이 포털 발행만)</option>
         </select>
       </Field>
 

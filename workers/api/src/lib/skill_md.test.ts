@@ -168,6 +168,10 @@ describe("validateFields", () => {
     );
   });
 
+  it("delivery_mode portal_only 통과 (python 로더와 동일 화이트리스트)", () => {
+    expect(validateFields({ ...base, delivery_mode: "portal_only" })).toEqual([]);
+  });
+
   it("name 빈 문자열 위반", () => {
     expect(validateFields({ ...base, name: "" })).toContainEqual(
       expect.stringContaining("name"),

@@ -12,7 +12,7 @@ interface CategoryDetail {
   fields: {
     slug: string;
     name: string;
-    delivery_mode: "standalone" | "bundled";
+    delivery_mode: "standalone" | "bundled" | "portal_only";
     subject_template: string;
     sender_name: string;
     enabled: boolean;
