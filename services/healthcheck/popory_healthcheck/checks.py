@@ -43,20 +43,21 @@ def check_brief_published(url: str, today: str, fallback: str | None = None) -> 
 
 def check_briefs_published(
     url_template: str,
-    categories: list[tuple[str, str]],
+    categories: list[tuple[str, str, str | None]],
     today: str,
-    fallback: str | None = None,
 ) -> tuple[str, str]:
     """카테고리별로 브리핑 페이지를 확인하고, 미확인·조회 실패 카테고리 이름을 모두 나열한다.
 
-    fallback(전일자)이 주어지면 오전 점검 — 오늘자가 없어도 전일자가 확인되는 카테고리는
-    생성 창 대기로 보고 정상 처리한다. 전일자까지 없으면 그대로 미확인 경보."""
+    categories 항목은 (slug, 이름, fallback 일자|None). fallback이 주어지면 오전 점검 —
+    오늘자가 없어도 fallback 일자가 확인되는 카테고리는 생성 창 대기로 보고 정상 처리한다.
+    fallback은 카테고리별 직전 발행 예정일이다(매일 발행이면 전일, 주 1회면 지난 발행일).
+    fallback 일자까지 없으면 그대로 미확인 경보."""
     if not categories:
         return ("warn", f"브리핑 카테고리 목록 없음 — {today}")
     missing: list[str] = []
     failed: list[str] = []
     pending = 0
-    for slug, name in categories:
+    for slug, name, fallback in categories:
         status, _msg = check_brief_published(url_template.format(slug=slug), today, fallback)
         if status == "fail":
             failed.append(name)
