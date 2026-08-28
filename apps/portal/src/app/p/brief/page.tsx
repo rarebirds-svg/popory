@@ -9,8 +9,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
 const PAGE_SIZE = 60;
+// 알려진 슬러그의 표시 순서만 정한다. 유효 슬러그 집합은 /api/brief-categories 동적 목록이
+// 기준이라 새 카테고리가 코드 수정 없이 칩·필터에 노출된다 (목록에 없는 슬러그는 뒤에 붙는다).
 const CATEGORY_ORDER = ["antitrust", "chaebol", "anticorruption", "sanction", "geopolitics", "legal-ai", "realestate", "naver"];
-const VALID_SLUGS = new Set(CATEGORY_ORDER);
 
 interface Preferences {
   subscribed_areas: string[];
@@ -67,9 +68,15 @@ export default async function BriefFeedPage({
   const customTopics = prefs?.custom_topics ?? [];
   const isPersonalized = subscribedAreas.length > 0;
 
+  const orderedSlugs = [
+    ...CATEGORY_ORDER.filter((slug) => cats.some((c) => c.slug === slug)),
+    ...cats.map((c) => c.slug).filter((slug) => !CATEGORY_ORDER.includes(slug)),
+  ];
+  const validSlugs = new Set(orderedSlugs);
+
   const validCats = isPersonalized
-    ? new Set(subscribedAreas.map((a) => a.replace(/^brief-/, "")).filter((s) => VALID_SLUGS.has(s)))
-    : VALID_SLUGS;
+    ? new Set(subscribedAreas.map((a) => a.replace(/^brief-/, "")).filter((s) => validSlugs.has(s)))
+    : validSlugs;
   const activeCat = cat && validCats.has(cat) ? cat : "";
 
   let items: FeedItem[];
@@ -92,14 +99,12 @@ export default async function BriefFeedPage({
     categoryNames[`custom-${t.id}`] = t.name;
   }
 
-  const sortedCats = isPersonalized
-    ? CATEGORY_ORDER
-        .filter((slug) => subscribedAreas.includes(`brief-${slug}`))
-        .map((slug) => cats.find((c) => c.slug === slug))
-        .filter((c): c is CategoryMeta => c !== undefined)
-    : CATEGORY_ORDER
-        .map((slug) => cats.find((c) => c.slug === slug))
-        .filter((c): c is CategoryMeta => c !== undefined);
+  const sortedCats = (isPersonalized
+    ? orderedSlugs.filter((slug) => subscribedAreas.includes(`brief-${slug}`))
+    : orderedSlugs
+  )
+    .map((slug) => cats.find((c) => c.slug === slug))
+    .filter((c): c is CategoryMeta => c !== undefined);
 
   return (
     <>
