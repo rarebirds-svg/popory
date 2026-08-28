@@ -8,6 +8,8 @@ import { CustomTopics } from "./CustomTopics";
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
+// 알려진 슬러그의 표시 순서만 정한다. 토글 목록 자체는 /api/brief-categories 동적 목록이
+// 기준이라 새 카테고리가 코드 수정 없이 노출된다 (목록에 없는 슬러그는 뒤에 붙는다).
 const CATEGORY_ORDER = ["antitrust", "chaebol", "anticorruption", "sanction", "geopolitics", "legal-ai", "realestate", "naver"];
 
 async function fetchCategories(): Promise<CategoryMeta[]> {
@@ -35,7 +37,10 @@ export default async function BriefSettingsPage() {
   const cookie = (await headers()).get("cookie") ?? "";
   const [cats, prefs] = await Promise.all([fetchCategories(), fetchPreferences(cookie)]);
 
-  const sortedCats = CATEGORY_ORDER
+  const sortedCats = [
+    ...CATEGORY_ORDER.filter((slug) => cats.some((c) => c.slug === slug)),
+    ...cats.map((c) => c.slug).filter((slug) => !CATEGORY_ORDER.includes(slug)),
+  ]
     .map((slug) => cats.find((c) => c.slug === slug))
     .filter((c): c is CategoryMeta => c !== undefined);
 
