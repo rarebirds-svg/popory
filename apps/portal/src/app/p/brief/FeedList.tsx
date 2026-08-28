@@ -30,6 +30,8 @@ const BADGE_COLOR: Record<string, { bg: string; text: string }> = {
   antitrust:      { bg: "bg-green-100",  text: "text-green-700" },
   "legal-ai":     { bg: "bg-sky-100",    text: "text-sky-700" },
   naver:          { bg: "bg-emerald-100", text: "text-emerald-700" },
+  "realestate-pick5":      { bg: "bg-cyan-100", text: "text-cyan-700" },
+  "realestate-pick5-blog": { bg: "bg-teal-100", text: "text-teal-700" },
 };
 
 const SERVER_CAP = 100; // /api/published_items 서버사이드 limit 상한
