@@ -59,6 +59,9 @@ jobs:
         if: ${{ inputs.target == 'both' || inputs.target == 'portal' }}
         run: pnpm --filter @popory/portal build:cf
 
+      # wrangler 는 @popory/api 의 devDependency 다. portal 패키지에서 부르면
+      # pnpm 격리 레이아웃상 찾지 못하므로(Command "wrangler" not found),
+      # api 패키지로 부르고 빌드 산출물 경로를 workers/api 기준 상대경로로 준다.
       - name: 포털 배포
         if: ${{ inputs.target == 'both' || inputs.target == 'portal' }}
-        run: pnpm --filter @popory/portal exec wrangler pages deploy .vercel/output/static --project-name popory-portal --branch main --commit-dirty=true
+        run: pnpm --filter @popory/api exec wrangler pages deploy ../../apps/portal/.vercel/output/static --project-name popory-portal --branch main --commit-dirty=true

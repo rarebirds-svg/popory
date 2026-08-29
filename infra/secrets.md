@@ -23,19 +23,30 @@ prod worker 이름은 `popory-api-prod` (api.toml `[env.prod]` 블록). 모든 w
 
 | 이름 | 위치 | 값 얻는 곳 | 비고 |
 |------|------|-----------|------|
-| CLOUDFLARE_API_TOKEN | GitHub Actions (저장소 시크릿) | Cloudflare 대시보드 → My Profile → API Tokens → Create Token → Custom token | 권한은 아래 표. Account Resources 는 해당 계정만으로 좁힌다 |
+| CLOUDFLARE_API_TOKEN | GitHub Actions (저장소 시크릿) | Cloudflare 대시보드 → My Profile → API Tokens → Create Token → Custom token | 권한은 아래 표. Account·Zone Resources 는 해당 계정·존만으로 좁힌다 |
 | CLOUDFLARE_ACCOUNT_ID | GitHub Actions (저장소 시크릿) | 대시보드 Account details 의 32자리 hex, 또는 `pnpm --filter @popory/api exec wrangler whoami` | 비밀은 아니지만 워크플로가 env 로 받으므로 같이 넣는다 |
 
-토큰 권한은 워크플로 단계별로 필요한 것만 준다.
+토큰 권한은 워크플로 단계별로 필요한 것만 준다. **Account 스코프만으로는 부족하다** —
+api.toml 의 `[[env.prod.routes]]` 가 커스텀 도메인을 붙이므로 워커 배포가 존 API
+(`/zones/{id}/workers/routes`)를 호출한다.
 
-| 권한 (Account 스코프) | 쓰는 단계 |
-|---|---|
-| Workers Scripts · Edit | API 워커 배포 (`wrangler deploy`) |
-| Cloudflare Pages · Edit | 포털 배포 (`wrangler pages deploy`) |
-| D1 · Edit | D1 마이그레이션 (`migrate` 입력을 켰을 때만) |
+| 스코프 | 권한 | 쓰는 단계 |
+|---|---|---|
+| Account | Workers Scripts · Edit | API 워커 배포 (`wrangler deploy`) |
+| Zone | Workers Routes · Edit | 같은 단계 — `api.poporyfamily.com` 커스텀 도메인 라우트 |
+| Account | Cloudflare Pages · Edit | 포털 배포 (`wrangler pages deploy`) |
+| Account | D1 · Edit | D1 마이그레이션 (`migrate` 입력을 켰을 때만) |
 
-어떤 단계가 403 으로 죽으면 그 단계에 해당하는 권한이 빠진 것이다 — 토큰을
-넓히기보다 그 항목만 추가한다.
+Zone Resources 는 `poporyfamily.com` 하나만 Include 한다.
+
+어떤 단계가 인증 오류로 죽으면 그 단계에 해당하는 권한이 빠진 것이다 — 토큰을
+넓히기보다 그 항목만 추가한다. 에러 본문의 API 경로가 어느 스코프인지 알려준다
+(`/zones/...` 면 Zone, `/accounts/...` 면 Account). 로그 끝의
+`Unable to retrieve email for this user ... User Details Read` 는 wrangler 가
+덧붙이는 진단용 경고이고, 배포에 필요한 권한이 아니다.
+
+기존 토큰에 권한을 더할 때는 새로 발급하지 말고 **API Tokens → 해당 토큰 → Edit**
+으로 고친다. 토큰 값이 그대로라 GitHub 시크릿을 다시 넣지 않아도 된다.
 
 설정 후 **Actions → deploy → Run workflow** 로 실행한다. 입력은 두 개다.
 
