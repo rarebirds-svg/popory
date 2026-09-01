@@ -24,8 +24,8 @@ export default async function Dashboard() {
       <Header email={user.email} role={user.role} apiBase={API_BASE} />
       <main className="mx-auto max-w-5xl px-4 py-12 sm:py-16">
         <p className="text-xs font-medium tracking-wide text-popory-muted"><TodayLabel /></p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-popory-fg sm:text-4xl">오늘의 popory</h1>
-        <p className="mt-2 text-sm text-popory-muted">가족이 함께 보는 브리핑과 서비스를 한곳에서.</p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-popory-fg sm:text-4xl">popory</h1>
+        <p className="mt-2 text-sm text-popory-muted">우리 가족의 모든 서비스를 한곳에서.</p>
         <div className="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {AREAS.map((a) => (
             <a
