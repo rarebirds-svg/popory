@@ -49,8 +49,16 @@ def _generate_carousel(*, topic: str, sources: list, style_samples: list, job_id
     return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_carousel, job_id=job_id,
                           model=model_for("carousel"))
 POLL_INTERVAL_SECONDS = 20
+# 유휴 폴 간격 지수 백오프 상한. 잡이 없을 때 D1 폴링 read 를 줄인다
+# (2026-09-01 무료 티어 일일 row read 한도 소진). 새 잡 최대 대기 = 이 상한.
+IDLE_BACKOFF_MAX_SECONDS = int(os.environ.get("POPORY_IDLE_BACKOFF_MAX", "60"))
 # 서비스 JWT 수명. 60초는 시계 오차·느린 요청에 취약(일시 401 관측) → 여유 상향.
 TOKEN_TTL_SECONDS = 300
+
+
+def next_idle_sleep(current: float) -> float:
+    """유휴가 이어질 때 다음 폴 대기 시간 — 2배씩 늘리되 상한에서 멈춘다."""
+    return min(current * 2, IDLE_BACKOFF_MAX_SECONDS)
 
 
 def _is_claude_auth_failure(err: str) -> bool:
@@ -725,14 +733,18 @@ def main() -> None:
     append_log(LOGS_DIR, {"worker": "content", "status": "start"})
     # 하트비트는 별도 데몬 스레드가 보낸다 — 생성 잡이 메인 루프를 오래 잡고 있어도 online 유지.
     threading.Thread(target=heartbeat_loop, args=(client, threading.Event()), daemon=True).start()
+    idle_sleep = POLL_INTERVAL_SECONDS
     while True:
         try:
             processed = run_cycle(client)
         except PortalError as e:
             append_log(LOGS_DIR, {"worker": "content", "status": "portal_error", "error": str(e)[:300]})
             processed = False
-        if not processed:
-            time.sleep(POLL_INTERVAL_SECONDS)
+        if processed:
+            idle_sleep = POLL_INTERVAL_SECONDS
+        else:
+            time.sleep(idle_sleep)
+            idle_sleep = next_idle_sleep(idle_sleep)
 
 
 if __name__ == "__main__":
