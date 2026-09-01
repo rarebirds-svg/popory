@@ -839,3 +839,11 @@ def test_refresh_ignores_malformed_payload(monkeypatch, tmp_path):
     assert gen.model_for("blog") == gen.DEFAULT_MODEL
     worker.refresh_model_overrides(_ModelClient(None), force=True)
     assert gen.model_for("blog") == gen.DEFAULT_MODEL
+
+
+def test_next_idle_sleep_doubles_to_cap(monkeypatch):
+    """유휴 백오프: 20→40→60(상한 고정). 잡이 없을 때 D1 폴링 read 를 줄인다."""
+    monkeypatch.setattr(worker, "IDLE_BACKOFF_MAX_SECONDS", 60)
+    assert worker.next_idle_sleep(20) == 40
+    assert worker.next_idle_sleep(40) == 60
+    assert worker.next_idle_sleep(60) == 60
