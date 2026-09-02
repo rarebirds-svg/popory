@@ -2,6 +2,7 @@
 import os
 import subprocess
 import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -20,8 +21,24 @@ def check_http(name: str, url: str, warn_ms: int = 3000) -> tuple[str, str]:
     return ("ok", f"{name} 정상 — {resp.status_code}, {ms}ms")
 
 
-def _has_date(text: str, date: str) -> bool:
-    return date in text or date.replace("-", ".") in text
+_KST = timezone(timedelta(hours=9))
+
+
+def _published_dates(payload: object) -> set[str]:
+    """published_items 응답에서 발행 KST 일자 집합을 뽑는다.
+
+    published_at 은 unix epoch(초). 렌더된 제목·본문 텍스트가 아니라 이 값을 본다 —
+    제목 날짜 표기는 카테고리마다 다르다(ISO vs 한국식 `M월 D일`). 텍스트를 긁으면
+    표기가 다른 카테고리가 발행 성공에도 미확인으로 잡힌다(2026-09-02 PICK 5 오경보)."""
+    items = payload.get("items") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return set()
+    out = set()
+    for it in items:
+        ts = it.get("published_at") if isinstance(it, dict) else None
+        if isinstance(ts, (int, float)):
+            out.add(datetime.fromtimestamp(ts, _KST).strftime("%Y-%m-%d"))
+    return out
 
 
 def check_brief_published(url: str, today: str, fallback: str | None = None) -> tuple[str, str]:
@@ -31,12 +48,16 @@ def check_brief_published(url: str, today: str, fallback: str | None = None) -> 
     try:
         resp = requests.get(url, timeout=10)
     except requests.RequestException as e:
-        return ("fail", f"브리핑 페이지 연결 실패 — {e}")
+        return ("fail", f"브리핑 조회 실패 — {e}")
     if resp.status_code >= 400:
-        return ("fail", f"브리핑 페이지 HTTP {resp.status_code}")
-    if _has_date(resp.text, today):
+        return ("fail", f"브리핑 조회 HTTP {resp.status_code}")
+    try:
+        dates = _published_dates(resp.json())
+    except ValueError:
+        return ("fail", "브리핑 조회 응답 파싱 실패")
+    if today in dates:
         return ("ok", f"오늘자 브리핑 배포됨 — {today}")
-    if fallback is not None and _has_date(resp.text, fallback):
+    if fallback is not None and fallback in dates:
         return ("pending", f"오늘자 생성 창 대기 — 전일자 {fallback} 확인")
     return ("warn", f"오늘자 브리핑 미확인 — {today}")
 
