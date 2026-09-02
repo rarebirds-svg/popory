@@ -106,10 +106,14 @@ def check_log_freshness(log_path: str, max_age_sec: int) -> tuple[str, str]:
 
 
 # (로그 마커, 사람이 읽는 자원·원인 이름) — 메시지에 어떤 자원이 걸렸는지 그대로 표기한다.
+#
+# 마커는 부분문자열로 세므로 status 토큰은 반드시 `"status": "..."` 형태로 적는다.
+# 맨 토큰(image_failed)으로 두면 cf_image_failed 까지 걸려 오탐이 난다 — 그쪽은
+# Cloudflare flux 실패 후 로컬 imagegen 으로 폴백하는 정상 복구 경로다(2026-09-02 오경보).
 _MARKERS = (
     ("session limit", "Claude 세션 한도"),
-    ("image_failed", "이미지 생성 실패"),
-    ("claude_fail", "Claude 호출 실패"),
+    ('"status": "image_failed"', "이미지 생성 실패"),
+    ('"status": "claude_fail"', "Claude 호출 실패"),
     ('"status": "failed"', "작업 실패"),
 )
 

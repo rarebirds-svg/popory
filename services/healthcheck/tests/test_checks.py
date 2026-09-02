@@ -287,3 +287,22 @@ def test_claude_auth_warn_when_state_unavailable():
     """keychain 을 못 읽으면 단정하지 않고 warn (오경보로 fail 내지 않는다)."""
     status, _ = checks.check_claude_auth(None, None, _NOW)
     assert status == "warn"
+
+
+def test_scan_markers_ignores_cf_image_fallback():
+    """cf_image_failed 는 Cloudflare 실패 후 로컬 폴백하는 정상 복구 경로 — 경보 대상이 아니다.
+
+    맨 토큰 image_failed 로 세면 부분문자열로 걸려 오탐이 난다(2026-09-02 오경보)."""
+    log = ('{"worker": "content", "status": "cf_image_failed", "job": "j1", "model": "flux"}\n'
+           '{"worker": "content", "status": "cf_image_failed", "job": "j2", "model": "flux"}')
+    status, msg = checks.scan_log_markers(log)
+    assert status == "ok", msg
+
+
+def test_scan_markers_still_catches_real_image_failure():
+    """폴백까지 소진된 진짜 실패(image_failed)는 그대로 잡는다."""
+    log = ('{"worker": "content", "status": "cf_image_failed", "job": "j1"}\n'
+           '{"worker": "content", "status": "image_failed", "job": "j1", "error": "boom"}')
+    status, msg = checks.scan_log_markers(log)
+    assert status == "warn"
+    assert "이미지 생성 실패 1건" in msg
