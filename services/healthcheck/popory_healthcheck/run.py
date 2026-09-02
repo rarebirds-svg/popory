@@ -13,7 +13,9 @@ SEND_PY = "/Users/daegong/projects/scripts/ops-report/send.py"
 ENV_FILE = str(Path(__file__).resolve().parent.parent / "secrets" / "env.sh")
 PORTAL = "https://poporyfamily.com"
 API = "https://api.poporyfamily.com/health"
-BRIEF_URL_TEMPLATE = "https://poporyfamily.com/p/brief-{slug}/"
+# 발행 확인은 렌더된 페이지가 아니라 API 의 published_at 을 본다 — 제목 날짜 표기가
+# 카테고리마다 달라(ISO vs 한국식 M월 D일) HTML 스크레이핑은 오탐을 낸다.
+BRIEF_URL_TEMPLATE = "https://api.poporyfamily.com/api/published_items?area=brief-{slug}&limit=5"
 BRIEF_CATEGORY_DIR = "/Users/daegong/projects/popory/services/brief/categories"
 WORKER_LOG_DIR = "/Users/daegong/projects/popory/services/content/logs"
 STATE_FILE = str(Path(__file__).resolve().parent.parent / "state" / "last.json")

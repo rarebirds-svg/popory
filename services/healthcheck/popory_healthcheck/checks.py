@@ -2,6 +2,7 @@
 import os
 import subprocess
 import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -20,8 +21,24 @@ def check_http(name: str, url: str, warn_ms: int = 3000) -> tuple[str, str]:
     return ("ok", f"{name} 정상 — {resp.status_code}, {ms}ms")
 
 
-def _has_date(text: str, date: str) -> bool:
-    return date in text or date.replace("-", ".") in text
+_KST = timezone(timedelta(hours=9))
+
+
+def _published_dates(payload: object) -> set[str]:
+    """published_items 응답에서 발행 KST 일자 집합을 뽑는다.
+
+    published_at 은 unix epoch(초). 렌더된 제목·본문 텍스트가 아니라 이 값을 본다 —
+    제목 날짜 표기는 카테고리마다 다르다(ISO vs 한국식 `M월 D일`). 텍스트를 긁으면
+    표기가 다른 카테고리가 발행 성공에도 미확인으로 잡힌다(2026-09-02 PICK 5 오경보)."""
+    items = payload.get("items") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return set()
+    out = set()
+    for it in items:
+        ts = it.get("published_at") if isinstance(it, dict) else None
+        if isinstance(ts, (int, float)):
+            out.add(datetime.fromtimestamp(ts, _KST).strftime("%Y-%m-%d"))
+    return out
 
 
 def check_brief_published(url: str, today: str, fallback: str | None = None) -> tuple[str, str]:
@@ -31,12 +48,16 @@ def check_brief_published(url: str, today: str, fallback: str | None = None) -> 
     try:
         resp = requests.get(url, timeout=10)
     except requests.RequestException as e:
-        return ("fail", f"브리핑 페이지 연결 실패 — {e}")
+        return ("fail", f"브리핑 조회 실패 — {e}")
     if resp.status_code >= 400:
-        return ("fail", f"브리핑 페이지 HTTP {resp.status_code}")
-    if _has_date(resp.text, today):
+        return ("fail", f"브리핑 조회 HTTP {resp.status_code}")
+    try:
+        dates = _published_dates(resp.json())
+    except ValueError:
+        return ("fail", "브리핑 조회 응답 파싱 실패")
+    if today in dates:
         return ("ok", f"오늘자 브리핑 배포됨 — {today}")
-    if fallback is not None and _has_date(resp.text, fallback):
+    if fallback is not None and fallback in dates:
         return ("pending", f"오늘자 생성 창 대기 — 전일자 {fallback} 확인")
     return ("warn", f"오늘자 브리핑 미확인 — {today}")
 
@@ -106,10 +127,14 @@ def check_log_freshness(log_path: str, max_age_sec: int) -> tuple[str, str]:
 
 
 # (로그 마커, 사람이 읽는 자원·원인 이름) — 메시지에 어떤 자원이 걸렸는지 그대로 표기한다.
+#
+# 마커는 부분문자열로 세므로 status 토큰은 반드시 `"status": "..."` 형태로 적는다.
+# 맨 토큰(image_failed)으로 두면 cf_image_failed 까지 걸려 오탐이 난다 — 그쪽은
+# Cloudflare flux 실패 후 로컬 imagegen 으로 폴백하는 정상 복구 경로다(2026-09-02 오경보).
 _MARKERS = (
     ("session limit", "Claude 세션 한도"),
-    ("image_failed", "이미지 생성 실패"),
-    ("claude_fail", "Claude 호출 실패"),
+    ('"status": "image_failed"', "이미지 생성 실패"),
+    ('"status": "claude_fail"', "Claude 호출 실패"),
     ('"status": "failed"', "작업 실패"),
 )
 

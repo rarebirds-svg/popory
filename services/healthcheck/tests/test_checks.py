@@ -1,6 +1,12 @@
 # 점검 함수들의 ok/warn/fail 분기 단위 테스트.
+from datetime import datetime, timedelta, timezone
+
 import responses
 from popory_healthcheck import checks
+
+BRIEF_API = "https://api.test/api/published_items?area=brief-realestate&limit=5"
+KST_2026_06_27 = 1782518400  # 2026-06-27 09:00 KST
+KST_2026_06_20 = 1781913600  # 2026-06-20 09:00 KST
 
 
 @responses.activate
@@ -26,15 +32,16 @@ def test_http_fail_on_network():
 
 @responses.activate
 def test_brief_published_ok_when_date_present():
-    responses.add(responses.GET, "https://x.test/p/brief-realestate/", body="<li>2026-06-27 부동산</li>", status=200)
-    status, _ = checks.check_brief_published("https://x.test/p/brief-realestate/", "2026-06-27")
+    responses.add(responses.GET, BRIEF_API, json={"items": [{"title": "[6월 27일] 부동산 PICK 5",
+                                                             "published_at": KST_2026_06_27}]}, status=200)
+    status, _ = checks.check_brief_published(BRIEF_API, "2026-06-27")
     assert status == "ok"
 
 
 @responses.activate
 def test_brief_published_warn_when_absent():
-    responses.add(responses.GET, "https://x.test/p/brief-realestate/", body="<li>2026-06-20 옛글</li>", status=200)
-    status, _ = checks.check_brief_published("https://x.test/p/brief-realestate/", "2026-06-27")
+    responses.add(responses.GET, BRIEF_API, json={"items": [{"published_at": KST_2026_06_20}]}, status=200)
+    status, _ = checks.check_brief_published(BRIEF_API, "2026-06-27")
     assert status == "warn"
 
 
@@ -77,11 +84,37 @@ def test_content_routine_warn_when_absent():
 
 
 @responses.activate
-def test_brief_published_ok_when_dotted_date():
-    # 점형 날짜(YYYY.MM.DD) 형식이 페이지에 있을 때 ok 반환 확인.
-    responses.add(responses.GET, "https://x.test/p/brief-realestate/", body="<li>2026.06.27 부동산</li>", status=200)
-    status, _ = checks.check_brief_published("https://x.test/p/brief-realestate/", "2026-06-27")
+def test_brief_published_ok_regardless_of_title_date_format():
+    """제목 날짜가 한국식 `M월 D일`이어도 ok — 판정은 published_at 기준이다.
+
+    ISO 표기를 HTML 에서 찾던 종전 방식은 PICK 5(한국식 제목)를 발행 성공에도
+    미확인으로 잡았다(2026-09-02 오경보)."""
+    responses.add(responses.GET, BRIEF_API,
+                  json={"items": [{"title": "[6월 27일] 부동산 데일리 뉴스 PICK 5",
+                                   "published_at": KST_2026_06_27}]}, status=200)
+    status, _ = checks.check_brief_published(BRIEF_API, "2026-06-27")
     assert status == "ok"
+
+
+@responses.activate
+def test_brief_published_pending_when_only_fallback():
+    responses.add(responses.GET, BRIEF_API, json={"items": [{"published_at": KST_2026_06_20}]}, status=200)
+    status, _ = checks.check_brief_published(BRIEF_API, "2026-06-27", fallback="2026-06-20")
+    assert status == "pending"
+
+
+@responses.activate
+def test_brief_published_fail_on_bad_json():
+    responses.add(responses.GET, BRIEF_API, body="not json", status=200)
+    status, _ = checks.check_brief_published(BRIEF_API, "2026-06-27")
+    assert status == "fail"
+
+
+@responses.activate
+def test_brief_published_warn_when_empty():
+    responses.add(responses.GET, BRIEF_API, json={"items": []}, status=200)
+    status, _ = checks.check_brief_published(BRIEF_API, "2026-06-27")
+    assert status == "warn"
 
 
 @responses.activate
@@ -104,7 +137,7 @@ def test_log_freshness_warn_when_stale(tmp_path):
 
 # ── 카테고리별 브리핑 점검: 미확인 카테고리 이름을 메시지에 담는다 ──
 
-TPL = "https://x.test/p/brief-{slug}/"
+TPL = "https://x.test/api/published_items?area=brief-{slug}&limit=5"
 BASE_CATS = [("realestate", "부동산"), ("naver", "네이버"), ("antitrust", "공정거래·기업집단")]
 
 
@@ -113,14 +146,23 @@ def _cats(fallback: str | None = None):
     return [(slug, name, fallback) for slug, name in BASE_CATS]
 
 
-def _brief_page(slug: str, body: str, status: int = 200):
-    responses.add(responses.GET, f"https://x.test/p/brief-{slug}/", body=body, status=status)
+# 날짜 → 그날 09:00 KST epoch. 판정은 렌더 텍스트가 아니라 published_at 기준이다.
+def _epoch(day: str) -> int:
+    return int(datetime.strptime(day + " 09:00", "%Y-%m-%d %H:%M")
+               .replace(tzinfo=timezone(timedelta(hours=9))).timestamp())
+
+
+def _brief_page(slug: str, day: str | None, status: int = 200):
+    """slug 카테고리의 최신 발행이 day 인 API 응답을 등록한다. day=None 이면 발행 없음."""
+    items = [{"title": f"[{slug}] 브리핑", "published_at": _epoch(day)}] if day else []
+    responses.add(responses.GET, f"https://x.test/api/published_items?area=brief-{slug}&limit=5",
+                  json={"items": items}, status=status)
 
 
 @responses.activate
 def test_briefs_ok_when_all_categories_present():
     for slug, _ in BASE_CATS:
-        _brief_page(slug, "<li>2026-07-12 오늘자</li>")
+        _brief_page(slug, "2026-07-12")
     status, msg = checks.check_briefs_published(TPL, _cats(), "2026-07-12")
     assert status == "ok"
     assert "3" in msg
@@ -128,9 +170,9 @@ def test_briefs_ok_when_all_categories_present():
 
 @responses.activate
 def test_briefs_warn_names_single_missing_category():
-    _brief_page("realestate", "<li>2026-07-12 오늘자</li>")
-    _brief_page("naver", "<li>2026-07-11 어제자</li>")
-    _brief_page("antitrust", "<li>2026-07-12 오늘자</li>")
+    _brief_page("realestate", "2026-07-12")
+    _brief_page("naver", "2026-07-11")
+    _brief_page("antitrust", "2026-07-12")
     status, msg = checks.check_briefs_published(TPL, _cats(), "2026-07-12")
     assert status == "warn"
     assert "네이버" in msg
@@ -141,7 +183,7 @@ def test_briefs_warn_names_single_missing_category():
 @responses.activate
 def test_briefs_warn_names_all_missing_categories():
     for slug, _ in BASE_CATS:
-        _brief_page(slug, "<li>2026-07-11 어제자</li>")
+        _brief_page(slug, "2026-07-11")
     status, msg = checks.check_briefs_published(TPL, _cats(), "2026-07-12")
     assert status == "warn"
     assert "부동산" in msg
@@ -151,9 +193,9 @@ def test_briefs_warn_names_all_missing_categories():
 
 @responses.activate
 def test_briefs_fail_names_category_whose_page_errors():
-    _brief_page("realestate", "<li>2026-07-12 오늘자</li>")
-    _brief_page("naver", "boom", status=500)
-    _brief_page("antitrust", "<li>2026-07-11 어제자</li>")
+    _brief_page("realestate", "2026-07-12")
+    _brief_page("naver", None, status=500)   # 조회 실패(HTTP 500) 분기
+    _brief_page("antitrust", "2026-07-11")
     status, msg = checks.check_briefs_published(TPL, _cats(), "2026-07-12")
     assert status == "fail"
     assert "네이버" in msg          # 조회 실패 카테고리
@@ -172,7 +214,7 @@ def test_briefs_warn_when_no_categories():
 def test_briefs_am_ok_when_only_yesterday_present():
     """오전 09:00 시나리오: 오늘자는 아직 없지만 전일자가 있으면 생성 창 대기 — 경보 아님."""
     for slug, _ in BASE_CATS:
-        _brief_page(slug, "<li>2026-07-11 어제자</li>")
+        _brief_page(slug, "2026-07-11")
     status, msg = checks.check_briefs_published(TPL, _cats("2026-07-11"), "2026-07-12")
     assert status == "ok"
     assert "대기" in msg
@@ -180,9 +222,9 @@ def test_briefs_am_ok_when_only_yesterday_present():
 
 @responses.activate
 def test_briefs_am_mixed_published_and_pending_ok():
-    _brief_page("realestate", "<li>2026-07-12 오늘자</li>")
-    _brief_page("naver", "<li>2026-07-11 어제자</li>")
-    _brief_page("antitrust", "<li>2026-07-11 어제자</li>")
+    _brief_page("realestate", "2026-07-12")
+    _brief_page("naver", "2026-07-11")
+    _brief_page("antitrust", "2026-07-11")
     status, msg = checks.check_briefs_published(TPL, _cats("2026-07-11"), "2026-07-12")
     assert status == "ok"
     assert "1개 배포" in msg
@@ -192,9 +234,9 @@ def test_briefs_am_mixed_published_and_pending_ok():
 @responses.activate
 def test_briefs_am_warn_when_yesterday_also_missing():
     """전일자까지 없으면 파이프라인이 실제로 멈춘 것 — 오전에도 그대로 경보."""
-    _brief_page("realestate", "<li>2026-07-12 오늘자</li>")
-    _brief_page("naver", "<li>2026-07-01 옛글</li>")
-    _brief_page("antitrust", "<li>2026-07-11 어제자</li>")
+    _brief_page("realestate", "2026-07-12")
+    _brief_page("naver", "2026-07-01")
+    _brief_page("antitrust", "2026-07-11")
     status, msg = checks.check_briefs_published(TPL, _cats("2026-07-11"), "2026-07-12")
     assert status == "warn"
     assert "네이버" in msg
@@ -204,9 +246,9 @@ def test_briefs_am_warn_when_yesterday_also_missing():
 @responses.activate
 def test_briefs_am_weekly_category_uses_its_own_fallback():
     """주 1회 카테고리의 오전 폴백은 전일이 아니라 지난 발행일 — 카테고리별 폴백이 섞여도 판정된다."""
-    _brief_page("realestate", "<li>2026-07-05 지난 발행일</li>")
-    _brief_page("naver", "<li>2026-07-11 어제자</li>")
-    _brief_page("antitrust", "<li>2026-07-12 오늘자</li>")
+    _brief_page("realestate", "2026-07-05")
+    _brief_page("naver", "2026-07-11")
+    _brief_page("antitrust", "2026-07-12")
     cats = [
         ("realestate", "부동산", "2026-07-05"),
         ("naver", "네이버", "2026-07-11"),
@@ -221,7 +263,7 @@ def test_briefs_am_weekly_category_uses_its_own_fallback():
 def test_briefs_pm_warn_without_fallback_even_if_yesterday_present():
     """pm(확정 판정)은 폴백 없이 오늘자만 본다 — 기존 동작 유지."""
     for slug, _ in BASE_CATS:
-        _brief_page(slug, "<li>2026-07-11 어제자</li>")
+        _brief_page(slug, "2026-07-11")
     status, _msg = checks.check_briefs_published(TPL, _cats(), "2026-07-12")
     assert status == "warn"
 
@@ -287,3 +329,22 @@ def test_claude_auth_warn_when_state_unavailable():
     """keychain 을 못 읽으면 단정하지 않고 warn (오경보로 fail 내지 않는다)."""
     status, _ = checks.check_claude_auth(None, None, _NOW)
     assert status == "warn"
+
+
+def test_scan_markers_ignores_cf_image_fallback():
+    """cf_image_failed 는 Cloudflare 실패 후 로컬 폴백하는 정상 복구 경로 — 경보 대상이 아니다.
+
+    맨 토큰 image_failed 로 세면 부분문자열로 걸려 오탐이 난다(2026-09-02 오경보)."""
+    log = ('{"worker": "content", "status": "cf_image_failed", "job": "j1", "model": "flux"}\n'
+           '{"worker": "content", "status": "cf_image_failed", "job": "j2", "model": "flux"}')
+    status, msg = checks.scan_log_markers(log)
+    assert status == "ok", msg
+
+
+def test_scan_markers_still_catches_real_image_failure():
+    """폴백까지 소진된 진짜 실패(image_failed)는 그대로 잡는다."""
+    log = ('{"worker": "content", "status": "cf_image_failed", "job": "j1"}\n'
+           '{"worker": "content", "status": "image_failed", "job": "j1", "error": "boom"}')
+    status, msg = checks.scan_log_markers(log)
+    assert status == "warn"
+    assert "이미지 생성 실패 1건" in msg
