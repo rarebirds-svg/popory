@@ -348,3 +348,46 @@ def test_scan_markers_still_catches_real_image_failure():
     status, msg = checks.scan_log_markers(log)
     assert status == "warn"
     assert "이미지 생성 실패 1건" in msg
+
+
+def test_brief_run_warns_when_log_missing(tmp_path):
+    """오늘자 로그 부재 = 데일리 잡이 아예 안 뜸(launchd 미로드·맥 종료).
+
+    run_daily.sh 는 08:00 기동 직후 jitter_sleep 을 먼저 남기므로 로그가 없다는 건
+    기동 자체가 없었다는 뜻이다. 발행 결과만 보던 종전 점검은 못 잡던 원인이다."""
+    status, msg = checks.check_brief_run(str(tmp_path / "2026-09-04.log"))
+    assert status == "warn"
+    assert "미기동" in msg
+
+
+def test_brief_run_ok_when_done(tmp_path):
+    log = tmp_path / "d.log"
+    log.write_text('{"msg":"jitter_sleep=10s"}\n{"msg":"done dry_run=0 generated_ok=7 failed=none"}',
+                   encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "ok", msg
+
+
+def test_brief_run_names_failure_cause(tmp_path):
+    """실패 원인을 다이제스트에 그대로 띄운다 — 미확인 경보만으론 조치가 불가능하다."""
+    log = tmp_path / "d.log"
+    log.write_text('{"msg":"start"}\n{"cli":"generate_brief","status": "limit_fail"}', encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "세션 한도" in msg
+
+
+def test_brief_run_catches_scan_abort(tmp_path):
+    log = tmp_path / "d.log"
+    log.write_text('{"msg":"abort: categories scan failed exit=1"}', encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "스캔 중단" in msg
+
+
+def test_brief_run_am_does_not_warn_while_generating(tmp_path):
+    """오전 점검은 생성 창(08:00~10:00)과 겹치므로 미완료를 경보하지 않는다."""
+    log = tmp_path / "d.log"
+    log.write_text('{"msg":"jitter_sleep=5400s"}', encoding="utf-8")
+    assert checks.check_brief_run(str(log), mode="am")[0] == "ok"
+    assert checks.check_brief_run(str(log), mode="pm")[0] == "warn"

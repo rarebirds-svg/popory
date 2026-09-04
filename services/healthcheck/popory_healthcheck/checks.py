@@ -147,6 +147,42 @@ def scan_log_markers(log_text: str) -> tuple[str, str]:
     return ("warn", f"한도/실패 감지 — {detail}")
 
 
+# 브리핑 데일리 로그의 실패 신호 — (마커, 사람이 읽는 원인).
+# run_daily.sh·generate_brief.py 가 남기는 실제 문자열이며, 발행 결과만 보던 종전
+# 점검이 구분하지 못하던 "원인"을 다이제스트에 직접 띄우기 위한 것이다.
+_BRIEF_FAIL_MARKERS = (
+    ("abort: categories scan failed", "카테고리 스캔 중단"),
+    ('"status": "init_fail"', "초기화 실패"),
+    ('"status": "limit_fail"', "Claude 세션 한도"),
+    ('"status": "claude_fail"', "Claude 호출 실패"),
+    ('"status": "parse_fail"', "응답 파싱 실패"),
+)
+
+
+def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
+    """오늘 브리핑 데일리 잡의 기동·완료·실패를 로그로 판정한다.
+
+    run_daily.sh 는 08:00 기동 직후 jitter_sleep 을 먼저 기록하므로, 오늘자 로그가
+    없다는 것은 잡이 아예 뜨지 않았다는 뜻이다(launchd 미로드·맥 종료·전원). 발행
+    결과(check_briefs_published)만 보던 종전 점검은 "안 떴다"와 "돌았지만 실패"를
+    구분하지 못해, 원인 없는 미확인 경보만 냈다(2026-09-04).
+
+    오전(am)은 생성 창과 겹치므로 미완료를 경보하지 않는다 — 확정은 pm 이 한다."""
+    try:
+        with open(log_path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return ("warn", "오늘 브리핑 잡 미기동 — 로그 없음(launchd 로드 여부 확인)")
+    hits = [label for marker, label in _BRIEF_FAIL_MARKERS if marker in text]
+    if hits:
+        return ("warn", f"브리핑 생성 실패 — {', '.join(hits)}")
+    if '"done dry_run=' in text:
+        return ("ok", "브리핑 데일리 잡 완료")
+    if mode == "am":
+        return ("ok", "브리핑 생성 진행 중 — 생성 창(08:00~10:00)")
+    return ("warn", "브리핑 데일리 잡 미완료 — 기동했으나 종료 기록 없음")
+
+
 def check_claude_auth(
     authorized: bool | None,
     refresh_expires_at: float | None,
