@@ -161,3 +161,20 @@ def test_usage_limited_expires_after_cooldown(monkeypatch):
     assert generate.usage_limited()
     now[0] += 2
     assert not generate.usage_limited()    # 쿨다운이 지나면 저절로 풀린다
+
+
+def test_cwd_is_passed_to_the_subprocess_and_bad_paths_are_ignored(harness, monkeypatch, tmp_path):
+    """MCP 서버가 보이는 디렉터리에서 띄우기 위한 cwd. 없는 경로면 무시하고 상속한다(크래시 금지)."""
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cwd"] = kw.get("cwd")
+        return subprocess.CompletedProcess(cmd, 0, "out", "")
+    monkeypatch.setattr(generate.Path, "exists", lambda self: True)
+    monkeypatch.setattr(generate.subprocess, "run", fake_run)
+    run_claude_cli(system_prompt="s", user_msg="u", parse=lambda x: x, cwd=str(tmp_path))
+    assert seen["cwd"] == str(tmp_path)
+    run_claude_cli(system_prompt="s", user_msg="u", parse=lambda x: x, cwd=str(tmp_path / "없는디렉터리"))
+    assert seen["cwd"] is None
+    run_claude_cli(system_prompt="s", user_msg="u", parse=lambda x: x)
+    assert seen["cwd"] is None

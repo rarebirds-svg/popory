@@ -1,5 +1,6 @@
 # 브라우저 비공개 발행 — 지시문이 비공개를 강제하고, 결과 태그를 상태로 매핑하며, 실패는 failed 회신.
 import json
+from pathlib import Path
 
 import pytest
 
@@ -166,3 +167,22 @@ def test_failure_note_carries_the_setup_hint():
     r = pb.publish(_task(), runner=lambda **kw: kw["parse"](
         '<publish_result>{"ok": false, "reason": "other", "note": "MCP 도구 권한 승인을 받지 못했습니다"}</publish_result>'))
     assert r["status"] == "failed" and "POPORY_BROWSER_TOOLS" in r["error"]
+
+
+def test_publish_runs_claude_in_the_dir_where_the_aside_server_is_registered():
+    """claude 의 local 범위 MCP 등록은 디렉터리마다 따로다. launchd 가 준 cwd(루트/홈)에서 띄우면
+    aside 서버가 아예 안 붙는다 — 저장소 루트를 명시해 띄운다."""
+    seen = {}
+
+    def runner(*, parse, **kw):
+        seen.update(kw)
+        return parse('<publish_result>{"ok": true, "url": "u", "visibility": "private"}</publish_result>')
+    pb.publish(_task(), runner=runner)
+    assert seen["cwd"] == pb.PUBLISH_CWD
+    assert Path(pb.PUBLISH_CWD).is_dir()          # 저장소 루트로 해석돼야 한다
+    assert (Path(pb.PUBLISH_CWD) / "services" / "content").is_dir()
+
+
+def test_setup_hint_covers_mcp_server_scope():
+    hint = pb._setup_hint("aside mcp server not available")
+    assert "claude mcp get aside" in hint and "POPORY_PUBLISH_CWD" in hint

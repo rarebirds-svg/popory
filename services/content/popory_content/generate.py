@@ -92,10 +92,16 @@ class GenerateError(Exception):
 def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], T],
                    job_id: str = "adhoc", model: str = DEFAULT_MODEL,
                    timeout_seconds: int | None = None, max_attempts: int | None = None,
-                   allowed_tools: tuple[str, ...] = ("WebSearch", "WebFetch")) -> T:
+                   allowed_tools: tuple[str, ...] = ("WebSearch", "WebFetch"),
+                   cwd: str | None = None) -> T:
     """claude CLI 호출 → parse(stdout). 타임아웃·비제로종료·파싱실패에 재시도.
     경량 호출(번역 등)은 timeout_seconds·max_attempts·allowed_tools를 줄여 워커를 오래 막지 않게 한다.
-    None이면 모듈 기본값(TIMEOUT_SECONDS·MAX_ATTEMPTS)을 호출 시점에 읽는다(런타임 변경 반영)."""
+    None이면 모듈 기본값(TIMEOUT_SECONDS·MAX_ATTEMPTS)을 호출 시점에 읽는다(런타임 변경 반영).
+
+    cwd 는 **MCP 서버가 보이는 디렉터리**를 지정할 때 쓴다. claude 의 local 범위 MCP 등록은
+    디렉터리마다 따로라(~/.claude.json 의 projects.<path>.mcpServers), 그 디렉터리 밖에서 띄운
+    claude 에는 서버가 아예 없다. launchd 는 워커에 작업 디렉터리를 지정하지 않아 cwd 가
+    루트/홈이 되므로, 서버가 필요한 호출은 명시해야 한다(2026-09-05 발행 실패). 없는 경로는 무시한다."""
     timeout_seconds = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     max_attempts = MAX_ATTEMPTS if max_attempts is None else max_attempts
     if not Path(CLAUDE_BIN).exists():
@@ -106,11 +112,13 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
     if allowed_tools:
         cmd += ["--allowed-tools", *allowed_tools]
     cmd += ["--system-prompt-file", str(sys_path), "--output-format", "text"]
+    run_cwd = cwd if cwd and Path(cwd).is_dir() else None
     try:
         for attempt in range(1, max_attempts + 1):
             last = attempt == max_attempts
             try:
-                result = subprocess.run(cmd, input=user_msg, capture_output=True, text=True, timeout=timeout_seconds)
+                result = subprocess.run(cmd, input=user_msg, capture_output=True, text=True,
+                                        timeout=timeout_seconds, cwd=run_cwd)
             except subprocess.TimeoutExpired:
                 if not last:
                     wait = _retry_backoff(attempt); _log_retry(attempt, wait, f"timeout {timeout_seconds}s")
