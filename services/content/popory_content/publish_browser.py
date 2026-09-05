@@ -53,6 +53,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 PUBLISH_CWD = os.environ.get("POPORY_PUBLISH_CWD", "")
 # 유튜브 커뮤니티 글은 비공개 옵션이 없다 — 예약 게시를 이 일수 뒤로 잡아 검수 전 노출을 막는다.
 YOUTUBE_SCHEDULE_DAYS = int(os.environ.get("POPORY_YOUTUBE_POST_SCHEDULE_DAYS", "30"))
+# 성공 보고를 믿기 전에 본문이 실제로 들어갔는지 대조하는 하한 비율. 2026-09-05 티스토리에 제목·태그만
+# 들어가고 본문이 빈 글이 "등록 완료" 로 보고됐다 — 편집기 모드 전환이 본문을 날렸는데 확인을 안 했다.
+# 그래서 성공 보고에 body_chars(편집기에서 확인한 본문 글자 수)를 요구하고 원고 텍스트 길이와 견준다.
+PUBLISH_MIN_BODY_RATIO = float(os.environ.get("POPORY_PUBLISH_MIN_BODY_RATIO", "0.5"))
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
 
 _RESULT = re.compile(r"<publish_result>(.*?)</publish_result>", re.S)
 _TAG_OPEN = "<publish_result>"
@@ -86,6 +92,7 @@ SYSTEM_PROMPT = """당신은 사용자의 브라우저를 대신 조작해 글�
 (비밀번호를 묻거나 추측하지 않습니다).
 
 절대 규칙:
+- **본문이 들어갔는지 확인하기 전에는 성공이 아닙니다.** 편집기에 본문을 넣은 뒤, 그리고 발행한 뒤 그 글을 열어, 본문이 실제로 보이는지 두 번 확인합니다. 제목과 태그만 들어가고 본문이 빈 글이 "완료" 로 보고된 적이 있습니다(2026-09-05). 본문이 비었으면 발행하지 말고 `ok: false`, `reason: "editor_error"` 로 보고합니다.
 - **공개로 게시하지 않습니다.** 공개 범위는 항상 '비공개'(없으면 지시된 대체 방식)로 두고, 확인 후에만 등록합니다.
 - 같은 글을 두 번 올리지 않습니다. 등록 전에 임시저장·초안 목록에 같은 제목이 있으면 그것을 이어서 씁니다.
 - 본문을 요약하거나 고치지 않습니다. 주어진 제목·본문·태그를 그대로 씁니다(편집기가 못 받는 서식만 조정).
@@ -93,10 +100,35 @@ SYSTEM_PROMPT = """당신은 사용자의 브라우저를 대신 조작해 글�
 - **어떤 경우에도 마지막 응답에는 아래 태그가 있어야 합니다.** 성공·실패·중단·확인 불가 전부 해당합니다. 태그 없이 끝내면 시스템은 글이 올라갔는지조차 알 수 없고, 발행은 재시도하지 않으므로 그대로 미아가 됩니다. 확신이 없으면 `ok: false` 에 무엇까지 했는지 note 로 적으십시오.
 - 태그 안에는 **JSON 객체 하나만** 넣습니다. ``` 표시, 설명 문장, 태그 두 개는 넣지 않습니다.
 - 작업이 끝나면 마지막 응답에 태그 하나만 남깁니다(태그 안 코드블록 표시 금지):
-<publish_result>{"ok": true, "url": "등록된 글 주소", "visibility": "private", "note": "짧은 메모"}</publish_result>
+<publish_result>{"ok": true, "url": "등록된 글 주소", "visibility": "private", "body_chars": 1234, "note": "짧은 메모"}</publish_result>
+- `body_chars` 는 **편집기에서 눈으로 확인한 본문의 대략적인 글자 수**(태그 제외)입니다. 추측해서 적지 말고 실제로 본 분량을 적습니다. 시스템이 원고 길이와 대조해 절반에 못 미치면 실패로 처리하므로, 본문을 확인하지 않았다면 `ok: true` 를 쓰지 마십시오.
 실패하거나 비공개로 올릴 수 없으면:
 <publish_result>{"ok": false, "reason": "no_private_option | login_required | editor_error | other", "note": "무엇이 막혔는지"}</publish_result>
 """
+
+
+def visible_text_len(html: str) -> int:
+    """HTML 에서 태그를 걷어낸 눈에 보이는 글자 수. 편집기에 들어간 분량과 견주는 기준이다."""
+    return len(_WS_RE.sub(" ", _TAG_RE.sub(" ", html or "")).strip())
+
+
+def check_body(result: dict[str, Any], draft: str) -> str:
+    """성공 보고의 본문 확인값을 검증한다. 문제가 있으면 사람이 읽을 사유, 없으면 빈 문자열.
+    편집기가 본문을 삼켜도 발행 자체는 성공하므로, 이 대조가 없으면 빈 글이 '완료' 로 남는다."""
+    expected = visible_text_len(draft)
+    if expected == 0:
+        return ""
+    raw = result.get("body_chars")
+    try:
+        got = int(raw)
+    except (TypeError, ValueError):
+        return ("본문 확인값(body_chars) 미보고 — 본문이 비었을 수 있습니다. "
+                "등록된 글의 본문을 직접 확인하세요")
+    floor = int(expected * PUBLISH_MIN_BODY_RATIO)
+    if got < floor:
+        return (f"본문이 비었거나 잘렸습니다 — 편집기 확인 {got}자, 원고 {expected}자(하한 {floor}자). "
+                "편집기 모드 전환이 본문을 날린 경우가 많습니다")
+    return ""
 
 
 def _strip_fences(text: str) -> str:
@@ -184,14 +216,17 @@ def build_instructions(task: dict[str, Any], body_path: Path) -> str:
             "2. 본문은 HTML 입니다. 스마트에디터는 HTML 붙여넣기를 받지 않으므로 소제목(h2/h3)은 에디터의 '소제목' 서식으로, 문단·목록·인용은 각각 대응 서식으로 옮겨 넣습니다. <figure> 의 이미지 URL 은 '사진 → URL' 로 삽입하고 캡션(출처)을 그대로 붙입니다. 유튜브 iframe 은 '동영상' 로 링크만 삽입합니다. 넣을 수 없는 요소는 건너뛰고 note 에 적습니다.",
             "3. 발행 설정에서 태그를 입력하고, **공개 설정을 '비공개'** 로 바꿉니다. '이웃공개'·'전체공개'는 안 됩니다.",
             "4. 비공개가 선택된 것을 확인한 뒤 발행합니다. 발행된 글 주소를 url 에 넣습니다.",
+            "5. 발행 후 그 글을 열어 **본문이 실제로 보이는지** 확인합니다. 비어 있으면 성공으로 보고하지 않습니다.",
         ]
     elif kind == "tistory":
         steps = [
             f"대상: 티스토리 {task['target'].get('blog_url') or 'https://www.tistory.com'} 의 관리자 글쓰기 페이지.",
-            "1. 제목 칸에 제목을 입력합니다.",
-            "2. 편집기를 'HTML' 모드로 전환하고 본문 파일의 HTML 을 그대로 붙여 넣습니다(기본 모드에 붙이면 서식이 깨집니다).",
-            "3. 태그를 입력하고, 발행 설정(완료 버튼 옆)에서 **공개 여부를 '비공개'** 로 둡니다.",
-            "4. 비공개가 선택된 것을 확인한 뒤 '비공개 저장/발행' 합니다. 글 주소를 url 에 넣습니다.",
+            "1. **본문을 넣기 전에 먼저** 편집기를 'HTML' 모드로 전환합니다. 내용을 넣은 뒤에 모드를 바꾸면 본문이 지워집니다.",
+            "2. 제목 칸에 제목을 입력합니다.",
+            "3. HTML 모드 편집 영역에 본문 HTML 을 그대로 넣습니다. 한 번에 붙여넣기가 안 되면 나눠 넣되, **넣은 뒤 편집기에 실제로 남아 있는지 눈으로 확인합니다.** 티스토리 HTML 모드는 코드 편집기라 붙여넣기가 조용히 실패하는 일이 잦습니다.",
+            "4. **HTML 모드로 넣었으면 기본 모드로 되돌리지 않습니다** — 되돌리는 순간 본문이 날아갑니다.",
+            "5. 태그를 입력하고, 발행 설정(완료 버튼 옆)에서 **공개 여부를 '비공개'** 로 둡니다.",
+            "6. 비공개가 선택된 것을 확인한 뒤 '비공개 저장/발행' 하고, 그 글을 열어 **본문이 실제로 보이는지** 확인합니다. 글 주소를 url 에 넣습니다.",
         ]
     else:  # youtube-community
         steps = [
@@ -238,10 +273,16 @@ def publish(task: dict[str, Any], *, runner=run_claude_cli) -> dict[str, Any]:
             return {"status": "deferred", "error": msg[:500]}
         return {"status": "failed", "error": msg[:500]}
     if result.get("ok"):
+        url = str(result.get("url") or "")[:2000]
         if str(result.get("visibility") or "private") not in ("private", "scheduled"):
             # 스킬이 공개로 올렸다고 보고하면 성공으로 기록하지 않는다 — 사람이 바로 확인해야 한다.
-            return {"status": "failed", "error": f"공개 상태로 등록됨({result.get('visibility')}) — 즉시 확인 필요: {result.get('url', '')}"[:500]}
-        return {"status": "done", "url": str(result.get("url") or "")[:2000]}
+            return {"status": "failed", "error": f"공개 상태로 등록됨({result.get('visibility')}) — 즉시 확인 필요: {url}"[:500]}
+        body_problem = check_body(result, task.get("draft", ""))
+        if body_problem:
+            # 글은 이미 올라갔다. 재시도하면 중복이므로 고쳐 쓸 대상으로 안내한다.
+            return {"status": "failed",
+                    "error": f"{body_problem}. 새로 올리지 말고 그 글을 열어 본문을 채우세요: {url}"[:500]}
+        return {"status": "done", "url": url}
     reason = str(result.get("reason") or "other")
     note = str(result.get("note") or "")[:300]
     hint = _setup_hint(note)

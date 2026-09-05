@@ -82,7 +82,7 @@ def test_publish_maps_results_and_writes_payload_files(tmp_path):
 
     def runner(*, system_prompt, user_msg, parse, **kw):
         seen.update(kw); seen["um"] = user_msg
-        return parse('<publish_result>{"ok": true, "url": "https://blog.naver.com/me/1", "visibility": "private"}</publish_result>')
+        return parse('<publish_result>{"ok": true, "url": "https://blog.naver.com/me/1", "visibility": "private", "body_chars": 20}</publish_result>')
     assert pb.publish(_task(), runner=runner) == {"status": "done", "url": "https://blog.naver.com/me/1"}
     assert seen["allowed_tools"] == pb.BROWSER_TOOLS and seen["max_attempts"] == 1   # 중복 게시 방지: 재시도 없음
     assert (tmp_path / "pub" / "j1.html").read_text() == "<h2>부</h2><p>본문</p>"
@@ -94,7 +94,7 @@ def test_publish_maps_results_and_writes_payload_files(tmp_path):
     r = pb.publish(_task(), runner=lambda **kw: kw["parse"]('<publish_result>{"ok": false, "reason": "login_required"}</publish_result>'))
     assert r == {"status": "failed", "error": "login_required"}
     # 공개로 올렸다고 보고하면 성공으로 치지 않는다
-    r = pb.publish(_task(), runner=lambda **kw: kw["parse"]('<publish_result>{"ok": true, "url": "u", "visibility": "public"}</publish_result>'))
+    r = pb.publish(_task(), runner=lambda **kw: kw["parse"]('<publish_result>{"ok": true, "url": "u", "visibility": "public", "body_chars": 20}</publish_result>'))
     assert r["status"] == "failed" and "즉시 확인" in r["error"]
 
 
@@ -106,7 +106,7 @@ def test_publish_fail_open_on_cli_error():
 
 def test_publish_custom_cmd(monkeypatch, tmp_path):
     script = tmp_path / "pub.sh"
-    script.write_text('#!/bin/sh\ncat >/dev/null; echo \'<publish_result>{"ok": true, "url": "https://me.tistory.com/9", "visibility": "private"}</publish_result>\'\n')
+    script.write_text('#!/bin/sh\ncat >/dev/null; echo \'<publish_result>{"ok": true, "url": "https://me.tistory.com/9", "visibility": "private", "body_chars": 20}</publish_result>\'\n')
     script.chmod(0o755)
     monkeypatch.setattr(pb, "PUBLISH_CMD", str(script))
     assert pb.publish(_task("tistory"), runner=lambda **kw: 1/0) == {"status": "done", "url": "https://me.tistory.com/9"}
@@ -127,7 +127,7 @@ class FakeClient:
 def test_run_publish_once_reports_and_logs(tmp_path):
     assert pb.run_publish_once(FakeClient({})) is False
     client = FakeClient(_task())
-    ok = pb.run_publish_once(client, runner=lambda **kw: kw["parse"]('<publish_result>{"ok": true, "url": "https://blog.naver.com/me/1"}</publish_result>'))
+    ok = pb.run_publish_once(client, runner=lambda **kw: kw["parse"]('<publish_result>{"ok": true, "url": "https://blog.naver.com/me/1", "body_chars": 20}</publish_result>'))
     assert ok is True
     assert client.patched == [("/api/content/jobs/j1/publish-result", {"status": "done", "url": "https://blog.naver.com/me/1"})]
     text = "".join(p.read_text() for p in (tmp_path / "logs").glob("*"))
@@ -225,3 +225,61 @@ def test_publish_cwd_defaults_to_inherit_and_is_overridable(monkeypatch):
 def test_setup_hint_covers_mcp_server_scope():
     hint = pb._setup_hint("aside mcp server not available")
     assert "claude mcp get aside" in hint and "POPORY_PUBLISH_CWD" in hint
+
+
+_LONG_DRAFT = "<h2>이기적 유전자</h2><p>" + "유전자는 자신을 복제한다. " * 40 + "</p>"
+
+
+def _long_task():
+    t = _task("tistory", "naver-blog")
+    t["draft"] = _LONG_DRAFT
+    return t
+
+
+def test_visible_text_len_strips_tags():
+    assert pb.visible_text_len("<p>가나다</p>") == 3
+    assert pb.visible_text_len("<figure><img src='x'><figcaption>출처</figcaption></figure>") == 2
+    assert pb.visible_text_len("") == 0 and pb.visible_text_len(None) == 0
+
+
+def test_empty_body_reported_as_success_is_rejected():
+    """2026-09-05 티스토리에 제목·태그만 들어간 빈 글이 "등록 완료" 로 보고됐다.
+    발행 자체는 성공하므로 본문 대조가 없으면 빈 글이 완료로 남는다."""
+    def empty_body(**kw):
+        return kw["parse"]('<publish_result>{"ok": true, "url": "https://me.tistory.com/9", '
+                           '"visibility": "private", "body_chars": 0}</publish_result>')
+    r = pb.publish(_long_task(), runner=empty_body)
+    assert r["status"] == "failed"
+    assert "본문이 비었거나 잘렸습니다" in r["error"]
+    assert "새로 올리지 말고" in r["error"] and "https://me.tistory.com/9" in r["error"]   # 중복 게시 방지
+
+
+def test_body_chars_missing_or_short_is_rejected_but_full_body_passes():
+    def report(payload):
+        return lambda **kw: kw["parse"](f"<publish_result>{payload}</publish_result>")
+    base = '"ok": true, "url": "u", "visibility": "private"'
+    # 미보고 → 확인 안 한 성공은 믿지 않는다
+    assert pb.publish(_long_task(), runner=report("{" + base + "}"))["status"] == "failed"
+    # 하한(원고 텍스트의 50%) 바로 아래 → 실패, 바로 위 → 성공
+    expected = pb.visible_text_len(_LONG_DRAFT)
+    floor = int(expected * pb.PUBLISH_MIN_BODY_RATIO)
+    assert pb.publish(_long_task(), runner=report(f'{{{base}, "body_chars": {floor - 1}}}'))["status"] == "failed"
+    assert pb.publish(_long_task(), runner=report(f'{{{base}, "body_chars": {floor}}}')) == {"status": "done", "url": "u"}
+    # 원고가 비어 있으면 대조할 게 없다 — 예전처럼 통과
+    empty = _long_task(); empty["draft"] = ""
+    assert pb.publish(empty, runner=report("{" + base + "}"))["status"] == "done"
+
+
+def test_tistory_steps_switch_mode_before_typing_and_verify_body():
+    """모드 전환이 본문을 날린다 — HTML 모드로 먼저 바꾸고, 넣은 뒤 되돌리지 않으며, 눈으로 확인한다."""
+    steps = pb.build_instructions(_task("tistory"), Path("/tmp/x.html"))
+    before = steps.index("본문을 넣기 전에 먼저")
+    assert before < steps.index("제목 칸에 제목을 입력합니다")     # 모드 전환이 입력보다 앞
+    assert "기본 모드로 되돌리지 않습니다" in steps
+    assert "본문이 실제로 보이는지" in steps
+    assert "본문이 실제로 보이는지" in pb.build_instructions(_task("naver"), Path("/tmp/x.html"))
+
+
+def test_prompt_makes_body_verification_a_success_condition():
+    assert "본문이 들어갔는지 확인하기 전에는 성공이 아닙니다" in pb.SYSTEM_PROMPT
+    assert "body_chars" in pb.SYSTEM_PROMPT
