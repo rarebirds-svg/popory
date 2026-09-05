@@ -56,6 +56,13 @@ def test_success_posts_review(monkeypatch):
     assert body["meta"]["seo"]["score"] == 80
 
 
+@pytest.fixture(autouse=True)
+def _passthrough_seo_review(monkeypatch):
+    """워커 테스트 기본값: SEO 검토는 원문을 그대로 돌려준다(검토 자체는 test_seo_review 가 본다)."""
+    monkeypatch.setattr(worker, "review_blog", lambda d, m, **kw: (d, m))
+    monkeypatch.setattr(worker, "review_youtube_post", lambda d, m, **kw: (d, m))
+
+
 def test_youtube_post_branch_reviews(monkeypatch):
     monkeypatch.setattr(
         worker, "generate_youtube_post",
@@ -69,6 +76,31 @@ def test_youtube_post_branch_reviews(monkeypatch):
     assert body["status"] == "review"
     assert body["draft"] == "오늘의 문장 게시물"
     assert body["meta"]["book"] == "책"
+
+
+def test_blog_and_post_go_through_seo_review(monkeypatch, tmp_path):
+    """생성 → SEO·AEO·GEO 검토 → 회신. 교정본이 채택되면 회신 draft·meta 가 교정본이고 로그에 점수가 남는다."""
+    monkeypatch.setattr(worker, "generate", lambda **kw: ("<p>원문</p>", {"title": "t"}))
+    monkeypatch.setattr(worker, "review_blog",
+                        lambda d, m, *, topic, job_id: (d + "<h2>FAQ</h2>", {**m, "title": "새 제목", "seo_review": {"status": "ok", "overall": 81, "revised": True}}))
+    client = FakeClient({"job": {"id": "b1", "topic": "돈의 심리학"}, "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    _, body = client.patched[0]
+    assert body["draft"] == "<p>원문</p><h2>FAQ</h2>" and body["meta"]["title"] == "새 제목"
+    assert body["meta"]["seo_review"]["overall"] == 81
+    logs = (worker.LOGS_DIR).glob("*")
+    text = "".join(p.read_text() for p in logs)
+    assert "seo_reviewed" in text and '"overall": 81' in text
+    # 검토기 실패(unavailable)는 원문 그대로 review 로 가고 error 로그가 남는다
+    monkeypatch.setattr(worker, "generate_youtube_post", lambda **kw: ("게시글", {"book": "책"}))
+    monkeypatch.setattr(worker, "review_youtube_post",
+                        lambda d, m, *, topic, job_id: (d, {**m, "seo_review": {"status": "unavailable", "error": "cli down"}}))
+    client = FakeClient({"job": {"id": "p2", "topic": "책", "platform": "youtube-post"}, "sources": [], "style_samples": []})
+    worker.run_once(client)
+    _, body = client.patched[0]
+    assert body["status"] == "review" and body["draft"] == "게시글"
+    text = "".join(p.read_text() for p in worker.LOGS_DIR.glob("*"))
+    assert "seo_review_error" in text
 
 
 def test_failure_posts_failed(monkeypatch):
@@ -442,9 +474,10 @@ def test_run_cycle_attempts_upload_even_when_generating(monkeypatch):
     monkeypatch.setattr(worker, "run_upload_once", lambda c: (calls.append("up") or False))
     monkeypatch.setattr(worker, "run_instagram_upload_once", lambda c: (calls.append("ig") or False))
     monkeypatch.setattr(worker, "run_facebook_upload_once", lambda c: (calls.append("fb") or False))
+    monkeypatch.setattr(worker, "run_publish_once", lambda c: (calls.append("pub") or False))
     monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: (calls.append("brief") or False))
     assert worker.run_cycle(object()) is True
-    assert calls == ["gen", "up", "ig", "fb"]   # 생성 처리돼도 업로드·IG·FB 시도, 저순위 브리핑은 건너뜀
+    assert calls == ["gen", "up", "ig", "fb", "pub"]   # 생성 처리돼도 업로드·IG·FB·발행 시도, 저순위 브리핑은 건너뜀
 
 
 def test_run_cycle_brief_only_when_all_idle(monkeypatch):
@@ -454,9 +487,10 @@ def test_run_cycle_brief_only_when_all_idle(monkeypatch):
     monkeypatch.setattr(worker, "run_upload_once", lambda c: (calls.append("up") or False))
     monkeypatch.setattr(worker, "run_instagram_upload_once", lambda c: (calls.append("ig") or False))
     monkeypatch.setattr(worker, "run_facebook_upload_once", lambda c: (calls.append("fb") or False))
+    monkeypatch.setattr(worker, "run_publish_once", lambda c: (calls.append("pub") or False))
     monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: (calls.append("brief") or True))
     assert worker.run_cycle(object()) is True
-    assert calls == ["gen", "up", "ig", "fb", "brief"]
+    assert calls == ["gen", "up", "ig", "fb", "pub", "brief"]
 
 
 def test_run_cycle_idle_returns_false(monkeypatch):
@@ -465,6 +499,7 @@ def test_run_cycle_idle_returns_false(monkeypatch):
     monkeypatch.setattr(worker, "run_upload_once", lambda c: False)
     monkeypatch.setattr(worker, "run_instagram_upload_once", lambda c: False)
     monkeypatch.setattr(worker, "run_facebook_upload_once", lambda c: False)
+    monkeypatch.setattr(worker, "run_publish_once", lambda c: False)
     monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: False)
     assert worker.run_cycle(object()) is False
 

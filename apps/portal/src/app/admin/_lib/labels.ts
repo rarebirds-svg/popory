@@ -7,6 +7,8 @@ const STATUS: Record<string, string> = {
   done: "완료",
   success: "완료",
   uploaded: "업로드됨",
+  publishing: "등록 중",
+  skipped: "건너뜀",
 };
 const DELIVERY: Record<string, string> = { standalone: "단독", bundled: "묶음" };
 const SERVICE: Record<string, string> = { content: "콘텐츠", brief: "브리핑" };

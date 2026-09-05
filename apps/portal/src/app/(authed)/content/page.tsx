@@ -42,6 +42,7 @@ export default async function ContentHome() {
           <Link href="/content/styles" className="hover:text-popory-fg">스타일 프로필</Link>
           <Link href="/content/youtube" className="hover:text-popory-fg">YouTube</Link>
           <Link href="/content/instagram" className="hover:text-popory-fg">Instagram</Link>
+          <Link href="/content/publish" className="hover:text-popory-fg">비공개 발행</Link>
         </nav>
         {categories.length === 0 ? (
           <div className="mt-10 rounded-lg border border-dashed border-popory-border px-4 py-10 text-center">

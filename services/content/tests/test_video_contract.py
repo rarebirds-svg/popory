@@ -47,3 +47,39 @@ def test_missing_image_prompt_raises():
 </video_meta>"""
     with pytest.raises(ContractError):
         parse_video(text)
+
+
+def _two_scenes(last_narration="여운을 남기는 마무리입니다.", card=None):
+    second = {"caption": "핵심", "narration": last_narration, "image_prompt": "a quiet lamp"}
+    if card is not None:
+        second["card"] = card
+    scenes = [{"caption": "도입", "narration": "결론부터 말합니다.", "image_prompt": "old road"}, second]
+    import json
+    return f"<scenes_json>{json.dumps(scenes, ensure_ascii=False)}</scenes_json><video_meta>{{\"title\":\"t\",\"description\":\"d\",\"tags\":[]}}</video_meta>"
+
+
+def test_ending_cta_appended_for_longform_only():
+    from popory_content.video_prompt import ENDING_CTA_CAPTION
+    scenes, _ = parse_video(_two_scenes(), ending_cta=True)
+    assert len(scenes) == 3
+    assert scenes[-1]["caption"] == ENDING_CTA_CAPTION
+    assert "구독" in scenes[-1]["narration"] and "댓글" in scenes[-1]["narration"]
+    assert scenes[-1]["image_prompt"]  # 배경 생성이 되도록 image_prompt 필수
+    # 쇼츠(기본값)는 CTA 를 붙이지 않는다
+    scenes, _ = parse_video(_two_scenes())
+    assert len(scenes) == 2
+
+
+def test_ending_cta_not_duplicated_when_llm_wrote_it():
+    scenes, _ = parse_video(_two_scenes("도움되셨다면 구독과 좋아요 부탁드립니다. 댓글로 남겨주세요."), ending_cta=True)
+    assert len(scenes) == 2
+
+
+def test_card_normalized_and_malformed_dropped():
+    scenes, _ = parse_video(_two_scenes(card={"type": "quote", "text": "“부는 보이지 않는다”", "source": "모건 하우절"}))
+    assert scenes[1]["card"] == {"type": "quote", "text": "부는 보이지 않는다", "source": "모건 하우절"}
+    scenes, _ = parse_video(_two_scenes(card={"type": "keypoints", "title": "3원칙", "items": ["복리", " 인내심 ", "", "통제권", "다섯", "여섯"]}))
+    assert scenes[1]["card"] == {"type": "keypoints", "title": "3원칙", "items": ["복리", "인내심", "통제권", "다섯"]}
+    for bad in ({"type": "keypoints", "items": "복리"}, {"type": "quote"}, {"type": "table"}, "quote", {"type": "keypoints", "items": ["하나"]}):
+        scenes, _ = parse_video(_two_scenes(card=bad))
+        assert "card" not in scenes[1]

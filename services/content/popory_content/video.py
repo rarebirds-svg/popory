@@ -1,4 +1,5 @@
 # 영상 생성 — claude 대본(generate_scenes) + macOS say + Pillow 텍스트카드 + ffmpeg 슬라이드쇼(render_video).
+import functools
 import os
 import re
 import shutil
@@ -12,6 +13,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from popory_content.generate import run_claude_cli, model_for
+from popory_content.script_review import review_script
 from popory_content.subtitles import scene_offsets, Cue
 from popory_content.tts import synthesize, spoken_text
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
@@ -49,6 +51,19 @@ LOGO_SIZE, LOGO_SIZE_PORTRAIT = 96, 76
 LOGO_GAP = 22  # 로고와 챕터 제목 사이 여백
 # 배경음악 사용 여부. 새 BGM 선정 전까지 꺼둠(2026-07-03 요청). 재활성은 env POPORY_BGM_ENABLED=1 또는 기본값을 "1"로.
 BGM_ENABLED = os.environ.get("POPORY_BGM_ENABLED", "0") == "1"
+# BGM 분위기 전환 — 전반부(사례·긴장)는 단조 패드, 후반부(교훈·지혜)는 장조 패드로 한 번 바꾼다.
+# 파일명으로 분류한다: 단조(`min`, `_am`)면 tense, 나머지(bright·hope·calm·warm_c)는 warm.
+# 한쪽 버킷이 비면 예전처럼 한 곡을 끝까지 깐다.
+BGM_SWITCH_RATIO = float(os.environ.get("POPORY_BGM_SWITCH_RATIO", "0.55"))
+BGM_XFADE_SECONDS = 4.0
+# 그래픽 카드(명언·핵심 요약). 장면 앞에 어두운 배경의 카드 클립을 끼워 일러스트 반복을 끊는다.
+CARDS_ENABLED = os.environ.get("POPORY_CARDS", "1") != "0"
+CARD_SECONDS = float(os.environ.get("POPORY_CARD_SECONDS", "3.5"))
+CARD_BG = (12, 13, 18)
+CARD_ACCENT = (232, 197, 120)
+# 카드가 뜰 때 곁들일 효과음(차임). 없으면 무음 — 파일 유무로만 켜진다.
+SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
+CARD_SFX = SFX_DIR / "chime.mp3"
 
 
 class VideoError(Exception):
@@ -79,7 +94,9 @@ def generate_scenes(*, topic: str, sources: list[dict[str, Any]], style_samples:
     sp = sp_builder(style_samples, scene_count=scene_count, image_style_kw=image_style_kw)
     um = um_builder(topic, sources)
     # 롱폼과 쇼츠는 대본 성격이 달라 어드민에서 따로 고를 수 있다(feature 로 갈린다).
-    return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse_video, job_id=job_id,
+    # 엔딩 CTA 보장은 롱폼만 — 쇼츠는 60초 안에 CTA 를 넣지 않는다.
+    parse = functools.partial(parse_video, ending_cta=(feature == "video_script"))
+    return run_claude_cli(system_prompt=sp, user_msg=um, parse=parse, job_id=job_id,
                           model=model_for(feature))
 
 
@@ -224,6 +241,66 @@ def _render_headline_png(title: str, out_png: Path, portrait: bool = False) -> N
     img.save(out_png)
 
 
+def _render_graphic_card_png(card: dict[str, Any], out_png: Path, portrait: bool = False) -> None:
+    """명언·핵심 요약 카드를 어두운 배경 + 큰 글씨로 렌더한다(카드 클립의 배경).
+    quote: 큰 따옴표 + 문장 + 출처 줄. keypoints: 제목 + 번호 매긴 항목. 상단엔 브랜드 키커."""
+    w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
+    img = Image.new("RGB", (w, h), CARD_BG)
+    d = ImageDraw.Draw(img)
+    kicker_font = ImageFont.truetype(FONT_PATH, 40 if portrait else 44)
+    d.text((w / 2, 110 if portrait else 96), "포포리 책방", font=kicker_font, fill=CARD_ACCENT, anchor="ma")
+    # 키커 아래 짧은 액센트 선
+    d.rectangle((w / 2 - 40, (170 if portrait else 156), w / 2 + 40, (174 if portrait else 160)), fill=CARD_ACCENT)
+    if card.get("type") == "quote":
+        body_font = ImageFont.truetype(FONT_PATH, 66 if portrait else 84, index=FONT_INDEX_BOLD)
+        wrap = 12 if portrait else 18
+        lines = "\n".join(textwrap.wrap(str(card.get("text", "")), width=wrap)) or " "
+        d.multiline_text((w / 2, h / 2 - (40 if card.get("source") else 0)), f"“{lines}”",
+                         font=body_font, fill=(255, 255, 255), anchor="mm", align="center", spacing=22)
+        if card.get("source"):
+            src_font = ImageFont.truetype(FONT_PATH, 40 if portrait else 46)
+            d.text((w / 2, h - (420 if portrait else 200)), f"— {card['source']}", font=src_font,
+                   fill=(200, 205, 215), anchor="ma")
+    else:
+        title_font = ImageFont.truetype(FONT_PATH, 64 if portrait else 80, index=FONT_INDEX_BOLD)
+        item_font = ImageFont.truetype(FONT_PATH, 54 if portrait else 66)
+        items = [str(x) for x in card.get("items", [])]
+        line_h = 96 if portrait else 110
+        block_h = line_h * len(items)
+        top = h / 2 - block_h / 2
+        if card.get("title"):
+            d.text((w / 2, top - (120 if portrait else 140)), str(card["title"]), font=title_font,
+                   fill=(255, 255, 255), anchor="ma")
+        for n, item in enumerate(items, 1):
+            d.text((w / 2, top + (n - 1) * line_h), f"{n}. {item}", font=item_font,
+                   fill=(230, 234, 240), anchor="ma")
+    img.save(out_png)
+
+
+def _card_clip(card: dict[str, Any], index: int, work: Path, portrait: bool = False,
+               seconds: float = CARD_SECONDS) -> Path:
+    """카드 PNG 를 seconds 동안 정지 화면으로 보여주는 클립. 오디오는 차임 효과음(assets/sfx/chime.mp3,
+    있을 때만) 아니면 무음 — 장면 오디오와 같은 24kHz 모노로 맞춰 acrossfade 가 깨지지 않게 한다.
+    글자 카드는 정지가 자연스럽고 3~4초라 켄번스를 걸지 않는다."""
+    png = work / f"card_{index}.png"
+    _render_graphic_card_png(card, png, portrait=portrait)
+    clip = work / f"card_{index}.mp4"
+    if CARD_SFX.exists():
+        audio_in = ["-i", str(CARD_SFX)]
+        afilt = "[1:a]aformat=sample_rates=24000:channel_layouts=mono,apad[a]"
+    else:
+        audio_in = ["-f", "lavfi", "-i", "anullsrc=channel_layout=mono:sample_rate=24000"]
+        afilt = "[1:a]anull[a]"
+    _run([
+        FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), *audio_in,
+        "-filter_complex", f"[0:v]format=yuv420p[v];{afilt}",
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_x264_q(portrait), "-t", f"{seconds:.3f}",
+        "-c:a", "aac", "-shortest", str(clip),
+    ])
+    return clip
+
+
 def render_thumbnail(copy: str | None, image_prompt: str | None, out_jpg: Path,
                      portrait: bool = False, image_fetcher=None) -> Path | None:
     """전용 카피·배경으로 유튜브 썸네일 JPEG 생성. copy/image_prompt 없으면 None."""
@@ -268,18 +345,36 @@ SENTENCE_GAP = 0.7
 # 챕터(상단 헤드라인)가 바뀌는 장면 경계에 넣는 호흡(무음) 길이(초). 문장 사이(마침표)보다
 # 길게 둬야 한 챕터가 끝났음이 청각적으로 구분된다 → 마침표 인터벌의 2배.
 CHAPTER_GAP = 2 * SENTENCE_GAP
+# 물음표로 끝난 문장 뒤 호흡(초). 질문을 던진 뒤("왜 무너졌을까요?") 곧바로 답으로 넘어가면
+# 시청자가 생각할 틈이 없어 톤이 단조롭게 들린다(2026-09 대표 영상 검토). 0.8~1초 무음을 둔다.
+QUESTION_GAP = float(os.environ.get("POPORY_QUESTION_GAP", "1.0"))
 XFADE_TD = 0.4  # 장면 크로스페이드 전이 길이(초). _xfade_graph·자막 오프셋이 공유.
 
 
-def _spans_from_durations(durs: list[float], gap: float = SENTENCE_GAP) -> list[tuple[float, float]]:
+def _gaps_for(sentences: list[str], gap: float = SENTENCE_GAP,
+              question_gap: float = QUESTION_GAP) -> list[float]:
+    """문장 i 와 i+1 사이에 넣을 무음 길이(len = 문장 수 - 1). 물음표 종결 뒤엔 더 긴 호흡."""
+    return [question_gap if s.rstrip().endswith("?") else gap for s in sentences[:-1]]
+
+
+def _gap_list(n: int, gap: "float | list[float]") -> list[float]:
+    """gap 이 스칼라면 n-1 개로 펼치고, 리스트면 길이를 맞춰 준다(부족분은 SENTENCE_GAP)."""
+    if isinstance(gap, (int, float)):
+        return [float(gap)] * max(0, n - 1)
+    gaps = [float(g) for g in gap][: max(0, n - 1)]
+    return gaps + [SENTENCE_GAP] * (max(0, n - 1) - len(gaps))
+
+
+def _spans_from_durations(durs: list[float], gap: "float | list[float]" = SENTENCE_GAP) -> list[tuple[float, float]]:
     """문장별 실측 오디오 길이로 자막 [start,end]를 정확히 계산(글자수 추정 아님 → 누적 드리프트 없음).
     각 문장은 자기 클립 길이만큼 재생되고 사이에 gap(무음)이 들어간다. 비마지막 문장 자막은
-    다음 문장 시작까지(갭 포함) 유지해 깜빡임을 없앤다."""
+    다음 문장 시작까지(갭 포함) 유지해 깜빡임을 없앤다. gap 은 스칼라 또는 문장 사이별 리스트."""
+    gaps = _gap_list(len(durs), gap)
     starts: list[float] = []
     acc = 0.0
-    for d in durs:
+    for i, d in enumerate(durs):
         starts.append(acc)
-        acc += d + gap
+        acc += d + (gaps[i] if i < len(gaps) else 0.0)
     spans: list[tuple[float, float]] = []
     for i, st in enumerate(durs):
         end = starts[i + 1] if i + 1 < len(durs) else starts[i] + durs[i]
@@ -287,18 +382,25 @@ def _spans_from_durations(durs: list[float], gap: float = SENTENCE_GAP) -> list[
     return spans
 
 
-def _concat_audio_with_gaps(segments: list[Path], gap: float, out: Path) -> None:
-    """문장별 오디오 클립을 사이에 gap(무음)을 넣어 한 장면 오디오로 이어붙인다(필터 concat=재인코딩)."""
+def _concat_audio_with_gaps(segments: list[Path], gap: "float | list[float]", out: Path) -> None:
+    """문장별 오디오 클립을 사이에 gap(무음)을 넣어 한 장면 오디오로 이어붙인다(필터 concat=재인코딩).
+    gap 은 스칼라 또는 문장 사이별 리스트(_gaps_for) — 질문 뒤엔 더 긴 무음이 들어간다."""
     if len(segments) == 1:
         shutil.copy(segments[0], out)
         return
-    sil = out.with_name(f"{out.stem}_gap.wav")
-    _run([FFMPEG_BIN, "-y", "-f", "lavfi", "-t", f"{gap:.3f}",
-          "-i", "anullsrc=channel_layout=mono:sample_rate=24000", str(sil)])
+    gaps = _gap_list(len(segments), gap)
+    sil_by_len: dict[str, Path] = {}
+    for g in gaps:
+        key = f"{g:.3f}"
+        if key not in sil_by_len:
+            sil = out.with_name(f"{out.stem}_gap{key.replace('.', '_')}.wav")
+            _run([FFMPEG_BIN, "-y", "-f", "lavfi", "-t", key,
+                  "-i", "anullsrc=channel_layout=mono:sample_rate=24000", str(sil)])
+            sil_by_len[key] = sil
     seq: list[Path] = []
     for i, s in enumerate(segments):
         if i:
-            seq.append(sil)
+            seq.append(sil_by_len[f"{gaps[i - 1]:.3f}"])
         seq.append(s)
     inputs: list[str] = []
     for p in seq:
@@ -385,6 +487,11 @@ ZOOM_SPAN_MIN, ZOOM_SPAN_MAX = 0.06, 0.18
 # 없고, 편도가 같은 여유로 두 배 멀리 간다.
 PAN_RATE_PX_PER_SEC = 7.0
 PAN_MIN_PX = 40  # 이보다 짧으면 캔버스만 키우고 체감은 없어 아예 걸지 않는다
+# 한 장면 안에서 화면 구성을 바꾸는 주기(초). 롱폼은 장면이 30~50초라 그림 한 장이 그대로 서 있는데,
+# 시청자는 6~8초마다 시각 변화가 없으면 이탈한다(2026-09 대표 영상 검토). 장면을 이 길이의 샷으로
+# 쪼개 샷마다 줌 방향·기준점을 바꾼다 — 샷 경계에서 확대율이 점프해 "컷"처럼 보인다. 이미지를 더
+# 만들지 않으므로 생성 비용이 0이고, 샷 하나가 쇼츠 장면 길이라 체감 속도도 쇼츠와 같아진다.
+SHOT_SECONDS = float(os.environ.get("POPORY_SHOT_SECONDS", "8"))
 # 장면별 무빙 변주 (확대로 시작하는지 여부, 가로 줌 기준점 0~1, 패닝 정방향 여부).
 # 전 장면이 같은 무빙이면 단조로우므로 인접 항목은 줌 방향이 서로 다르게 배열한다(순환 지점 포함).
 _MOTIONS: tuple[tuple[bool, float, bool], ...] = (
@@ -400,6 +507,13 @@ _MOTIONS: tuple[tuple[bool, float, bool], ...] = (
 def _zoom_amplitude(dur: float) -> float:
     """장면 길이에 맞는 줌 폭. 왕복이라 절반 만에 피크를 찍으므로 목표 속도 × (길이/2)."""
     return min(ZOOM_SPAN_MAX, max(ZOOM_SPAN_MIN, ZOOM_RATE_PER_SEC * dur / 2))
+
+
+def _shot_count(dur: float) -> int:
+    """장면을 몇 개 샷으로 쪼갤지. 두 샷도 안 나오는 짧은 장면(쇼츠 7초)은 그대로 한 샷."""
+    if SHOT_SECONDS <= 0 or dur < 2 * SHOT_SECONDS:
+        return 1
+    return max(1, round(dur / SHOT_SECONDS))
 
 
 def _pan_headroom(size: tuple[int, int] | None, portrait: bool = False) -> int:
@@ -443,15 +557,30 @@ def _zoompan_filter(dur: float, portrait: bool = False, variant: int = 0,
     slack = max(0, pan_px) * 2  # 수퍼샘플 기준 여유
     cw, ch = (bw + slack, bh) if portrait else (bw, bh + slack)
     zoom_in_first, xpos, pan_forward = _MOTIONS[variant % len(_MOTIONS)]
-    amp = _zoom_amplitude(dur)
-    # 삼각파. on=0에서 0, on=frames/2에서 1, on=frames에서 다시 0으로 돌아온다.
-    tri = f"(1-abs(1-2*on/{frames}))"
-    z = (f"1.0+{amp:.4f}*{tri}" if zoom_in_first
-         else f"{1 + amp:.4f}-{amp:.4f}*{tri}")
+    shots = _shot_count(dur)
+    if shots == 1:
+        amp = _zoom_amplitude(dur)
+        # 삼각파. on=0에서 0, on=frames/2에서 1, on=frames에서 다시 0으로 돌아온다.
+        tri = f"(1-abs(1-2*on/{frames}))"
+        z = (f"1.0+{amp:.4f}*{tri}" if zoom_in_first
+             else f"{1 + amp:.4f}-{amp:.4f}*{tri}")
+        x_expr, y_expr = f"(iw-iw/zoom)*{xpos:.2f}", "(ih-ih/zoom)*0.50"
+    else:
+        # 샷 단위 왕복 줌. 샷 길이로 폭을 잡으므로(8초 → 하한 0.06) 초당 속도가 쇼츠와 같아지고,
+        # 홀수 샷은 방향을 뒤집고 기준점을 반대편으로 옮겨 샷 경계마다 구도가 바뀐다.
+        # 짝수 샷이 1.0 에서 끝나고 홀수 샷이 1+amp 에서 시작하므로 경계에서 확대율이 점프한다 — 이게 컷이다.
+        seg = frames / shots
+        amp = _zoom_amplitude(dur / shots)
+        tri = f"(1-abs(1-2*mod(on,{seg:.3f})/{seg:.3f}))"
+        even = f"eq(mod(floor(on/{seg:.3f}),2),0)"
+        z_in, z_out = f"1.0+{amp:.4f}*{tri}", f"{1 + amp:.4f}-{amp:.4f}*{tri}"
+        z = f"if({even},{z_in},{z_out})" if zoom_in_first else f"if({even},{z_out},{z_in})"
+        x_expr = f"(iw-iw/zoom)*if({even},{xpos:.2f},{1 - xpos:.2f})"
+        y_expr = f"(ih-ih/zoom)*if({even},0.50,0.40)"
     graph = (
         f"scale={cw}:{ch},"
         f"zoompan=z='{z}':d={frames}"
-        f":x='(iw-iw/zoom)*{xpos:.2f}':y='(ih-ih/zoom)*0.50':s={cw}x{ch}:fps=30"
+        f":x='{x_expr}':y='{y_expr}':s={cw}x{ch}:fps=30"
     )
     if slack:
         # 편도 이동. 정방향은 0에서 여유 끝까지, 역방향은 그 반대.
@@ -491,6 +620,60 @@ def _pick_bgm(bgm_dir: Path, job_id: str) -> Path | None:
     if not files:
         return None
     return files[zlib.crc32(job_id.encode()) % len(files)]
+
+
+def _bgm_mood(path: Path) -> str:
+    """파일명으로 단조(tense)/장조(warm) 분류. 단조 키 표기(`min`, `_am`)가 있으면 tense."""
+    name = path.stem.lower()
+    return "tense" if ("min" in name or name.endswith("_am")) else "warm"
+
+
+def _pick_bgm_moods(bgm_dir: Path, job_id: str) -> tuple[Path, Path] | None:
+    """전반부용 tense 곡과 후반부용 warm 곡을 job_id 로 결정적으로 고른다. 한쪽이 비면 None."""
+    if not bgm_dir.is_dir():
+        return None
+    files = sorted(bgm_dir.glob("*.mp3"))
+    tense = [f for f in files if _bgm_mood(f) == "tense"]
+    warm = [f for f in files if _bgm_mood(f) == "warm"]
+    if not tense or not warm:
+        return None
+    seed = zlib.crc32(job_id.encode())
+    return tense[seed % len(tense)], warm[(seed >> 8) % len(warm)]
+
+
+def _build_bgm_bed(tense: Path, warm: Path, total: float, out: Path,
+                   ratio: float = BGM_SWITCH_RATIO, xfade: float = BGM_XFADE_SECONDS) -> Path:
+    """영상 길이 total 에 맞춰 tense → warm 으로 한 번 넘어가는 BGM 베드를 만든다.
+    앞 곡은 total×ratio 지점까지, 뒤 곡은 나머지를 채우고 경계는 acrossfade 로 잇는다.
+    두 곡 다 -stream_loop 로 무한 반복시켜 곡 길이가 영상보다 짧아도 끊기지 않는다."""
+    if total < 2 * xfade + 2:
+        # 너무 짧으면(쇼츠) 전환할 자리가 없다 — 앞 곡만 쓴다.
+        _run([FFMPEG_BIN, "-y", "-stream_loop", "-1", "-i", str(tense), "-t", f"{total + 1:.3f}", str(out)])
+        return out
+    first = max(xfade + 1, total * ratio)
+    second = max(xfade + 1, total - first + xfade + 1)
+    _run([
+        FFMPEG_BIN, "-y", "-stream_loop", "-1", "-i", str(tense), "-stream_loop", "-1", "-i", str(warm),
+        "-filter_complex",
+        f"[0:a]atrim=0:{first:.3f},asetpts=N/SR/TB[a0];[1:a]atrim=0:{second:.3f},asetpts=N/SR/TB[a1];"
+        f"[a0][a1]acrossfade=d={xfade:.1f}[a]",
+        "-map", "[a]", str(out),
+    ])
+    return out
+
+
+def _bgm_for(job_id: str, total: float, work: Path) -> Path | None:
+    """이 작업에 깔 BGM. 분위기 두 버킷이 다 있으면 전환 베드를 만들고, 아니면 한 곡(예전 방식).
+    베드 생성이 실패하면 한 곡으로 물러선다 — BGM 때문에 영상이 실패하면 안 된다."""
+    if not BGM_ENABLED:
+        return None
+    moods = _pick_bgm_moods(BGM_DIR, job_id)
+    if moods:
+        try:
+            return _build_bgm_bed(moods[0], moods[1], total, work / "bgm_bed.mp3")
+        except VideoError:
+            pass
+    return _pick_bgm(BGM_DIR, job_id)
 
 
 def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
@@ -562,6 +745,15 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     for i, scene in enumerate(scenes):
         caption = str(scene["caption"]).strip()
         narration = str(scene["narration"]).strip() or " "
+        # 카드가 붙은 장면은 그 장면이 시작되기 전에 카드 클립을 끼운다. cue 는 없으므로 빈 목록을
+        # 같이 넣어 clip_durations 와 scene_local_cues 의 짝을 유지한다(자막 오프셋이 그 짝으로 계산된다).
+        card = scene.get("card")
+        if CARDS_ENABLED and isinstance(card, dict):
+            try:
+                clips.append(_card_clip(card, i, work, portrait=portrait))
+                scene_local_cues.append([])
+            except Exception:  # noqa: BLE001 — 카드는 장식. 실패해도 영상은 계속 만든다
+                pass
         bg_bytes = None
         prompt = scene.get("image_prompt")
         if image_fetcher and prompt:
@@ -590,7 +782,8 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             seg_audios.append(seg)
             seg_durs.append(_duration(seg))
         audio = work / f"{i}.mp3"
-        _concat_audio_with_gaps(seg_audios, SENTENCE_GAP, audio)
+        gaps = _gaps_for(sentences)  # 질문 뒤엔 QUESTION_GAP — 자막 스팬도 같은 리스트를 쓴다
+        _concat_audio_with_gaps(seg_audios, gaps, audio)
         # 챕터(상단 헤드라인)가 바뀌는 장면 경계엔 문장 사이보다 긴 호흡을 둔다(마지막 장면 뒤엔
         # 불필요). 무음은 클립에 포함되므로 dur·clip_durations에 반영돼 cue 오프셋이 자동 정합.
         # 장면 전환 크로스페이드(XFADE_TD)가 이 무음 끝을 살짝 먹어 실제 정적은 조금 짧게 들린다.
@@ -609,7 +802,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         head_png = work / f"head_{i}.png"
         _render_headline_png(caption, head_png, portrait=portrait)
         # 헤드라인·문장 자막을 zoompan 위에 오버레이(줌과 무관하게 고정).
-        spans = _spans_from_durations(seg_durs, SENTENCE_GAP)
+        spans = _spans_from_durations(seg_durs, gaps)
         scene_local_cues.append([(st, en, sentences[k]) for k, (st, en) in enumerate(spans)])
         # 입력: 0=배경, 1=오디오, 2=헤드라인, 3=스크림, 4+=자막 조각.
         inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio),
@@ -659,7 +852,8 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         ]
         _run(cmd)
     out = work / "out.mp4"
-    _master_audio(joined, out, _pick_bgm(BGM_DIR, job_id) if BGM_ENABLED else None)
+    total = sum(clip_durations) - XFADE_TD * max(0, len(clip_durations) - 1)
+    _master_audio(joined, out, _bgm_for(job_id, total, work))
     offsets = scene_offsets(clip_durations, XFADE_TD)
     cues: list[Cue] = []
     for off, local in zip(offsets, scene_local_cues):
@@ -678,5 +872,8 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
                                    job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw,
                                    system_prompt_builder=system_prompt_builder, user_msg_builder=user_msg_builder,
                                    feature="shorts_script" if portrait else "video_script")
+    # 렌더 전에 오탈자·고유명사 검수(치환만, fail-open). TTS·자막·제목·태그가 모두 이 대본에서
+    # 나가므로 여기서 한 번 잡으면 전부 같이 고쳐진다. 결과는 meta 에 남겨 포털에서 볼 수 있게 한다.
+    meta["script_review"] = review_script(scenes, meta, job_id=job_id)
     mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice, portrait=portrait)
     return mp4, scenes, meta, img_missing, img_total, cues

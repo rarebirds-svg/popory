@@ -504,10 +504,167 @@ def test_render_video_uses_bgm_when_enabled(monkeypatch, tmp_path):
     _render_stub(monkeypatch, tmp_path, video)
     monkeypatch.setattr(video, "BGM_ENABLED", True)
     monkeypatch.setattr(video, "_pick_bgm", lambda d, j: "PICKED")
+    monkeypatch.setattr(video, "_pick_bgm_moods", lambda d, j: None)   # 분위기 버킷이 없으면 한 곡
     captured = {}
     monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: captured.update(bgm=bgm))
     video.render_video([{"caption": "a", "narration": "n1"}, {"caption": "b", "narration": "n2"}], job_id="withbgm")
     assert captured["bgm"] == "PICKED"
+
+
+def test_render_video_builds_mood_bed_when_both_buckets_exist(monkeypatch, tmp_path):
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "TMP", tmp_path)
+    monkeypatch.setattr(video, "BGM_ENABLED", True)
+    monkeypatch.setattr(video, "_pick_bgm_moods", lambda d, j: (Path("tense.mp3"), Path("warm.mp3")))
+    built = {}
+    monkeypatch.setattr(video, "_build_bgm_bed", lambda t, w, total, out: built.update(t=t, w=w, total=total) or out)
+    captured = {}
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: captured.update(bgm=bgm))
+    video.render_video([{"caption": "a", "narration": "n1"}, {"caption": "b", "narration": "n2"}], job_id="bed")
+    assert captured["bgm"].name == "bgm_bed.mp3"
+    assert built["t"].name == "tense.mp3" and built["w"].name == "warm.mp3"
+    # 총 길이 = 클립 합 - 크로스페이드(클립 길이 1.0 스텁 × 2 - 0.4)
+    assert abs(built["total"] - 1.6) < 1e-6
+
+
+def test_bgm_mood_by_filename_and_deterministic_pair(tmp_path):
+    from popory_content.video import _bgm_mood, _pick_bgm_moods
+    for name, mood in (("pad_deep_emin", "tense"), ("pad_warm_am", "tense"), ("pad_hope_g", "warm"), ("pad_bright_d", "warm")):
+        assert _bgm_mood(Path(f"{name}.mp3")) == mood
+    assert _pick_bgm_moods(tmp_path, "j") is None                # 빈 폴더
+    (tmp_path / "pad_deep_emin.mp3").write_bytes(b"x")
+    assert _pick_bgm_moods(tmp_path, "j") is None                # warm 버킷 없음 → 한 곡 방식
+    (tmp_path / "pad_hope_g.mp3").write_bytes(b"x")
+    pair = _pick_bgm_moods(tmp_path, "j")
+    assert pair == (tmp_path / "pad_deep_emin.mp3", tmp_path / "pad_hope_g.mp3")
+    assert _pick_bgm_moods(tmp_path, "j") == pair                # 결정적
+
+
+def test_build_bgm_bed_splits_at_ratio_with_crossfade(monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
+    out = _video._build_bgm_bed(Path("t.mp3"), Path("w.mp3"), 100.0, tmp_path / "bed.mp3", ratio=0.55, xfade=4.0)
+    assert out == tmp_path / "bed.mp3"
+    graph = cmds[-1][cmds[-1].index("-filter_complex") + 1]
+    assert "atrim=0:55.000" in graph and "acrossfade=d=4.0" in graph
+    assert "atrim=0:50.000" in graph          # 100-55+4+1 — 크로스페이드가 먹는 만큼 여유
+    assert cmds[-1].count("-stream_loop") == 2  # 곡이 짧아도 끊기지 않게 둘 다 반복
+    # 짧은 영상(쇼츠)은 전환 자리가 없어 앞 곡만 쓴다
+    cmds.clear()
+    _video._build_bgm_bed(Path("t.mp3"), Path("w.mp3"), 8.0, tmp_path / "bed2.mp3")
+    assert "w.mp3" not in " ".join(cmds[-1]) and "-filter_complex" not in cmds[-1]
+
+
+def test_gaps_for_lengthens_pause_after_questions():
+    from popory_content.video import _gaps_for, SENTENCE_GAP, QUESTION_GAP
+    gaps = _gaps_for(["왜 무너졌을까요?", "답은 태도였습니다.", "그럼 무엇을 해야 할까요?", "끝."])
+    assert gaps == [QUESTION_GAP, SENTENCE_GAP, QUESTION_GAP]
+    assert QUESTION_GAP > SENTENCE_GAP
+    assert _gaps_for(["하나."]) == []
+
+
+def test_spans_and_concat_accept_per_gap_lists(monkeypatch, tmp_path):
+    from popory_content.video import _spans_from_durations, _concat_audio_with_gaps
+    spans = _spans_from_durations([2.0, 3.0, 1.0], [1.0, 0.5])
+    assert spans == [(0.0, 3.0), (3.0, 6.5), (6.5, 7.5)]
+    cmds = []
+    monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
+    segs = [tmp_path / f"{i}.mp3" for i in range(3)]
+    _concat_audio_with_gaps(segs, [1.0, 0.7], tmp_path / "out.mp3")
+    silences = [c for c in cmds if "anullsrc=channel_layout=mono:sample_rate=24000" in c]
+    assert sorted(c[c.index("-t") + 1] for c in silences) == ["0.700", "1.000"]  # 길이별 무음 1개씩
+    concat = cmds[-1]
+    inputs = [concat[i + 1] for i, a in enumerate(concat) if a == "-i"]
+    assert inputs[1].endswith("_gap1_000.wav") and inputs[3].endswith("_gap0_700.wav")
+
+
+def test_shot_count_splits_long_scenes_only():
+    from popory_content.video import _shot_count, SHOT_SECONDS
+    assert _shot_count(7.0) == 1                        # 쇼츠 장면은 그대로
+    assert _shot_count(SHOT_SECONDS * 2 - 0.1) == 1     # 두 샷이 안 나오면 안 쪼갠다
+    assert _shot_count(SHOT_SECONDS * 2) == 2
+    assert _shot_count(35.0) == round(35.0 / SHOT_SECONDS)
+
+
+def test_zoompan_long_scene_cuts_every_shot():
+    """35초 장면은 4샷으로 쪼개져 샷마다 줌 방향·기준점이 바뀐다(샷 경계에서 확대율 점프 = 컷)."""
+    from popory_content.video import _zoompan_filter, _zoom_amplitude, SHOT_SECONDS
+    dur = 35.0
+    fl = _zoompan_filter(dur, variant=0)
+    shots = round(dur / SHOT_SECONDS)
+    seg = round(dur * 30) / shots
+    amp = _zoom_amplitude(dur / shots)
+    assert amp == 0.06                                   # 8~9초 샷 → 하한 폭, 초당 속도는 쇼츠와 같다
+    assert f"mod(on,{seg:.3f})" in fl and f"floor(on/{seg:.3f})" in fl
+    assert f"if(eq(mod(floor(on/{seg:.3f}),2),0),1.0+{amp:.4f}*" in fl   # 짝수 샷 확대 시작
+    assert f"{1 + amp:.4f}-{amp:.4f}*" in fl                            # 홀수 샷 축소 시작
+    assert "if(eq(mod(floor(on/" in fl.split(":x='")[1]                  # 기준점도 샷마다 교대
+    # 짧은 장면은 예전 식 그대로(회귀 없음)
+    assert "mod(on" not in _zoompan_filter(3.0, variant=0)
+
+
+def test_render_video_inserts_card_clip_before_scene(monkeypatch, tmp_path):
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "TMP", tmp_path)
+    monkeypatch.setattr(video, "CARDS_ENABLED", True)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    made = []
+    monkeypatch.setattr(video, "_card_clip", lambda card, i, work, portrait=False: made.append((i, card["type"])) or (work / f"card_{i}.mp4"))
+    durs = []
+    monkeypatch.setattr(video, "_xfade_graph", lambda d, td=0.4: durs.extend(d) or ("", "v", "a"))
+    scenes = [{"caption": "a", "narration": "n1."},
+              {"caption": "b", "narration": "n2.", "card": {"type": "quote", "text": "부는 보이지 않는다", "source": "책"}},
+              {"caption": "c", "narration": "n3.", "card": {"type": "keypoints", "title": "3원칙", "items": ["복리", "인내"]}}]
+    _, _, _, cues = video.render_video(scenes, job_id="cards")
+    assert made == [(1, "quote"), (2, "keypoints")]
+    assert len(durs) == 5                                   # 장면 3 + 카드 2 클립
+    assert [c[2] for c in cues] == ["n1.", "n2.", "n3."]    # 카드는 cue 를 만들지 않는다
+    # 카드 클립이 앞에 끼어도 뒤 장면 cue 오프셋이 그만큼 밀린다(클립 길이 1.0 스텁, xfade 0.4)
+    assert abs(cues[1][0] - (2 * (1.0 - 0.4))) < 1e-6
+
+
+def test_card_clip_failure_does_not_break_render(monkeypatch, tmp_path):
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "TMP", tmp_path)
+    monkeypatch.setattr(video, "CARDS_ENABLED", True)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+
+    def boom(*a, **k):
+        raise video.VideoError("ffmpeg died")
+    monkeypatch.setattr(video, "_card_clip", boom)
+    scenes = [{"caption": "a", "narration": "n1.", "card": {"type": "quote", "text": "x"}}, {"caption": "b", "narration": "n2."}]
+    _, _, _, cues = video.render_video(scenes, job_id="cardfail")
+    assert len(cues) == 2
+
+
+def test_card_clip_uses_silence_or_chime_and_matches_scene_audio_format(monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(_video, "_run", lambda cmd: cmds.append(cmd))
+    monkeypatch.setattr(_video, "_render_graphic_card_png", lambda card, png, portrait=False: None)
+    monkeypatch.setattr(_video, "CARD_SFX", tmp_path / "없음.mp3")
+    clip = _video._card_clip({"type": "quote", "text": "x"}, 3, tmp_path)
+    assert clip == tmp_path / "card_3.mp4"
+    cmd = cmds[-1]
+    assert "anullsrc=channel_layout=mono:sample_rate=24000" in cmd and "-crf" in cmd
+    assert cmd[cmd.index("-t") + 1] == f"{_video.CARD_SECONDS:.3f}"
+    chime = tmp_path / "chime.mp3"; chime.write_bytes(b"x")
+    monkeypatch.setattr(_video, "CARD_SFX", chime)
+    _video._card_clip({"type": "quote", "text": "x"}, 4, tmp_path)
+    cmd = cmds[-1]
+    assert str(chime) in cmd and "sample_rates=24000:channel_layouts=mono" in " ".join(cmd)
+
+
+@pytest.mark.skipif(not Path(FONT_PATH).exists(), reason="한국어 폰트 필요")
+def test_render_graphic_card_png_quote_and_keypoints(tmp_path):
+    q = tmp_path / "q.png"; k = tmp_path / "k.png"
+    _video._render_graphic_card_png({"type": "quote", "text": "부는 보이지 않는다", "source": "모건 하우절"}, q)
+    _video._render_graphic_card_png({"type": "keypoints", "title": "부자의 3가지 원칙", "items": ["복리", "인내심", "통제권"]}, k, portrait=True)
+    assert _Image.open(q).size == (1920, 1080) and _Image.open(k).size == (1080, 1920)
 
 
 def test_global_cues_offset_by_scene(monkeypatch):
@@ -547,3 +704,21 @@ def test_portrait_subtitle_stays_inside_scrim():
 def test_landscape_subtitle_unchanged():
     """가로형은 재생기 UI 가 재생 중 숨으므로 기존 위치를 유지한다."""
     assert _video.SUB_Y_LANDSCAPE == 175
+
+
+def test_make_video_runs_script_review_before_render(monkeypatch):
+    """검수가 렌더 앞에 서서 TTS·자막·제목이 교정본으로 나가고, 결과가 meta.script_review 에 남는다."""
+    order = []
+    scenes = [{"caption": "범트", "narration": "범트 이야기.", "image_prompt": "x"}]
+    monkeypatch.setattr(_video, "generate_scenes", lambda **kw: (scenes, {"title": "범트"}))
+
+    def fake_review(sc, meta, *, job_id):
+        order.append("review"); sc[0]["caption"] = "버몬트"; return {"status": "ok", "fixes": [{"from": "범트", "to": "버몬트"}]}
+    monkeypatch.setattr(_video, "review_script", fake_review)
+
+    def fake_render(sc, **kw):
+        order.append(("render", sc[0]["caption"])); return (Path("/tmp/x.mp4"), 0, 1, [])
+    monkeypatch.setattr(_video, "render_video", fake_render)
+    _, out_scenes, meta, *_ = _video.make_video(topic="t", sources=[], style_samples=[], job_id="j")
+    assert order == ["review", ("render", "버몬트")]
+    assert meta["script_review"]["status"] == "ok"

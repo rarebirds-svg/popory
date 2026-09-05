@@ -13,6 +13,8 @@ import { YoutubeUpload } from "./YoutubeUpload";
 import { CarouselPreview } from "./CarouselPreview";
 import { InstagramUpload } from "./InstagramUpload";
 import { FacebookUpload } from "./FacebookUpload";
+import { PublishStatus } from "./PublishStatus";
+import { SeoReviewPanel, type SeoReview } from "./SeoReviewPanel";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -37,6 +39,9 @@ interface JobDetail {
   facebook_status: string | null;
   facebook_video_id: string | null;
   facebook_error: string | null;
+  publish_status: string | null;
+  publish_url: string | null;
+  publish_error: string | null;
   sources: Array<{ id: string; kind: string; url: string | null; title: string | null; note: string | null }>;
 }
 
@@ -77,6 +82,16 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
       cache: "no-store",
     });
     if (cs.ok) fbConnected = ((await cs.json()) as { connected: boolean }).connected;
+  }
+
+  // 블로그·커뮤니티 글은 비공개 발행 설정이 있어야 등록 버튼을 보여 준다.
+  let publishConfigured = false;
+  if (job.platform === "naver-blog" || job.platform === "youtube-post") {
+    const ps = await fetch(`${API_BASE}/api/content/publish-settings`, { headers: { cookie }, cache: "no-store" });
+    if (ps.ok) {
+      const { settings } = (await ps.json()) as { settings: { blog_platform: string | null; youtube_community: boolean } };
+      publishConfigured = job.platform === "naver-blog" ? !!settings.blog_platform : settings.youtube_community;
+    }
   }
 
   let uploadTargets: string[] = [];
@@ -186,6 +201,12 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
           );
         })()}
 
+        {(job.status === "review" || job.status === "done") && job.platform !== "youtube" && job.platform !== "shorts" && job.platform !== "instagram-image" && (
+          <div className="mt-8 space-y-4">
+            <SeoReviewPanel review={(meta?.seo_review as SeoReview | undefined) ?? null} />
+            <PublishStatus jobId={job.id} platform={job.platform} initialStatus={job.publish_status} initialUrl={job.publish_url} initialError={job.publish_error} configured={publishConfigured} />
+          </div>
+        )}
         {(job.status === "review" || job.status === "done") && job.platform !== "youtube" && job.platform !== "shorts" && job.platform !== "instagram-image" && (
           <DraftEditor
             jobId={job.id}
