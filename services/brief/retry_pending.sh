@@ -75,12 +75,21 @@ set +a
 NEW_RESET=0
 REMAIN_CATS=""
 REMAIN_CUS=""
+AUTH_FAILED=0   # 인증 실패로 끝난 재시도 — pending 은 유지하되 retry_count 는 태우지 않는다
 
 # 1) 카테고리 재시도 — run_daily --only 정규식 1회 (bundled 보강 묶음 + standalone 자동)
 if [ "${CATS}" != "-" ]; then
   REGEX=$(echo "${CATS}" | sed 's/,/|/g')
   OUT=$(bash "${BRIEF_DIR}/run_daily.sh" --now --only="(${REGEX})" 2>>"${LOG_FILE}")
   REMAIN_CATS=$(echo "${OUT}" | grep -o '__RUN_LIMIT_FAIL_CATS__=.*' | head -1 | cut -d= -f2-)
+  # 인증 실패분도 남은 항목에 합친다. 종전엔 한도 실패만 세어서, 인증 만료 상태의
+  # 재시도가 "all recovered"로 오판돼 pending 이 삭제됐다 — 그 뒤로는 /login 을 해도
+  # 다시 돌 주체가 없었다(2026-09-04 08:31 오기록).
+  AUTH_CATS=$(echo "${OUT}" | grep -o '__RUN_AUTH_FAIL_CATS__=.*' | head -1 | cut -d= -f2-)
+  if [ -n "${AUTH_CATS}" ]; then
+    AUTH_FAILED=1
+    REMAIN_CATS="${REMAIN_CATS:+${REMAIN_CATS},}${AUTH_CATS}"
+  fi
   R=$(echo "${OUT}" | grep -o '__RUN_LIMIT_RESET__=[0-9]*' | head -1 | cut -d= -f2)
   [ -n "${R}" ] && [ "${R}" -gt "${NEW_RESET}" ] && NEW_RESET=${R}
 fi
@@ -130,10 +139,18 @@ fi
 REMAIN_CATS="${REMAIN_CATS%,}"
 REMAIN_CUS="${REMAIN_CUS%,}"
 if [ -n "${REMAIN_CATS}" ] || [ -n "${REMAIN_CUS}" ]; then
+  # 인증 실패는 "시도"가 아니다 — 사람이 /login 하기 전까지 매 폴링이 같은 이유로 막히므로
+  # retry_count 를 올리면 MAX_RETRY 안에 포기해 버린다. 한도 실패만 횟수를 소모한다.
+  INC="--increment"
+  [ "${AUTH_FAILED}" -eq 1 ] && INC=""
   "${VENV_PY}" "${BRIEF_DIR}/write_pending.py" --file "${PENDING_FILE}" \
     --date "${DATE}" --reset-at "${NEW_RESET}" \
-    --categories "${REMAIN_CATS}" --custom "${REMAIN_CUS}" --increment >> "${LOG_FILE}" 2>&1
-  log "\"retry incomplete — remain cats=${REMAIN_CATS:-none} custom=${REMAIN_CUS:-none} next_reset=${NEW_RESET}\""
+    --categories "${REMAIN_CATS}" --custom "${REMAIN_CUS}" ${INC} >> "${LOG_FILE}" 2>&1
+  if [ "${AUTH_FAILED}" -eq 1 ]; then
+    log "\"retry blocked — claude 인증 만료, /login 대기 (cats=${REMAIN_CATS:-none})\""
+  else
+    log "\"retry incomplete — remain cats=${REMAIN_CATS:-none} custom=${REMAIN_CUS:-none} next_reset=${NEW_RESET}\""
+  fi
 else
   rm -f "${PENDING_FILE}"
   log "\"retry complete — all recovered\""

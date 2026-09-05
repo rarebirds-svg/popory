@@ -364,8 +364,11 @@ if [ -n "${AUTH_CAT_CSV}" ] && [ ${DRY_RUN} -eq 0 ]; then
     >> "${LOG_FILE}" 2>&1 || log "\"auth notify failed\""
 fi
 
-# retry_pending.sh가 캡처하는 한도 실패 보고 (stdout)
+# retry_pending.sh가 캡처하는 실패 보고 (stdout). 한도와 인증을 따로 보고한다 —
+# 재시도가 인증 실패로 끝났는데 한도 실패만 "남은 항목"으로 세면 pending이 지워져
+# 복구 루프가 죽는다(2026-09-04: /login 전까지 9.5시간 침묵).
 echo "__RUN_LIMIT_FAIL_CATS__=${LIMIT_CAT_CSV}"
+echo "__RUN_AUTH_FAIL_CATS__=${AUTH_CAT_CSV}"
 echo "__RUN_LIMIT_RESET__=${LIMIT_RESET_MAX}"
 
 # 정규(전체) 실행에서만 pending 마커 관리. --only(재시도) 모드는 retry_pending.sh가 전담.
