@@ -40,7 +40,38 @@ MAX_ATTEMPTS = int(os.environ.get("POPORY_CLAUDE_MAX_ATTEMPTS", "4"))
 RETRY_BACKOFF_BASE = int(os.environ.get("POPORY_CLAUDE_BACKOFF_BASE", "10"))
 RETRY_BACKOFF_CAP = int(os.environ.get("POPORY_CLAUDE_BACKOFF_CAP", "60"))
 
+# 사용량 한도(5시간 세션·주간) 쿨다운. 한도는 재시도로 안 풀리고(리셋까지 수 시간) 실패로 굳히면
+# 그 사이 큐에 들어온 잡이 전부 failed 가 돼 사람이 하나씩 다시 눌러야 한다. 그래서 한도를 만나면
+# ① 재시도를 즉시 포기하고(백오프 60초로는 못 넘는다) ② 이 쿨다운 동안 claude 를 쓰는 작업을
+# 아예 집지 않는다 — 잡은 큐에 남아 한도가 풀린 뒤 자동으로 처리된다.
+USAGE_LIMIT_COOLDOWN_SECONDS = int(os.environ.get("POPORY_USAGE_LIMIT_COOLDOWN", "1800"))
+_usage_limit_until = 0.0
+
 T = TypeVar("T")
+
+
+def is_usage_limit(err: str) -> bool:
+    """claude CLI 사용량 한도 신호인지. 실측 문구는 "You've hit your session limit · resets 11pm
+    (Asia/Seoul)"(2026-09-05). 주간 한도·표현 변화까지 덮되, 재시도로 풀리는 일시 오류(429 등)는
+    일부러 제외한다 — 그건 기존 백오프가 처리한다."""
+    low = (err or "").lower()
+    if "limit" in low and "reset" in low:
+        return True
+    return any(s in low for s in ("hit your session limit", "hit your weekly limit",
+                                  "hit your usage limit", "session limit reached",
+                                  "usage limit reached"))
+
+
+def note_usage_limit() -> None:
+    """한도를 만났음을 기록한다. 이후 USAGE_LIMIT_COOLDOWN_SECONDS 동안 usage_limited() 가 True."""
+    global _usage_limit_until
+    _usage_limit_until = time.monotonic() + USAGE_LIMIT_COOLDOWN_SECONDS
+
+
+def usage_limited() -> bool:
+    """지금 한도 쿨다운 중인지. 시간이 지나면 저절로 풀린다(리셋 시각 파싱은 하지 않는다 —
+    문구의 시각이 로컬 타임존 표기라 파싱이 깨지기 쉽고, 틀리면 영구히 멈춘다)."""
+    return time.monotonic() < _usage_limit_until
 
 
 def _retry_backoff(attempt: int) -> int:
@@ -87,6 +118,10 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
                 raise GenerateError(f"claude CLI timeout after {timeout_seconds}s (시도 {attempt})")
             if result.returncode != 0:
                 tail = ((result.stderr or "")[-300:] + " || stdout: " + (result.stdout or "")[-600:]).strip()
+                if is_usage_limit(tail):
+                    # 한도는 남은 시도를 태워도 안 풀린다. 즉시 포기하고 쿨다운을 건다.
+                    note_usage_limit()
+                    raise GenerateError(f"claude CLI 사용량 한도 (시도 {attempt}): {tail}")
                 if not last:
                     wait = _retry_backoff(attempt); _log_retry(attempt, wait, f"exit {result.returncode}")
                     time.sleep(wait); continue

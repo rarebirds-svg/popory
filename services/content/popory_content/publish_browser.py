@@ -23,7 +23,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from popory_content.generate import run_claude_cli, model_for, GenerateError
+from popory_content.generate import run_claude_cli, model_for, GenerateError, is_usage_limit
 from popory_content.log import append_log
 from popory_content.portal_client import PortalError
 
@@ -136,7 +136,13 @@ def publish(task: dict[str, Any], *, runner=run_claude_cli) -> dict[str, Any]:
                             model=model_for("publish_browser"), timeout_seconds=TIMEOUT_SECONDS,
                             max_attempts=MAX_ATTEMPTS, allowed_tools=BROWSER_TOOLS)
     except (GenerateError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as e:
-        return {"status": "failed", "error": str(e)[:500]}
+        msg = str(e)
+        if is_usage_limit(msg):
+            # 한도는 이 글의 문제가 아니다. 실패로 회신하면 사람이 나중에 다시 눌러야 하므로
+            # 회신 자체를 미룬다 — 잡이 publishing 으로 남고 API 의 발행 리스(20분)가 requested 로
+            # 되돌려, 한도가 풀린 뒤 자동으로 다시 등록된다.
+            return {"status": "deferred", "error": msg[:500]}
+        return {"status": "failed", "error": msg[:500]}
     if result.get("ok"):
         if str(result.get("visibility") or "private") not in ("private", "scheduled"):
             # 스킬이 공개로 올렸다고 보고하면 성공으로 기록하지 않는다 — 사람이 바로 확인해야 한다.
@@ -173,6 +179,11 @@ def run_publish_once(client, *, runner=run_claude_cli) -> bool:
         return False
     job_id = task["job_id"]
     result = publish(task, runner=runner)
+    if result["status"] == "deferred":
+        # 결과를 회신하지 않는다(위 주석 참고). 리스가 되돌려 줄 때까지 그대로 둔다.
+        append_log(LOGS_DIR, {"worker": "content", "status": "publish_deferred", "job": job_id,
+                              "error": result.get("error", "")[:300]})
+        return True
     try:
         client.patch(f"/api/content/jobs/{job_id}/publish-result", json=result)
     except Exception as e:  # noqa: BLE001 — 회신 실패는 로그만(리스 만료 후 재시도된다)

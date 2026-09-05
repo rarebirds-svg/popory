@@ -14,7 +14,8 @@ import requests
 from PIL import Image
 
 from popory_content.generate import (generate, GenerateError, generate_youtube_post,
-                                     set_model_overrides, model_for)
+                                     set_model_overrides, model_for, is_usage_limit,
+                                     usage_limited)
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
 from popory_content.video import make_video, VideoError, render_thumbnail, TMP
 from popory_content.subtitles import to_srt
@@ -167,6 +168,13 @@ def run_once(client) -> bool:
             _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
     except Exception as e:  # noqa: BLE001 — 생성 실패는 failed 로 회신
         msg = str(e)
+        if is_usage_limit(msg):
+            # 사용량 한도는 이 잡의 결함이 아니다. failed 로 굳히면 한도가 걸린 동안 큐에 들어온
+            # 잡이 전부 실패로 남아 사람이 하나씩 재시도해야 한다. 회신을 미루면 잡이 running 으로
+            # 남고 API 의 러닝 리스(90분)가 queued 로 되돌려 한도가 풀린 뒤 자동으로 처리된다.
+            append_log(LOGS_DIR, {"worker": "content", "status": "usage_limit_deferred",
+                                  "job": job_id, "error": msg[:300]})
+            return True
         _report(client, job_id, {"status": "failed", "error": msg[:2000]}, "failed")
         if _is_claude_auth_failure(msg):
             # 상주 데몬이 오래 떠 있으면 claude OAuth 토큰 갱신(키체인 재기록)에 실패해
@@ -736,14 +744,18 @@ def run_cycle(client) -> bool:
     영구히 굶주렸다(준비중 정체). 이제 사이클마다 업로드 claim 을 시도하므로
     생성 1건이 도는 동안만 대기하고 그 직후 업로드가 처리된다(무한 starvation 제거).
     저순위 커스텀 브리핑은 다른 큐가 모두 비었을 때만 시도한다. 하나라도 처리하면 True.
+    사용량 한도 쿨다운 중에는 claude 를 쓰는 생성·발행을 건너뛰고 업로드만 돈다.
     """
     refresh_model_overrides(client)
-    did_gen = run_once(client)
+    # 사용량 한도 쿨다운 중이면 claude 를 쓰는 작업(생성·발행)은 아예 집지 않는다 — 집어봐야 같은
+    # 한도에 걸려 잡만 running/publishing 으로 밀린다. 업로드는 claude 를 쓰지 않으므로 계속 돈다.
+    limited = usage_limited()
+    did_gen = False if limited else run_once(client)
     did_upload = run_upload_once(client)
     did_ig = run_instagram_upload_once(client)
     did_fb = run_facebook_upload_once(client)
     # 블로그·커뮤니티 글 비공개 등록(브라우저). 업로드와 같은 이유로 매 사이클 1회.
-    did_pub = run_publish_once(client)
+    did_pub = False if limited else run_publish_once(client)
     did_brief = False
     if not (did_gen or did_upload or did_ig or did_fb or did_pub):
         did_brief = run_custom_brief_once(client)

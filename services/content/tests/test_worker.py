@@ -16,6 +16,11 @@ def _png(color=(10, 20, 30)) -> bytes:
 
 
 @pytest.fixture(autouse=True)
+def _reset_usage_limit(monkeypatch):
+    monkeypatch.setattr("popory_content.generate._usage_limit_until", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_logs(tmp_path, monkeypatch):
     """테스트가 실제 services/content/logs/ 를 오염시키지 않도록 LOGS_DIR 격리."""
     monkeypatch.setattr(worker, "LOGS_DIR", tmp_path / "logs")
@@ -882,3 +887,35 @@ def test_next_idle_sleep_doubles_to_cap(monkeypatch):
     assert worker.next_idle_sleep(20) == 40
     assert worker.next_idle_sleep(40) == 60
     assert worker.next_idle_sleep(60) == 60
+
+
+def test_usage_limit_defers_generation_instead_of_failing(monkeypatch, tmp_path):
+    """한도가 걸린 동안 잡을 failed 로 굳히지 않는다 — running 으로 남겨 러닝 리스가 되돌린다."""
+    def boom(**kw):
+        raise worker.GenerateError("claude CLI 사용량 한도 (시도 1): You've hit your session limit · resets 11pm")
+    monkeypatch.setattr(worker, "generate", boom)
+    client = FakeClient({"job": {"id": "u1", "topic": "t"}, "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    assert client.patched == []            # failed 회신 없음
+    text = "".join(p.read_text() for p in worker.LOGS_DIR.glob("*"))
+    assert "usage_limit_deferred" in text
+    # 한도가 아닌 오류는 그대로 failed 로 회신한다(회귀 방지)
+    monkeypatch.setattr(worker, "generate", lambda **kw: (_ for _ in ()).throw(worker.GenerateError("ng")))
+    client = FakeClient({"job": {"id": "u2", "topic": "t"}, "sources": [], "style_samples": []})
+    worker.run_once(client)
+    assert client.patched[0][1]["status"] == "failed"
+
+
+def test_run_cycle_skips_claude_work_while_usage_limited(monkeypatch):
+    """쿨다운 중엔 생성·발행을 집지 않고, claude 를 안 쓰는 업로드는 계속 돈다."""
+    calls = []
+    monkeypatch.setattr(worker, "run_once", lambda c: (calls.append("gen") or True))
+    monkeypatch.setattr(worker, "run_upload_once", lambda c: (calls.append("up") or True))
+    monkeypatch.setattr(worker, "run_instagram_upload_once", lambda c: (calls.append("ig") or False))
+    monkeypatch.setattr(worker, "run_facebook_upload_once", lambda c: (calls.append("fb") or False))
+    monkeypatch.setattr(worker, "run_publish_once", lambda c: (calls.append("pub") or True))
+    monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: (calls.append("brief") or False))
+    monkeypatch.setattr(worker, "refresh_model_overrides", lambda c: None)
+    monkeypatch.setattr(worker, "usage_limited", lambda: True)
+    assert worker.run_cycle(object()) is True          # 업로드가 처리됐으므로 True
+    assert calls == ["up", "ig", "fb"]                 # 생성·발행은 건너뜀

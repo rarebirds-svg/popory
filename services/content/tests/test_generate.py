@@ -7,6 +7,12 @@ from popory_content import generate
 from popory_content.generate import run_claude_cli, GenerateError
 
 
+@pytest.fixture(autouse=True)
+def _reset_usage_limit(monkeypatch):
+    """한도 쿨다운은 모듈 전역이라 테스트 사이에 새면 뒤 테스트가 통째로 건너뛴다."""
+    monkeypatch.setattr(generate, "_usage_limit_until", 0.0)
+
+
 @pytest.fixture
 def harness(monkeypatch):
     """claude 바이너리 존재·time.sleep·subprocess.run 을 가짜로 대체."""
@@ -120,3 +126,38 @@ def test_normalizes_author_names_before_parse(harness):
     # 인명 교정은 parse 앞에 걸려야 한다 — 계약 파서가 이미 고쳐진 문자열을 본다.
     harness["install"]([(0, "보도 새퍼의 돈", "")])
     assert run_claude_cli(system_prompt="s", user_msg="u", parse=lambda x: x.strip()) == "보도 섀퍼의 돈"
+
+
+def test_is_usage_limit_matches_real_message_but_not_transient_errors():
+    # 2026-09-05 맥미니 실측 문구.
+    assert generate.is_usage_limit("You've hit your session limit · resets 11pm (Asia/Seoul)")
+    assert generate.is_usage_limit("You've hit your weekly limit")
+    assert generate.is_usage_limit("Usage limit reached")
+    # 재시도로 풀리는 일시 오류는 한도가 아니다(기존 백오프가 처리해야 한다).
+    assert not generate.is_usage_limit("429 Too Many Requests")
+    assert not generate.is_usage_limit("connection reset by peer")
+    assert not generate.is_usage_limit("")
+
+
+def test_usage_limit_fails_fast_without_burning_retries(harness):
+    """한도는 백오프 60초로 못 넘는다 — 남은 시도를 태우지 않고 즉시 포기하고 쿨다운을 건다."""
+    harness["install"]([(1, "", "You've hit your session limit · resets 11pm (Asia/Seoul)")])
+    assert not generate.usage_limited()
+    with pytest.raises(GenerateError) as e:
+        run_claude_cli(system_prompt="s", user_msg="u", parse=lambda x: x, max_attempts=4)
+    assert "사용량 한도" in str(e.value)
+    assert harness["calls"]["n"] == 1      # 4회가 아니라 1회
+    assert harness["sleeps"] == []
+    assert generate.usage_limited()        # 이후 워커가 생성·발행을 건너뛴다
+
+
+def test_usage_limited_expires_after_cooldown(monkeypatch):
+    monkeypatch.setattr(generate, "USAGE_LIMIT_COOLDOWN_SECONDS", 1800)
+    now = [1000.0]
+    monkeypatch.setattr(generate.time, "monotonic", lambda: now[0])
+    generate.note_usage_limit()
+    assert generate.usage_limited()
+    now[0] += 1799
+    assert generate.usage_limited()
+    now[0] += 2
+    assert not generate.usage_limited()    # 쿨다운이 지나면 저절로 풀린다

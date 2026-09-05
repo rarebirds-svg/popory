@@ -13,6 +13,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "LOGS_DIR", tmp_path / "logs")
     monkeypatch.setattr(pb, "PUBLISH_CMD", "")
     monkeypatch.setattr(pb, "_claim_unavailable", False)
+    monkeypatch.setattr("popory_content.generate._usage_limit_until", 0.0)
 
 
 def _task(kind="naver", platform="naver-blog"):
@@ -119,3 +120,26 @@ def test_run_publish_once_skips_quietly_when_api_lacks_claim_route(tmp_path):
     pb._claim_unavailable = False
     with pytest.raises(PortalError):
         pb.run_publish_once(Client500())
+
+
+def test_usage_limit_defers_instead_of_failing(tmp_path):
+    """세션 한도로 실패하면 failed 로 굳히지 않는다 — 회신을 미뤄 리스가 되돌리게 둔다."""
+    def limited(**kw):
+        raise GenerateError("claude CLI 사용량 한도 (시도 1): You've hit your session limit · resets 11pm")
+    r = pb.publish(_task(), runner=limited)
+    assert r["status"] == "deferred" and "session limit" in r["error"]
+
+    class Client:
+        def __init__(self):
+            self.patched = []
+
+        def post(self, path, *, json=None):
+            return _task()
+
+        def patch(self, path, *, json):
+            self.patched.append((path, json))
+    c = Client()
+    assert pb.run_publish_once(c, runner=limited) is True
+    assert c.patched == []                 # 회신 없음 → 잡은 publishing 으로 남아 리스가 회수한다
+    text = "".join(p.read_text() for p in (tmp_path / "logs").glob("*"))
+    assert "publish_deferred" in text
