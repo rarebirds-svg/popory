@@ -54,3 +54,14 @@ def test_unknown_check_name_raises():
     except ValueError:
         return
     raise AssertionError("미등록 점검명은 거부해야 한다")
+
+
+def test_fold_sections_accepts_every_gather_check_name():
+    """gather() 가 내는 모든 점검명이 _AREA_OF 에 등록돼 있어야 한다 — 누락은 실행 시 예외."""
+    from popory_healthcheck import report
+    names = ["포털", "API", "Claude인증", "브리핑", "브리핑잡", "브리핑데몬",
+             "워커데몬", "이미지데몬", "워커로그", "자원한도", "콘텐츠루틴"]
+    sections = report.fold_sections([(n, "ok", "x") for n in names])  # 미등록이면 ValueError
+    assert {"service", "jobs", "anomaly"} <= set(sections)
+    # 브리핑 관련 점검은 전부 자동화(jobs) 영역 — 하나라도 다른 영역으로 새면 다이제스트 행이 갈린다
+    assert sections["jobs"]["status"] == "ok"

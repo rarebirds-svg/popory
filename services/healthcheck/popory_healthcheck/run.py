@@ -131,6 +131,9 @@ def gather(mode: str = "pm") -> list[tuple[str, str, str]]:
     # 다이제스트에서 바로 갈린다.
     out.append(("브리핑잡", *checks.check_brief_run(
         str(Path(BRIEF_LOG_DIR) / f"{_today()}.log"), mode)))
+    # 브리핑 데일리 잡은 KeepAlive 데몬이 아니라 캘린더 잡이지만, launchd 에 로드돼 있어야
+    # 08:00 에 뜬다. 로그 부재(브리핑잡 점검)와 조합하면 "plist 언로드"와 "맥 꺼짐"이 갈린다.
+    out.append(("브리핑데몬", *checks.check_daemon("com.popory.brief")))
     out.append(("워커데몬", *checks.check_daemon("com.popory.content-worker")))
     out.append(("이미지데몬", *checks.check_daemon("com.popory.imagegen")))
     out.append(("워커로그", *checks.check_log_freshness(log_path, 24 * 3600)))

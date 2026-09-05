@@ -360,12 +360,49 @@ def test_brief_run_warns_when_log_missing(tmp_path):
     assert "미기동" in msg
 
 
+# run_daily.sh 종료부 요약의 실제 형태(2026-09-04 로그 그대로).
+_DONE_OK = '{"ts":"2026-09-04T18:34:17+09:00","cli":"run_daily","msg":"done dry_run=0 generated_ok=7 failed=none limit_fail=none auth_fail=none"}'
+_DONE_AUTH = ('{"ts":"2026-09-04T08:31:41+09:00","cli":"run_daily","msg":"done dry_run=0 generated_ok=0 '
+              'failed=anticorruption,naver limit_fail=none auth_fail=anticorruption,naver"}')
+_DONE_LIMIT = ('{"ts":"2026-09-04T08:31:41+09:00","cli":"run_daily","msg":"done dry_run=0 generated_ok=5 '
+               'failed=naver,legal-ai limit_fail=naver,legal-ai auth_fail=none"}')
+
+
 def test_brief_run_ok_when_done(tmp_path):
     log = tmp_path / "d.log"
-    log.write_text('{"msg":"jitter_sleep=10s"}\n{"msg":"done dry_run=0 generated_ok=7 failed=none"}',
-                   encoding="utf-8")
+    log.write_text('{"msg":"jitter_sleep=10s"}\n' + _DONE_OK, encoding="utf-8")
     status, msg = checks.check_brief_run(str(log))
     assert status == "ok", msg
+    assert "7개" in msg
+
+
+def test_brief_run_ok_after_retry_recovers(tmp_path):
+    """재시도로 복구된 날은 앞선 실패 마커가 남아 있어도 ok — 마지막 done 이 최종 상태다.
+
+    2026-09-04 실제: 08:23 인증 만료로 전건 실패 → 18:34 재시도 성공. 마커만 세면
+    복구 뒤 21:00 점검이 오경보를 낸다."""
+    log = tmp_path / "d.log"
+    log.write_text('{"cli": "generate_brief", "status": "claude_fail", "category": "naver"}\n'
+                   + _DONE_AUTH + "\n" + _DONE_OK, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "ok", msg
+
+
+def test_brief_run_names_auth_expiry_with_login_hint(tmp_path):
+    """인증 만료는 사람이 /login 해야만 풀린다 — 원인과 조치를 함께 띄운다."""
+    log = tmp_path / "d.log"
+    log.write_text(_DONE_AUTH, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "인증 만료" in msg and "/login" in msg
+
+
+def test_brief_run_names_session_limit_as_auto_retry(tmp_path):
+    log = tmp_path / "d.log"
+    log.write_text(_DONE_LIMIT, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "세션 한도" in msg and "재시도" in msg
 
 
 def test_brief_run_names_failure_cause(tmp_path):

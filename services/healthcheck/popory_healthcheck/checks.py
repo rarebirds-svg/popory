@@ -1,5 +1,6 @@
 # popory 상태 점검 함수 모음 — 각자 (status, message) 반환, 예외는 fail로 환원.
 import os
+import re
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
@@ -147,9 +148,8 @@ def scan_log_markers(log_text: str) -> tuple[str, str]:
     return ("warn", f"한도/실패 감지 — {detail}")
 
 
-# 브리핑 데일리 로그의 실패 신호 — (마커, 사람이 읽는 원인).
-# run_daily.sh·generate_brief.py 가 남기는 실제 문자열이며, 발행 결과만 보던 종전
-# 점검이 구분하지 못하던 "원인"을 다이제스트에 직접 띄우기 위한 것이다.
+# 브리핑 데일리 로그의 실패 신호 — (마커, 사람이 읽는 원인). done 줄이 아직 없는
+# 진행 중 상태에서만 쓴다. run_daily.sh·generate_brief.py 가 남기는 실제 문자열이다.
 _BRIEF_FAIL_MARKERS = (
     ("abort: categories scan failed", "카테고리 스캔 중단"),
     ('"status": "init_fail"', "초기화 실패"),
@@ -157,15 +157,23 @@ _BRIEF_FAIL_MARKERS = (
     ('"status": "claude_fail"', "Claude 호출 실패"),
     ('"status": "parse_fail"', "응답 파싱 실패"),
 )
+# run_daily.sh 종료부 요약. 하루에 여러 번 찍힐 수 있다(정규 + 재시도 + 수동) —
+# 마지막 것이 그날의 최종 상태다.
+_BRIEF_DONE = re.compile(
+    r'done dry_run=\d+ generated_ok=(\d+) failed=([^\s"]+) limit_fail=([^\s"]+) auth_fail=([^\s"]+)'
+)
 
 
 def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
     """오늘 브리핑 데일리 잡의 기동·완료·실패를 로그로 판정한다.
 
     run_daily.sh 는 08:00 기동 직후 jitter_sleep 을 먼저 기록하므로, 오늘자 로그가
-    없다는 것은 잡이 아예 뜨지 않았다는 뜻이다(launchd 미로드·맥 종료·전원). 발행
-    결과(check_briefs_published)만 보던 종전 점검은 "안 떴다"와 "돌았지만 실패"를
-    구분하지 못해, 원인 없는 미확인 경보만 냈다(2026-09-04).
+    없다는 것은 잡이 아예 뜨지 않았다는 뜻이다(launchd 미로드·맥 종료·전원).
+
+    판정은 마지막 done 줄(그날의 최종 상태) 기준이다 — 재시도로 복구된 날은 앞선
+    실패 마커가 남아 있어도 ok 다(2026-09-04: 08:23 인증 만료 → 18:34 복구). 실패면
+    한도·인증을 구분해 띄운다. 인증 만료는 사람이 /login 해야만 풀리므로 가장
+    먼저, 가장 구체적으로 알려야 한다.
 
     오전(am)은 생성 창과 겹치므로 미완료를 경보하지 않는다 — 확정은 pm 이 한다."""
     try:
@@ -173,11 +181,19 @@ def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
             text = f.read()
     except OSError:
         return ("warn", "오늘 브리핑 잡 미기동 — 로그 없음(launchd 로드 여부 확인)")
+    dones = _BRIEF_DONE.findall(text)
+    if dones:
+        ok, failed, limit, auth = dones[-1]
+        if failed == "none":
+            return ("ok", f"브리핑 데일리 잡 완료 — {ok}개 발행")
+        if auth != "none":
+            return ("warn", f"브리핑 생성 실패 — Claude 인증 만료, 터미널에서 claude /login 필요 ({auth})")
+        if limit != "none":
+            return ("warn", f"브리핑 생성 실패 — Claude 세션 한도, 자동 재시도 대기 ({limit})")
+        return ("warn", f"브리핑 생성 실패 — {failed}")
     hits = [label for marker, label in _BRIEF_FAIL_MARKERS if marker in text]
     if hits:
         return ("warn", f"브리핑 생성 실패 — {', '.join(hits)}")
-    if '"done dry_run=' in text:
-        return ("ok", "브리핑 데일리 잡 완료")
     if mode == "am":
         return ("ok", "브리핑 생성 진행 중 — 생성 창(08:00~10:00)")
     return ("warn", "브리핑 데일리 잡 미완료 — 기동했으나 종료 기록 없음")
