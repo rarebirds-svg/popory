@@ -6,7 +6,10 @@
 #
 # 호출 경로 두 가지:
 # 1) 기본 — claude CLI 에 `/{POPORY_BROWSER_SKILL}` 스킬을 호출하는 사용자 메시지를 주고, 허용 도구를
-#    POPORY_BROWSER_TOOLS(기본 "Skill,mcp__aside__*")로 제한한다. 결과는 <publish_result> 태그로 받는다.
+#    POPORY_BROWSER_TOOLS 로 제한한다. 결과는 <publish_result> 태그로 받는다.
+#    맥미니에서 확인한 규약(2026-09-05): `/aside-browser` 스킬은 MCP 도구가 아니라 셸 명령 `aside "..."` 로
+#    브라우저 에이전트에 작업을 넘기고 약 60초 간격으로 진행을 보고한다. 그래서 기본 허용 도구는
+#    `Bash(aside:*)`(aside 명령만) + Skill + Read(본문 파일 읽기)다. 다른 Bash 명령은 열지 않는다.
 # 2) POPORY_PUBLISH_CMD — 커스텀 명령(예: aside CLI 직접 호출). 작업 JSON 을 stdin 으로 주고 stdout 에서
 #    같은 태그를 읽는다. 스킬 호출 규약이 바뀌어도 코드 수정 없이 갈아끼울 수 있게 둔 통로다.
 #
@@ -26,7 +29,7 @@ from popory_content.log import append_log
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 CLAIM_PATH = "/api/content/publish/claim"
 BROWSER_SKILL = os.environ.get("POPORY_BROWSER_SKILL", "aside-browser")
-BROWSER_TOOLS = tuple(t.strip() for t in os.environ.get("POPORY_BROWSER_TOOLS", "Skill,mcp__aside__*").split(",") if t.strip())
+BROWSER_TOOLS = tuple(t.strip() for t in os.environ.get("POPORY_BROWSER_TOOLS", "Skill,Bash(aside:*),Read").split(",") if t.strip())
 PUBLISH_CMD = os.environ.get("POPORY_PUBLISH_CMD", "")
 # 로그인·편집기 로딩·이미지 업로드까지 포함하므로 본문 생성보다 짧지만 넉넉히.
 TIMEOUT_SECONDS = int(os.environ.get("POPORY_PUBLISH_TIMEOUT", "900"))
@@ -39,8 +42,10 @@ YOUTUBE_SCHEDULE_DAYS = int(os.environ.get("POPORY_YOUTUBE_POST_SCHEDULE_DAYS", 
 _RESULT = re.compile(r"<publish_result>\s*(\{.*?\})\s*</publish_result>", re.S)
 
 SYSTEM_PROMPT = """당신은 사용자의 브라우저를 대신 조작해 글을 **비공개로** 등록하는 발행 담당자입니다.
-브라우저 조작은 반드시 지시된 스킬을 통해서만 합니다. 이미 로그인된 세션을 사용하며, 로그인 페이지가 뜨면
-자격 증명을 입력하지 말고 실패로 보고합니다(비밀번호를 묻거나 추측하지 않습니다).
+브라우저 조작은 반드시 지시된 스킬(aside 브라우저 에이전트)을 통해서만 합니다. 스킬이 `aside "..."` 명령으로
+작업을 넘기면 그 진행 보고를 기다렸다가 최종 결과(등록된 글 주소, 공개 범위)를 확인한 뒤 답합니다.
+이미 로그인된 세션을 사용하며, 로그인 페이지가 뜨면 자격 증명을 입력하지 말고 실패로 보고합니다
+(비밀번호를 묻거나 추측하지 않습니다).
 
 절대 규칙:
 - **공개로 게시하지 않습니다.** 공개 범위는 항상 '비공개'(없으면 지시된 대체 방식)로 두고, 확인 후에만 등록합니다.
