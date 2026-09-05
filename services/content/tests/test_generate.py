@@ -178,3 +178,15 @@ def test_cwd_is_passed_to_the_subprocess_and_bad_paths_are_ignored(harness, monk
     assert seen["cwd"] is None
     run_claude_cli(system_prompt="s", user_msg="u", parse=lambda x: x)
     assert seen["cwd"] is None
+
+
+def test_parse_failure_error_carries_the_model_output_tail(harness):
+    """출력을 버리면 "태그 없음" 만 남아 모델이 무엇을 했는지 알 수 없다(발행에서 치명적)."""
+    harness["install"]([(0, "티스토리 편집기를 열고 본문을 붙여 넣었습니다", "")])
+
+    def boom(text):
+        raise ValueError("publish_result 태그 없음")
+    with pytest.raises(GenerateError) as e:
+        run_claude_cli(system_prompt="s", user_msg="u", parse=boom, max_attempts=1)
+    assert "publish_result 태그 없음" in str(e.value)
+    assert "출력 꼬리" in str(e.value) and "편집기를 열고" in str(e.value)
