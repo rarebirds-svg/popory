@@ -143,3 +143,26 @@ def test_usage_limit_defers_instead_of_failing(tmp_path):
     assert c.patched == []                 # 회신 없음 → 잡은 publishing 으로 남아 리스가 회수한다
     text = "".join(p.read_text() for p in (tmp_path / "logs").glob("*"))
     assert "publish_deferred" in text
+
+
+def test_default_allowed_tools_open_the_aside_mcp_server():
+    """스킬은 mcp__aside__exec 등 MCP 도구로 브라우저를 움직인다. 이게 허용 목록에 없으면
+    "권한 승인을 받지 못했다" 로 시작조차 못 한다(2026-09-05 실패). 서버 전체를 연다."""
+    assert "mcp__aside" in pb.BROWSER_TOOLS or "mcp__aside__*" in pb.BROWSER_TOOLS
+    assert "Skill" in pb.BROWSER_TOOLS
+    # 다른 Bash 명령은 열지 않는다 — aside 만.
+    assert "Bash" not in pb.BROWSER_TOOLS
+    assert all(not t.startswith("Bash(") or t == "Bash(aside:*)" for t in pb.BROWSER_TOOLS)
+
+
+def test_setup_hint_points_at_the_thing_to_fix():
+    assert "POPORY_BROWSER_TOOLS" in pb._setup_hint("MCP 도구 권한 승인을 받지 못했습니다")
+    assert "POPORY_BROWSER_TOOLS" in pb._setup_hint("permission denied for mcp__aside__exec")
+    assert "PATH" in pb._setup_hint("aside: command not found")
+    assert pb._setup_hint("편집기가 응답하지 않음") == ""
+
+
+def test_failure_note_carries_the_setup_hint():
+    r = pb.publish(_task(), runner=lambda **kw: kw["parse"](
+        '<publish_result>{"ok": false, "reason": "other", "note": "MCP 도구 권한 승인을 받지 못했습니다"}</publish_result>'))
+    assert r["status"] == "failed" and "POPORY_BROWSER_TOOLS" in r["error"]

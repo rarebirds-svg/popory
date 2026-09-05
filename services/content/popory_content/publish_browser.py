@@ -7,9 +7,14 @@
 # 호출 경로 두 가지:
 # 1) 기본 — claude CLI 에 `/{POPORY_BROWSER_SKILL}` 스킬을 호출하는 사용자 메시지를 주고, 허용 도구를
 #    POPORY_BROWSER_TOOLS 로 제한한다. 결과는 <publish_result> 태그로 받는다.
-#    맥미니에서 확인한 규약(2026-09-05): `/aside-browser` 스킬은 MCP 도구가 아니라 셸 명령 `aside "..."` 로
-#    브라우저 에이전트에 작업을 넘기고 약 60초 간격으로 진행을 보고한다. 그래서 기본 허용 도구는
-#    `Bash(aside:*)`(aside 명령만) + Skill + Read(본문 파일 읽기)다. 다른 Bash 명령은 열지 않는다.
+#    맥미니에서 확인한 규약(2026-09-05): `/aside-browser` 스킬은 **MCP 도구**(`mcp__aside__exec`,
+#    `mcp__aside__memory_search` 등)로 브라우저 에이전트를 움직인다. 스킬 안내문의 `aside "..."` 는
+#    사람에게 보여 주는 설명이지 실제 호출 경로가 아니다 — 그 문구만 보고 허용 도구를
+#    `Bash(aside:*)` 로 바꿨더니 MCP 도구가 허용 목록에서 빠져 "권한 승인을 받지 못했다" 로 죽었다.
+#    그래서 기본 허용 도구는 **`mcp__aside` 서버 전체**를 열고, aside CLI 가 설치된 환경을 위해
+#    `Bash(aside:*)` 도 함께 둔다. 다른 Bash 명령은 열지 않는다.
+#    허용 문법은 공식 권한 문서 기준이다 — `mcp__<server>` 는 그 서버의 모든 도구, `mcp__<server>__*` 는
+#    같은 뜻의 와일드카드이며(allow 규칙은 서버 이름 뒤에서만 글롭을 받는다), 둘 다 유효하다.
 # 2) POPORY_PUBLISH_CMD — 커스텀 명령(예: aside CLI 직접 호출). 작업 JSON 을 stdin 으로 주고 stdout 에서
 #    같은 태그를 읽는다. 스킬 호출 규약이 바뀌어도 코드 수정 없이 갈아끼울 수 있게 둔 통로다.
 #
@@ -30,7 +35,8 @@ from popory_content.portal_client import PortalError
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 CLAIM_PATH = "/api/content/publish/claim"
 BROWSER_SKILL = os.environ.get("POPORY_BROWSER_SKILL", "aside-browser")
-BROWSER_TOOLS = tuple(t.strip() for t in os.environ.get("POPORY_BROWSER_TOOLS", "Skill,Bash(aside:*),Read").split(",") if t.strip())
+BROWSER_TOOLS = tuple(t.strip() for t in os.environ.get(
+    "POPORY_BROWSER_TOOLS", "Skill,mcp__aside,mcp__aside__*,Bash(aside:*),Read").split(",") if t.strip())
 PUBLISH_CMD = os.environ.get("POPORY_PUBLISH_CMD", "")
 # 로그인·편집기 로딩·이미지 업로드까지 포함하므로 본문 생성보다 짧지만 넉넉히.
 TIMEOUT_SECONDS = int(os.environ.get("POPORY_PUBLISH_TIMEOUT", "900"))
@@ -41,6 +47,25 @@ WORK_DIR = Path(os.environ.get("POPORY_PUBLISH_WORK_DIR", "/tmp/popory_publish")
 YOUTUBE_SCHEDULE_DAYS = int(os.environ.get("POPORY_YOUTUBE_POST_SCHEDULE_DAYS", "30"))
 
 _RESULT = re.compile(r"<publish_result>\s*(\{.*?\})\s*</publish_result>", re.S)
+
+# 브라우저 에이전트에 닿지도 못한 실패는 원인이 늘 환경 설정이다. 사유 문구에서 신호를 읽어
+# 무엇을 고쳐야 하는지 한 줄로 붙인다 — "other: 시작조차 못 했습니다" 만 남으면 진단이 안 된다.
+_SETUP_SIGNALS = (
+    ("권한", "허용 도구 확인: POPORY_BROWSER_TOOLS 에 mcp__aside 가 있어야 한다(현재 {tools})"),
+    ("permission", "허용 도구 확인: POPORY_BROWSER_TOOLS 에 mcp__aside 가 있어야 한다(현재 {tools})"),
+    ("승인", "허용 도구 확인: POPORY_BROWSER_TOOLS 에 mcp__aside 가 있어야 한다(현재 {tools})"),
+    ("not found", "PATH 확인: launchd 는 최소 PATH 로 띄운다. run_worker.sh 가 /opt/homebrew/bin 을 넣는다"),
+    ("PATH", "PATH 확인: launchd 는 최소 PATH 로 띄운다. run_worker.sh 가 /opt/homebrew/bin 을 넣는다"),
+)
+
+
+def _setup_hint(note: str) -> str:
+    """실패 사유에서 환경 설정 문제를 알아보고 고칠 곳을 한 줄로 돌려준다. 없으면 빈 문자열."""
+    low = (note or "").lower()
+    for signal, hint in _SETUP_SIGNALS:
+        if signal.lower() in low:
+            return hint.format(tools=",".join(BROWSER_TOOLS))
+    return ""
 
 SYSTEM_PROMPT = """당신은 사용자의 브라우저를 대신 조작해 글을 **비공개로** 등록하는 발행 담당자입니다.
 브라우저 조작은 반드시 지시된 스킬(aside 브라우저 에이전트)을 통해서만 합니다. 스킬이 `aside "..."` 명령으로
@@ -150,6 +175,9 @@ def publish(task: dict[str, Any], *, runner=run_claude_cli) -> dict[str, Any]:
         return {"status": "done", "url": str(result.get("url") or "")[:2000]}
     reason = str(result.get("reason") or "other")
     note = str(result.get("note") or "")[:300]
+    hint = _setup_hint(note)
+    if hint:
+        note = f"{note} | {hint}"[:400]
     if reason == "no_private_option":
         return {"status": "skipped", "error": f"비공개 옵션 없음. {note}".strip()}
     return {"status": "failed", "error": f"{reason}: {note}".strip(": ")}
