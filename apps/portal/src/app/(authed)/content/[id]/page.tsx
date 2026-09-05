@@ -15,6 +15,7 @@ import { InstagramUpload } from "./InstagramUpload";
 import { FacebookUpload } from "./FacebookUpload";
 import { PublishStatus } from "./PublishStatus";
 import { SeoReviewPanel, type SeoReview } from "./SeoReviewPanel";
+import { FullScript } from "./FullScript";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -150,10 +151,6 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
               ) : null;
             })()}
             <video controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video`} />
-            <details>
-              <summary className="cursor-pointer text-xs text-popory-accent">대본 보기</summary>
-              <div className="mt-2 whitespace-pre-wrap rounded-md border border-popory-border bg-popory-card p-3 text-sm leading-relaxed text-popory-fg2">{job.draft}</div>
-            </details>
             <RegenerateButton jobId={job.id} />
             {showYtUpload && (
               <YoutubeUpload jobId={job.id} connected={ytConnected} initialStatus={job.youtube_status} initialVideoId={job.youtube_video_id} initialError={job.youtube_error} />
@@ -177,6 +174,7 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                 initialError={job.facebook_error}
               />
             )}
+            <FullScript draft={job.draft ?? ""} />
           </div>
         )}
 
