@@ -25,6 +25,7 @@ from typing import Any
 
 from popory_content.generate import run_claude_cli, model_for, GenerateError
 from popory_content.log import append_log
+from popory_content.portal_client import PortalError
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 CLAIM_PATH = "/api/content/publish/claim"
@@ -148,9 +149,26 @@ def publish(task: dict[str, Any], *, runner=run_claude_cli) -> dict[str, Any]:
     return {"status": "failed", "error": f"{reason}: {note}".strip(": ")}
 
 
+# claim 경로가 404 면 API 가 아직 이 기능을 모르는(워커가 API 보다 먼저 배포된) 상태다. 사이클마다
+# PortalError 로 터뜨리면 메인 루프가 portal_error 를 20초마다 찍고 유휴 백오프에 걸린다 — 한 번만
+# 로그하고 그 뒤론 조용히 건너뛴다. 프로세스가 재시작되면 다시 한 번 시도한다.
+_claim_unavailable = False
+
+
 def run_publish_once(client, *, runner=run_claude_cli) -> bool:
     """발행 큐에서 한 건 처리. 처리했으면 True."""
-    task = client.post(CLAIM_PATH, json=None)
+    global _claim_unavailable
+    if _claim_unavailable:
+        return False
+    try:
+        task = client.post(CLAIM_PATH, json=None)
+    except PortalError as e:
+        if "404" in str(e):
+            _claim_unavailable = True
+            append_log(LOGS_DIR, {"worker": "content", "status": "publish_claim_unavailable",
+                                  "error": "API 에 발행 claim 경로가 없음(배포 전) — 이 프로세스에서는 발행을 건너뜀"})
+            return False
+        raise
     if not task:
         return False
     job_id = task["job_id"]
