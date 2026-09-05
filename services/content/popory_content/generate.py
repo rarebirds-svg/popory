@@ -39,6 +39,8 @@ TIMEOUT_SECONDS = int(os.environ.get("POPORY_CLAUDE_TIMEOUT", "1200"))
 MAX_ATTEMPTS = int(os.environ.get("POPORY_CLAUDE_MAX_ATTEMPTS", "4"))
 RETRY_BACKOFF_BASE = int(os.environ.get("POPORY_CLAUDE_BACKOFF_BASE", "10"))
 RETRY_BACKOFF_CAP = int(os.environ.get("POPORY_CLAUDE_BACKOFF_CAP", "60"))
+# 파싱 실패 시 오류에 실어 보낼 모델 출력 꼬리 길이(자).
+PARSE_FAIL_TAIL = int(os.environ.get("POPORY_PARSE_FAIL_TAIL", "800"))
 
 # 사용량 한도(5시간 세션·주간) 쿨다운. 한도는 재시도로 안 풀리고(리셋까지 수 시간) 실패로 굳히면
 # 그 사이 큐에 들어온 잡이 전부 failed 가 돼 사람이 하나씩 다시 눌러야 한다. 그래서 한도를 만나면
@@ -142,7 +144,10 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
                 if not last:
                     wait = _retry_backoff(attempt); _log_retry(attempt, wait, "parse 실패")
                     time.sleep(wait); continue
-                raise GenerateError(f"{e} (시도 {attempt})") from e
+                # 출력 꼬리를 붙인다. 이걸 버리면 "태그 없음" 만 남아 모델이 무엇을 했는지 알 수 없다
+                # — 발행처럼 부작용이 있는 호출에서는 글이 올라갔는지조차 판단하지 못한다(2026-09-05).
+                tail = (result.stdout or "").strip()[-PARSE_FAIL_TAIL:]
+                raise GenerateError(f"{e} (시도 {attempt}) || 출력 꼬리: {tail}") from e
     finally:
         sys_path.unlink(missing_ok=True)
     raise GenerateError("run_claude_cli 도달 불가 경로")

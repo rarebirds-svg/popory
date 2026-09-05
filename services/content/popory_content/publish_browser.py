@@ -54,7 +54,8 @@ PUBLISH_CWD = os.environ.get("POPORY_PUBLISH_CWD", "")
 # 유튜브 커뮤니티 글은 비공개 옵션이 없다 — 예약 게시를 이 일수 뒤로 잡아 검수 전 노출을 막는다.
 YOUTUBE_SCHEDULE_DAYS = int(os.environ.get("POPORY_YOUTUBE_POST_SCHEDULE_DAYS", "30"))
 
-_RESULT = re.compile(r"<publish_result>\s*(\{.*?\})\s*</publish_result>", re.S)
+_RESULT = re.compile(r"<publish_result>(.*?)</publish_result>", re.S)
+_TAG_OPEN = "<publish_result>"
 
 # 브라우저 에이전트에 닿지도 못한 실패는 원인이 늘 환경 설정이다. 사유 문구에서 신호를 읽어
 # 무엇을 고쳐야 하는지 한 줄로 붙인다 — "other: 시작조차 못 했습니다" 만 남으면 진단이 안 된다.
@@ -88,6 +89,9 @@ SYSTEM_PROMPT = """당신은 사용자의 브라우저를 대신 조작해 글�
 - **공개로 게시하지 않습니다.** 공개 범위는 항상 '비공개'(없으면 지시된 대체 방식)로 두고, 확인 후에만 등록합니다.
 - 같은 글을 두 번 올리지 않습니다. 등록 전에 임시저장·초안 목록에 같은 제목이 있으면 그것을 이어서 씁니다.
 - 본문을 요약하거나 고치지 않습니다. 주어진 제목·본문·태그를 그대로 씁니다(편집기가 못 받는 서식만 조정).
+- 브라우저 에이전트가 진행 상황을 여러 번 보고하면 **끝날 때까지 기다립니다.** 중간 보고만 하고 응답을 끝내지 않습니다.
+- **어떤 경우에도 마지막 응답에는 아래 태그가 있어야 합니다.** 성공·실패·중단·확인 불가 전부 해당합니다. 태그 없이 끝내면 시스템은 글이 올라갔는지조차 알 수 없고, 발행은 재시도하지 않으므로 그대로 미아가 됩니다. 확신이 없으면 `ok: false` 에 무엇까지 했는지 note 로 적으십시오.
+- 태그 안에는 **JSON 객체 하나만** 넣습니다. ``` 표시, 설명 문장, 태그 두 개는 넣지 않습니다.
 - 작업이 끝나면 마지막 응답에 태그 하나만 남깁니다(태그 안 코드블록 표시 금지):
 <publish_result>{"ok": true, "url": "등록된 글 주소", "visibility": "private", "note": "짧은 메모"}</publish_result>
 실패하거나 비공개로 올릴 수 없으면:
@@ -95,14 +99,62 @@ SYSTEM_PROMPT = """당신은 사용자의 브라우저를 대신 조작해 글�
 """
 
 
+def _strip_fences(text: str) -> str:
+    """태그 안에 씌운 ``` 코드블록을 벗긴다. 금지해도 모델이 습관적으로 넣는다."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[A-Za-z0-9_-]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t)
+    return t.strip()
+
+
+def _first_json_object(text: str) -> Any:
+    """텍스트에서 첫 균형 잡힌 {...} 를 찾아 파싱한다(문자열 안의 중괄호는 세지 않는다). 실패하면 None."""
+    for start, ch0 in enumerate(text):
+        if ch0 != "{":
+            continue
+        depth = 0
+        in_str = esc = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break
+    return None
+
+
 def parse_publish_result(stdout: str) -> dict[str, Any]:
+    """<publish_result> 태그에서 결과 JSON 을 꺼낸다. **관대하게** 읽는다 — 여기서 실패하면
+    글이 올라갔는지조차 모르는 최악의 상태가 되고, 발행은 재시도가 없어 복구도 안 된다(2026-09-05).
+    태그 안 코드블록, 닫는 태그 누락, 태그 자체 누락(본문에 JSON 만 남은 경우)까지 받아 준다."""
+    candidates: list[str] = []
     m = _RESULT.search(stdout)
-    if not m:
-        raise ValueError("publish_result 태그 없음")
-    data = json.loads(m.group(1))
-    if not isinstance(data, dict):
-        raise ValueError("publish_result 가 객체가 아님")
-    return data
+    if m:
+        candidates.append(_strip_fences(m.group(1)))
+    elif _TAG_OPEN in stdout:
+        candidates.append(_strip_fences(stdout.split(_TAG_OPEN, 1)[1]))   # 닫는 태그 누락
+    candidates.append(stdout)                                             # 태그 자체 누락
+    for text in candidates:
+        data = _first_json_object(text)
+        if isinstance(data, dict) and "ok" in data:
+            return data
+    raise ValueError("publish_result 태그 없음")
 
 
 def _write_payload(task: dict[str, Any]) -> tuple[Path, Path]:
@@ -174,6 +226,11 @@ def publish(task: dict[str, Any], *, runner=run_claude_cli) -> dict[str, Any]:
                             cwd=PUBLISH_CWD or None)
     except (GenerateError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as e:
         msg = str(e)
+        if "publish_result 태그 없음" in msg:
+            # 모델이 결과를 안 남겼다 = 올라갔는지 모른다. 그냥 재시도하면 중복 게시가 된다.
+            return {"status": "failed",
+                    "error": ("결과 미보고 — 글이 이미 올라갔을 수 있습니다. 블로그의 글 목록·임시저장을 "
+                              f"먼저 확인한 뒤 재시도하세요. {msg}")[:500]}
         if is_usage_limit(msg):
             # 한도는 이 글의 문제가 아니다. 실패로 회신하면 사람이 나중에 다시 눌러야 하므로
             # 회신 자체를 미룬다 — 잡이 publishing 으로 남고 API 의 발행 리스(20분)가 requested 로

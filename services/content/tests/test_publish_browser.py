@@ -41,6 +41,42 @@ def test_parse_publish_result():
         pb.parse_publish_result("태그 없음")
 
 
+def test_parse_publish_result_tolerates_broken_shapes():
+    """태그 파싱이 실패하면 글이 올라갔는지조차 모르는 최악의 상태가 되고 발행은 재시도가 없다
+    (2026-09-05 "publish_result 태그 없음" 실패). 흔히 깨지는 형태를 전부 받아 준다."""
+    # 태그 안 코드블록(금지해도 모델이 습관적으로 넣는다)
+    assert pb.parse_publish_result(
+        '<publish_result>```json\n{"ok": false, "reason": "editor_error"}\n```</publish_result>'
+    ) == {"ok": False, "reason": "editor_error"}
+    # 닫는 태그 누락
+    assert pb.parse_publish_result('<publish_result>{"ok": true, "url": "u"}')["url"] == "u"
+    # 태그 자체 누락 — 본문에 결과 JSON 만 남은 경우
+    assert pb.parse_publish_result('작업 완료했습니다. {"ok": true, "url": "https://a/1"}')["ok"] is True
+    # 중첩 객체·문자열 안의 중괄호에 속지 않는다
+    got = pb.parse_publish_result('<publish_result>{"ok": true, "note": "제목에 { 가 있음", "meta": {"a": 1}}</publish_result>')
+    assert got["meta"] == {"a": 1} and got["note"] == "제목에 { 가 있음"
+    # ok 가 없는 객체는 결과가 아니다 → 여전히 실패
+    for bad in ('<publish_result>{"status": "done"}</publish_result>', "아무 말", '{"unrelated": 1}'):
+        with pytest.raises(ValueError):
+            pb.parse_publish_result(bad)
+
+
+def test_missing_result_warns_about_possible_duplicate():
+    """결과 미보고는 '올라갔는지 모름'이다. 그냥 재시도하면 중복 게시가 되므로 확인부터 시킨다."""
+    def no_tag(**kw):
+        raise GenerateError("publish_result 태그 없음 (시도 1) || 출력 꼬리: 티스토리 편집기를 열었습니다")
+    r = pb.publish(_task("tistory"), runner=no_tag)
+    assert r["status"] == "failed"
+    assert "이미 올라갔을 수 있습니다" in r["error"] and "임시저장" in r["error"]
+    assert "출력 꼬리" in r["error"]        # 모델이 무엇을 했는지 남는다
+
+
+def test_prompt_demands_the_tag_even_when_unfinished():
+    assert "어떤 경우에도 마지막 응답에는" in pb.SYSTEM_PROMPT
+    assert "끝날 때까지 기다립니다" in pb.SYSTEM_PROMPT
+    assert "JSON 객체 하나만" in pb.SYSTEM_PROMPT
+
+
 def test_publish_maps_results_and_writes_payload_files(tmp_path):
     seen = {}
 
