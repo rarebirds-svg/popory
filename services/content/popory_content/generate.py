@@ -40,7 +40,38 @@ MAX_ATTEMPTS = int(os.environ.get("POPORY_CLAUDE_MAX_ATTEMPTS", "4"))
 RETRY_BACKOFF_BASE = int(os.environ.get("POPORY_CLAUDE_BACKOFF_BASE", "10"))
 RETRY_BACKOFF_CAP = int(os.environ.get("POPORY_CLAUDE_BACKOFF_CAP", "60"))
 
+# 사용량 한도(5시간 세션·주간) 쿨다운. 한도는 재시도로 안 풀리고(리셋까지 수 시간) 실패로 굳히면
+# 그 사이 큐에 들어온 잡이 전부 failed 가 돼 사람이 하나씩 다시 눌러야 한다. 그래서 한도를 만나면
+# ① 재시도를 즉시 포기하고(백오프 60초로는 못 넘는다) ② 이 쿨다운 동안 claude 를 쓰는 작업을
+# 아예 집지 않는다 — 잡은 큐에 남아 한도가 풀린 뒤 자동으로 처리된다.
+USAGE_LIMIT_COOLDOWN_SECONDS = int(os.environ.get("POPORY_USAGE_LIMIT_COOLDOWN", "1800"))
+_usage_limit_until = 0.0
+
 T = TypeVar("T")
+
+
+def is_usage_limit(err: str) -> bool:
+    """claude CLI 사용량 한도 신호인지. 실측 문구는 "You've hit your session limit · resets 11pm
+    (Asia/Seoul)"(2026-09-05). 주간 한도·표현 변화까지 덮되, 재시도로 풀리는 일시 오류(429 등)는
+    일부러 제외한다 — 그건 기존 백오프가 처리한다."""
+    low = (err or "").lower()
+    if "limit" in low and "reset" in low:
+        return True
+    return any(s in low for s in ("hit your session limit", "hit your weekly limit",
+                                  "hit your usage limit", "session limit reached",
+                                  "usage limit reached"))
+
+
+def note_usage_limit() -> None:
+    """한도를 만났음을 기록한다. 이후 USAGE_LIMIT_COOLDOWN_SECONDS 동안 usage_limited() 가 True."""
+    global _usage_limit_until
+    _usage_limit_until = time.monotonic() + USAGE_LIMIT_COOLDOWN_SECONDS
+
+
+def usage_limited() -> bool:
+    """지금 한도 쿨다운 중인지. 시간이 지나면 저절로 풀린다(리셋 시각 파싱은 하지 않는다 —
+    문구의 시각이 로컬 타임존 표기라 파싱이 깨지기 쉽고, 틀리면 영구히 멈춘다)."""
+    return time.monotonic() < _usage_limit_until
 
 
 def _retry_backoff(attempt: int) -> int:
@@ -61,10 +92,16 @@ class GenerateError(Exception):
 def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], T],
                    job_id: str = "adhoc", model: str = DEFAULT_MODEL,
                    timeout_seconds: int | None = None, max_attempts: int | None = None,
-                   allowed_tools: tuple[str, ...] = ("WebSearch", "WebFetch")) -> T:
+                   allowed_tools: tuple[str, ...] = ("WebSearch", "WebFetch"),
+                   cwd: str | None = None) -> T:
     """claude CLI 호출 → parse(stdout). 타임아웃·비제로종료·파싱실패에 재시도.
     경량 호출(번역 등)은 timeout_seconds·max_attempts·allowed_tools를 줄여 워커를 오래 막지 않게 한다.
-    None이면 모듈 기본값(TIMEOUT_SECONDS·MAX_ATTEMPTS)을 호출 시점에 읽는다(런타임 변경 반영)."""
+    None이면 모듈 기본값(TIMEOUT_SECONDS·MAX_ATTEMPTS)을 호출 시점에 읽는다(런타임 변경 반영).
+
+    cwd 는 **MCP 서버가 보이는 디렉터리**를 지정할 때 쓴다. claude 의 local 범위 MCP 등록은
+    디렉터리마다 따로라(~/.claude.json 의 projects.<path>.mcpServers), 그 디렉터리 밖에서 띄운
+    claude 에는 서버가 아예 없다. launchd 는 워커에 작업 디렉터리를 지정하지 않아 cwd 가
+    루트/홈이 되므로, 서버가 필요한 호출은 명시해야 한다(2026-09-05 발행 실패). 없는 경로는 무시한다."""
     timeout_seconds = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     max_attempts = MAX_ATTEMPTS if max_attempts is None else max_attempts
     if not Path(CLAUDE_BIN).exists():
@@ -75,11 +112,13 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
     if allowed_tools:
         cmd += ["--allowed-tools", *allowed_tools]
     cmd += ["--system-prompt-file", str(sys_path), "--output-format", "text"]
+    run_cwd = cwd if cwd and Path(cwd).is_dir() else None
     try:
         for attempt in range(1, max_attempts + 1):
             last = attempt == max_attempts
             try:
-                result = subprocess.run(cmd, input=user_msg, capture_output=True, text=True, timeout=timeout_seconds)
+                result = subprocess.run(cmd, input=user_msg, capture_output=True, text=True,
+                                        timeout=timeout_seconds, cwd=run_cwd)
             except subprocess.TimeoutExpired:
                 if not last:
                     wait = _retry_backoff(attempt); _log_retry(attempt, wait, f"timeout {timeout_seconds}s")
@@ -87,6 +126,10 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
                 raise GenerateError(f"claude CLI timeout after {timeout_seconds}s (시도 {attempt})")
             if result.returncode != 0:
                 tail = ((result.stderr or "")[-300:] + " || stdout: " + (result.stdout or "")[-600:]).strip()
+                if is_usage_limit(tail):
+                    # 한도는 남은 시도를 태워도 안 풀린다. 즉시 포기하고 쿨다운을 건다.
+                    note_usage_limit()
+                    raise GenerateError(f"claude CLI 사용량 한도 (시도 {attempt}): {tail}")
                 if not last:
                     wait = _retry_backoff(attempt); _log_retry(attempt, wait, f"exit {result.returncode}")
                     time.sleep(wait); continue
