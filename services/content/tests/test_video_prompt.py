@@ -48,13 +48,30 @@ def test_system_prompt_demands_consistent_style_suffix():
     assert "watercolor painting" in sp
 
 
-def test_narration_still_bans_subscribe_cta():
-    """내레이션엔 여전히 구독 요청 금지(브랜딩 유지). 설명란 CTA는 파싱 단계에서 append."""
+def test_longform_cta_only_in_ending_scene_and_shorts_still_ban():
+    """2026-09 정책: 롱폼은 마지막 장면(엔딩 CTA)에만 구독·좋아요·댓글·추천 영상 3단계를 넣고
+    본문 장면엔 넣지 않는다. 쇼츠는 여전히 전면 금지. 설명란 CTA는 파싱 단계에서 append."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
-    for sp in (build_video_system_prompt([]), build_shorts_system_prompt([])):
-        assert "구독" in sp and "절대 넣지 않습니다" in sp   # 내레이션 CTA 금지 유지
+    long_sp = build_video_system_prompt([])
+    assert "엔딩 CTA" in long_sp and "마지막 장면에만" in long_sp
+    assert "댓글로 자유롭게" in long_sp and "화면에 보이는 추천 영상" in long_sp
+    assert "다른 영상 제목을 지어내지" in long_sp   # 추천 영상 제목 환각 금지
+    shorts_sp = build_shorts_system_prompt([])
+    assert "구독" in shorts_sp and "절대 넣지 않습니다" in shorts_sp
+    for sp in (long_sp, shorts_sp):
         # 설명란은 요약만 시키고 브랜딩/구독은 자동 append (프롬프트에서 강제 브랜딩 줄 제거)
         assert "자동으로 덧붙" in sp
+
+
+def test_longform_prehook_summary_and_cards():
+    """프리후크(첫 문장 결론), 2~3분마다 요약, 카드(quote/keypoints) 규칙이 롱폼 프롬프트에 있다."""
+    from popory_content.video_prompt import build_video_system_prompt
+    sp = build_video_system_prompt([], scene_count=16)
+    assert "프리후크" in sp and "첫 문장에" in sp
+    assert "3~4장면마다" in sp and "요약 문장" in sp
+    assert '"type": "quote"' in sp and '"type": "keypoints"' in sp
+    assert "확인된 문장만" in sp   # 명언 카드 환각 금지
+    assert "고유명사 검수" in sp
 
 
 def test_title_rule_hook_first():

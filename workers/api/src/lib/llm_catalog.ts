@@ -19,6 +19,7 @@ export const SERVICES: { key: ServiceKey; label: string; description: string }[]
 export type FeatureKey =
   | "blog" | "video_script" | "shorts_script" | "carousel"
   | "youtube_post" | "reply" | "translate" | "recommend" | "image_review"
+  | "script_review" | "seo_review" | "publish_browser"
   | "brief_issue";
 
 // defaultModel 을 준 기능은 그 값이 기본값이다(안 주면 DEFAULT_MODEL). 기능마다
@@ -35,6 +36,9 @@ export const FEATURES: {
   { key: "translate", service: "content", label: "자막 번역", description: "EN·ZH·JA SRT 번역" },
   { key: "recommend", service: "content", label: "주간 도서 추천", description: "다음 주 다룰 책 후보" },
   { key: "image_review", service: "content", label: "이미지 이상 검수", description: "얼굴·인체 기형 판정(비전). 장당 1회라 호출이 가장 많다" },
+  { key: "script_review", service: "content", label: "대본 오탈자 검수", description: "롱폼·쇼츠 대본의 고유명사·오탈자 치환 목록(WebSearch 로 출판 표기 확인)" },
+  { key: "seo_review", service: "content", label: "SEO·AEO·GEO 검토", description: "블로그·커뮤니티 글 점수 산정 + 구조 보강 교정본" },
+  { key: "publish_browser", service: "content", label: "브라우저 비공개 발행", description: "aside 브라우저 스킬로 블로그·커뮤니티에 비공개 등록" },
   // 브리핑은 도입 때부터 Sonnet 4.6 으로 돌아왔다. 어드민 설정이 붙었다고 모델이
   // 저절로 바뀌면 안 되니 기본값을 그대로 유지한다.
   { key: "brief_issue", service: "brief", label: "이슈 생성", defaultModel: "claude-sonnet-4-6", description: "WebSearch 로 이슈를 모아 브리핑 본문 작성. 카테고리·커스텀 주제 공통" },

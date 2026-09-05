@@ -2,6 +2,10 @@
 
 poporyfamily.com 멀티 서비스 플랫폼 monorepo. 공통 행동 규칙은 상위 `~/projects/AGENTS.md`를 따른다.
 
+## 전역 지침 (모든 세션 공통)
+
+- 사용자에게 보이는 진행 과정 설명·중간 보고·최종 요약은 **반드시 한글**로 쓴다. 코드·식별자·명령어는 원문 그대로 둔다.
+
 ## 스택
 
 - pnpm 9 workspace + turbo, Node >= 20.10, TypeScript 5.6

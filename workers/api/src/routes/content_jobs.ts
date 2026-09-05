@@ -8,6 +8,7 @@ import { verifyAreaToken } from "@popory/auth";
 import { loadJwks } from "../db/signing_keys";
 import { deleteContentJob } from "../db/content_delete";
 import { zodDetail } from "../lib/zod_error";
+import { loadPublishSettings, publishTargetFor } from "./content_publish";
 
 function ulid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -224,7 +225,7 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     const parsed = ContentJobResultSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text(zodDetail(parsed.error), 400);
     const id = c.req.param("id");
-    const row = await c.env.DB.prepare("SELECT id, status, platform, auto_upload, category_id FROM content_jobs WHERE id=?").bind(id).first<{ id: string; status: string; platform: string; auto_upload: number; category_id: string | null }>();
+    const row = await c.env.DB.prepare("SELECT id, owner_sub, status, platform, auto_upload, category_id FROM content_jobs WHERE id=?").bind(id).first<{ id: string; owner_sub: string; status: string; platform: string; auto_upload: number; category_id: string | null }>();
     if (!row) return c.text("not found", 404);
     if (row.status !== "running") return c.text("conflict", 409);
     const now = Math.floor(Date.now() / 1000);
@@ -241,6 +242,14 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
       const conn = await c.env.DB.prepare("SELECT category_id FROM category_youtube_tokens WHERE category_id=?").bind(row.category_id).first();
       if (conn) {
         await c.env.DB.prepare("UPDATE content_jobs SET youtube_status='requested', youtube_privacy='private', youtube_error=NULL, updated_at=? WHERE id=?").bind(now, id).run();
+      }
+    }
+    // review 전이 시 블로그·커뮤니티 글 비공개 등록 트리거 — 사용자가 발행 설정을 해 두고 자동 발행을
+    // 켠 경우에만. 워커가 aside 브라우저 스킬로 등록한다(content_publish.ts).
+    if (parsed.data.status === "review" && (row.platform === "naver-blog" || row.platform === "youtube-post")) {
+      const s = await loadPublishSettings(c.env, row.owner_sub);
+      if (s && s.auto_publish === 1 && publishTargetFor(row.platform, s)) {
+        await c.env.DB.prepare("UPDATE content_jobs SET publish_status='requested', publish_error=NULL WHERE id=?").bind(id).run();
       }
     }
     return c.json({ ok: true });

@@ -33,6 +33,8 @@ from popory_content.facebook_upload import upload_reels as fb_upload_reels
 from popory_content.youtube_playlist import assign_to_playlist
 from popory_content.image_review import (apply_people_policy, harden_prompt,
                                           is_unavailable, review_image)
+from popory_content.seo_review import review_blog, review_youtube_post
+from popory_content.publish_browser import run_publish_once
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 WORKER_AREA = "content-worker"
@@ -154,9 +156,14 @@ def run_once(client) -> bool:
             _report(client, job_id, {"status": "review", "draft": caption, "meta": meta}, "review")
         elif platform == "youtube-post":
             draft, meta = generate_youtube_post(topic=job["topic"], job_id=job_id)
+            # 생성 직후 SEO·AEO·GEO 검토(fail-open). 교정본 채택 여부·점수는 meta.seo_review 에 남는다.
+            draft, meta = review_youtube_post(draft, meta, topic=job["topic"], job_id=job_id)
+            _log_seo_review(job_id, meta)
             _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
         else:
             draft, meta = generate(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
+            draft, meta = review_blog(draft, meta, topic=job["topic"], job_id=job_id)
+            _log_seo_review(job_id, meta)
             _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
     except Exception as e:  # noqa: BLE001 — 생성 실패는 failed 로 회신
         msg = str(e)
@@ -170,6 +177,19 @@ def run_once(client) -> bool:
             _notify_auth_failure()
             sys.exit(1)
     return True
+
+
+def _log_seo_review(job_id: str, meta: dict) -> None:
+    """검토 결과를 로그에 남긴다. 검토기가 죽어 무검토로 나간 건(unavailable)을 따로 셀 수 있어야
+    '점수가 안 나온 날'과 '다 좋았던 날'을 구분한다."""
+    r = meta.get("seo_review") or {}
+    status = r.get("status")
+    if status == "ok":
+        append_log(LOGS_DIR, {"worker": "content", "status": "seo_reviewed", "job": job_id,
+                              "overall": r.get("overall"), "revised": r.get("revised")})
+    elif status == "unavailable":
+        append_log(LOGS_DIR, {"worker": "content", "status": "seo_review_error", "job": job_id,
+                              "error": str(r.get("error", ""))[:200]})
 
 
 def _report(client, job_id: str, body: dict, status_label: str) -> None:
@@ -722,10 +742,12 @@ def run_cycle(client) -> bool:
     did_upload = run_upload_once(client)
     did_ig = run_instagram_upload_once(client)
     did_fb = run_facebook_upload_once(client)
+    # 블로그·커뮤니티 글 비공개 등록(브라우저). 업로드와 같은 이유로 매 사이클 1회.
+    did_pub = run_publish_once(client)
     did_brief = False
-    if not (did_gen or did_upload or did_ig or did_fb):
+    if not (did_gen or did_upload or did_ig or did_fb or did_pub):
         did_brief = run_custom_brief_once(client)
-    return did_gen or did_upload or did_ig or did_fb or did_brief
+    return did_gen or did_upload or did_ig or did_fb or did_pub or did_brief
 
 
 def main() -> None:
