@@ -18,6 +18,7 @@ API = "https://api.poporyfamily.com/health"
 BRIEF_URL_TEMPLATE = "https://api.poporyfamily.com/api/published_items?area=brief-{slug}&limit=5"
 BRIEF_CATEGORY_DIR = "/Users/daegong/projects/popory/services/brief/categories"
 WORKER_LOG_DIR = "/Users/daegong/projects/popory/services/content/logs"
+BRIEF_LOG_DIR = "/Users/daegong/projects/popory/services/brief/logs"
 STATE_FILE = str(Path(__file__).resolve().parent.parent / "state" / "last.json")
 
 
@@ -126,6 +127,10 @@ def gather(mode: str = "pm") -> list[tuple[str, str, str]]:
             BRIEF_URL_TEMPLATE, brief_due, _today())))
     else:
         out.append(("브리핑", "ok", f"오늘 발행 예정 카테고리 없음 (요일제 {brief_skipped}개 건너뜀) — {_today()}"))
+    # 발행 결과 바로 뒤에 원인 점검을 둔다 — 미확인이 "안 떴다"인지 "돌았지만 실패"인지
+    # 다이제스트에서 바로 갈린다.
+    out.append(("브리핑잡", *checks.check_brief_run(
+        str(Path(BRIEF_LOG_DIR) / f"{_today()}.log"), mode)))
     out.append(("워커데몬", *checks.check_daemon("com.popory.content-worker")))
     out.append(("이미지데몬", *checks.check_daemon("com.popory.imagegen")))
     out.append(("워커로그", *checks.check_log_freshness(log_path, 24 * 3600)))
