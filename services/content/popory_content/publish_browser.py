@@ -43,12 +43,14 @@ TIMEOUT_SECONDS = int(os.environ.get("POPORY_PUBLISH_TIMEOUT", "900"))
 # 브라우저 조작은 재시도하면 중복 게시 위험이 있다 — 1회만.
 MAX_ATTEMPTS = 1
 WORK_DIR = Path(os.environ.get("POPORY_PUBLISH_WORK_DIR", "/tmp/popory_publish"))
-# claude 를 띄울 디렉터리. aside MCP 서버가 local 범위로 등록돼 있으면 **그 디렉터리에서 띄운
-# claude 에만** 서버가 붙는다. launchd 는 워커에 작업 디렉터리를 주지 않아 cwd 가 루트/홈이 되므로,
-# 사용자가 `claude mcp list` 로 aside 를 확인한 저장소 루트를 기본값으로 명시한다.
-# 사용자 범위 등록이면 cwd 는 무관하므로 이 지정은 어느 쪽이든 손해가 없다.
+# claude 를 띄울 디렉터리. **기본값은 비움(=워커 cwd 상속)** 이다. 2026-09-05 확인 결과 aside 는
+# `claude mcp get aside` 가 "User config (available in all your projects)" 로, 사용자 범위라 cwd 와
+# 무관하게 붙는다. 저장소 루트를 기본값으로 두면 그 디렉터리의 CLAUDE.md·설정까지 세션에 딸려 들어오는
+# 부작용만 남으므로 기본값을 두지 않는다. **local 범위로 등록된 환경에서만** 이 값을 그 디렉터리로
+# 지정한다 — local 등록은 디렉터리마다 따로라(~/.claude.json 의 projects.<path>.mcpServers) 그 밖에서
+# 띄운 claude 엔 서버가 아예 없다.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-PUBLISH_CWD = os.environ.get("POPORY_PUBLISH_CWD", str(REPO_ROOT))
+PUBLISH_CWD = os.environ.get("POPORY_PUBLISH_CWD", "")
 # 유튜브 커뮤니티 글은 비공개 옵션이 없다 — 예약 게시를 이 일수 뒤로 잡아 검수 전 노출을 막는다.
 YOUTUBE_SCHEDULE_DAYS = int(os.environ.get("POPORY_YOUTUBE_POST_SCHEDULE_DAYS", "30"))
 
@@ -61,7 +63,8 @@ _SETUP_SIGNALS = (
     ("permission", "허용 도구 확인: POPORY_BROWSER_TOOLS 에 mcp__aside 가 있어야 한다(현재 {tools})"),
     ("승인", "허용 도구 확인: POPORY_BROWSER_TOOLS 에 mcp__aside 가 있어야 한다(현재 {tools})"),
     ("mcp", "aside MCP 서버가 안 붙었으면 등록 범위를 본다: `claude mcp get aside` 가 local 이면 "
-            "그 디렉터리를 POPORY_PUBLISH_CWD 로 주거나 user 범위로 옮긴다(현재 cwd {cwd})"),
+            "그 디렉터리를 POPORY_PUBLISH_CWD 로 주거나 user 범위로 옮긴다"
+            "(현재 POPORY_PUBLISH_CWD={cwd!r}, 빈 값이면 워커 cwd 상속)"),
     ("not found", "PATH 확인: launchd 는 최소 PATH 로 띄운다. run_worker.sh 가 /opt/homebrew/bin 을 넣는다"),
     ("PATH", "PATH 확인: launchd 는 최소 PATH 로 띄운다. run_worker.sh 가 /opt/homebrew/bin 을 넣는다"),
 )
@@ -168,7 +171,7 @@ def publish(task: dict[str, Any], *, runner=run_claude_cli) -> dict[str, Any]:
                             parse=parse_publish_result, job_id=f"{task['job_id']}_publish",
                             model=model_for("publish_browser"), timeout_seconds=TIMEOUT_SECONDS,
                             max_attempts=MAX_ATTEMPTS, allowed_tools=BROWSER_TOOLS,
-                            cwd=PUBLISH_CWD)
+                            cwd=PUBLISH_CWD or None)
     except (GenerateError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as e:
         msg = str(e)
         if is_usage_limit(msg):

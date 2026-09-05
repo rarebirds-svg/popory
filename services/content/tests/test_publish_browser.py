@@ -169,18 +169,21 @@ def test_failure_note_carries_the_setup_hint():
     assert r["status"] == "failed" and "POPORY_BROWSER_TOOLS" in r["error"]
 
 
-def test_publish_runs_claude_in_the_dir_where_the_aside_server_is_registered():
-    """claude 의 local 범위 MCP 등록은 디렉터리마다 따로다. launchd 가 준 cwd(루트/홈)에서 띄우면
-    aside 서버가 아예 안 붙는다 — 저장소 루트를 명시해 띄운다."""
+def test_publish_cwd_defaults_to_inherit_and_is_overridable(monkeypatch):
+    """aside 는 user 범위라 cwd 와 무관하다(2026-09-05 `claude mcp get aside` 확인) → 기본은 상속.
+    local 범위 환경을 위해 POPORY_PUBLISH_CWD 로 지정할 수 있어야 한다."""
     seen = {}
 
     def runner(*, parse, **kw):
         seen.update(kw)
         return parse('<publish_result>{"ok": true, "url": "u", "visibility": "private"}</publish_result>')
+    assert pb.PUBLISH_CWD == ""                   # 기본값은 비움
     pb.publish(_task(), runner=runner)
-    assert seen["cwd"] == pb.PUBLISH_CWD
-    assert Path(pb.PUBLISH_CWD).is_dir()          # 저장소 루트로 해석돼야 한다
-    assert (Path(pb.PUBLISH_CWD) / "services" / "content").is_dir()
+    assert seen["cwd"] is None                    # 워커 cwd 를 그대로 물려받는다
+    monkeypatch.setattr(pb, "PUBLISH_CWD", str(pb.REPO_ROOT))
+    pb.publish(_task(), runner=runner)
+    assert seen["cwd"] == str(pb.REPO_ROOT)
+    assert (pb.REPO_ROOT / "services" / "content").is_dir()   # 저장소 루트로 해석된다
 
 
 def test_setup_hint_covers_mcp_server_scope():
