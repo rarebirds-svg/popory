@@ -11,6 +11,13 @@ API.
 frontmatter 선택 필드 days. 콤마 구분 요일 토큰(mon~sun), 없거나 비면 매일 발행.
 요일 게이트는 스케줄러(run_daily.sh 정규 실행)에서만 적용하고, load_category 직접
 호출(--only 재시도·온디맨드)은 게이트 없이 그대로 실행된다.
+
+frontmatter 선택 필드 seo_suffix. 포털·블로그 제목의 `|` 뒤 발행 꼬리 템플릿. 자리표시자
+`{date_label}`(`9월 1주차`/`9월 5일`)·`{name}`. 없으면 `{date_label} {name} 브리핑`.
+제목 형식 자체는 popory_brief.seo_title 참조 (키워드가 앞, 발행 정보가 뒤).
+
+frontmatter 선택 필드 seo_body (기본 true). false 면 공통 SEO 규칙 중 본문 구조(소제목·표)
+부분을 붙이지 않고 제목 규칙만 붙인다 — 헤딩·표를 일부러 쓰지 않는 메시지형 카테고리용.
 """
 from __future__ import annotations
 import datetime
@@ -26,6 +33,7 @@ VALID_MODES = {"standalone", "bundled", "portal_only"}
 # 인덱스가 datetime.date.weekday()와 일치한다 (월=0 … 일=6).
 VALID_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 REQUIRED = ("slug", "name", "delivery_mode", "subject_template", "sender_name", "enabled")
+DEFAULT_SEO_SUFFIX = "{date_label} {name} 브리핑"
 
 
 @dataclass(frozen=True)
@@ -38,13 +46,25 @@ class Category:
     enabled: bool
     system_prompt: str
     days: tuple[str, ...] | None = None  # None = 매일
+    seo_suffix: str = DEFAULT_SEO_SUFFIX
+    seo_body: bool = True
 
     @property
     def area(self) -> str:
         return f"brief-{self.slug}"
 
+    @property
+    def weekly(self) -> bool:
+        """주 1회 발행 카테고리인가. 제목 발행 라벨을 `M월 N주차` 로 쓸지 정한다."""
+        return self.days is not None and len(self.days) == 1
+
     def runs_on(self, d: datetime.date) -> bool:
         return self.days is None or VALID_DAYS[d.weekday()] in self.days
+
+    def title_suffix(self, d: datetime.date) -> str:
+        """포털·블로그 제목의 `|` 뒤 발행 꼬리 (예. `9월 1주차 부동산 브리핑`)."""
+        from popory_brief.seo_title import date_label
+        return self.seo_suffix.format(date_label=date_label(d, weekly=self.weekly), name=self.name)
 
     def subject(self, date: str) -> str:
         return self.subject_template.format(name=self.name, date=date)
@@ -70,6 +90,9 @@ def _parse_skill_md(path: Path) -> Category:
     if meta["delivery_mode"] not in VALID_MODES:
         raise ValueError(f"{path}: invalid delivery_mode {meta['delivery_mode']!r}")
     days = _parse_days(meta.get("days"), path)
+    seo_suffix = meta.get("seo_suffix")
+    if seo_suffix is not None and not str(seo_suffix).strip():
+        raise ValueError(f"{path}: seo_suffix 가 비어 있음")
     return Category(
         slug=str(meta["slug"]),
         name=str(meta["name"]),
@@ -79,6 +102,8 @@ def _parse_skill_md(path: Path) -> Category:
         enabled=bool(meta["enabled"]),
         system_prompt=body,
         days=days,
+        seo_suffix=str(seo_suffix) if seo_suffix is not None else DEFAULT_SEO_SUFFIX,
+        seo_body=bool(meta.get("seo_body", True)),
     )
 
 

@@ -23,3 +23,12 @@ def test_user_message_has_topic_and_sources():
     assert "전세사기 예방" in um
     assert "https://law.go.kr/x" in um
     assert "draft_html" in um
+
+
+def test_system_prompt_carries_seo_title_heading_and_caption_rules():
+    sp = build_system_prompt([])
+    assert "첫 15자" in sp and "[책 리뷰]" in sp and "핵심 요약 및 서평" in sp   # 제목: 검색어가 앞, 말머리 금지
+    assert "5~8개" in sp and "굵은 <p>" in sp                                   # 소제목(H태그) 개수·볼드 대체 금지
+    assert "4~6회" in sp and "결론부에 1회" in sp                               # 키워드 배치
+    assert "사진 설명" in sp and "figcaption" in sp                            # 이미지 캡션에 검색어
+    assert '"keyword"' in sp                                                    # meta 에 핵심 검색어

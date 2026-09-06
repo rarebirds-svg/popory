@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 from popory_content.generate import run_claude_cli, model_for, GenerateError
+from popory_content.seo_title import strip_prefix
 
 ENABLED = os.environ.get("POPORY_SEO_REVIEW", "1") != "0"
 TIMEOUT_SECONDS = int(os.environ.get("POPORY_SEO_REVIEW_TIMEOUT", "600"))
@@ -28,9 +29,10 @@ AXES = ("seo", "aeo", "geo")
 
 _CHECKLIST = """검토 기준 — 축마다 0~100 점과 문제 목록을 냅니다.
 [SEO]
-- 핵심 키워드가 제목·첫 <h2>·첫 문단에 자연스럽게 들어갔는가. 키워드 과잉(스터핑)은 감점.
-- 소제목 중 독자가 검색창에 칠 질문형 문장이 있는가. 제목이 60자 이내이고 클릭 유인이 있는가.
-- 모든 <img> 에 서술형 alt 가 있는가. 태그가 주제·책·저자·핵심 개념을 5~10개로 덮는가.
+- 제목이 **책 제목·저자 같은 핵심 검색어로 시작**하는가. `[책 리뷰]`·`[서평]` 말머리, 날짜, 순번으로 시작하면 감점이고 revised_title 로 고친다 — 검색 봇은 제목 첫 15자에 가장 높은 가중치를 준다. 형식은 `{저자} {책제목} 핵심 요약 및 서평: {핵심 메시지}` 이며 롱테일어(핵심 요약·서평·줄거리·책 추천) 1~2개가 앞부분에 있는가. 60자 이내이고 클릭 유인이 있는가.
+- 핵심 키워드가 첫 문단(도입 3줄 이내)·관련 소제목·결론부에 각 1회, 글 전체 4~6회 들어갔는가. 키워드 과잉(스터핑)은 감점.
+- **소제목(<h2>/<h3>)이 본문 600~800자마다 있어 글 전체 5~8개인가.** 굵은 <p> 로 소제목을 대신했으면 <h3> 로 바꾼다. 소제목 중 독자가 검색창에 칠 질문형 문장이 있는가.
+- 모든 <img> 에 핵심 검색어가 든 서술형 alt 와 사진 설명(figcaption)이 있는가. "이미지"·"사진" 같은 빈 설명은 감점이고 채운다. 태그가 주제·책·저자·핵심 개념을 5~10개로 덮는가.
 [AEO]
 - 첫 문단이 글의 핵심 질문에 2~3문장으로 **직접 답**하는가(배경 설명으로 시작하면 감점).
 - <h2>자주 묻는 질문</h2> 아래 <h3>질문</h3><p>답</p> 3개가 있고 각 답이 그 자체로 완결되는가.
@@ -107,7 +109,8 @@ def _parse(revised_tag: re.Pattern):
         out["overall"] = round(sum(scores) / len(scores)) if scores else None
         out["summary"] = str(data.get("summary") or "")[:300]
         title = data.get("revised_title")
-        out["revised_title"] = str(title).strip() if isinstance(title, str) and title.strip() else None
+        # 검토기가 고친 제목에도 말머리가 붙어 올 수 있다 — 같은 길목에서 걷어낸다.
+        out["revised_title"] = strip_prefix(str(title)) if isinstance(title, str) and title.strip() else None
         tags = data.get("revised_tags")
         out["revised_tags"] = [str(t).strip() for t in tags if str(t).strip()][:15] if isinstance(tags, list) and tags else None
         rm = revised_tag.search(stdout)

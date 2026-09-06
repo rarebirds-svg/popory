@@ -283,3 +283,10 @@ def test_tistory_steps_switch_mode_before_typing_and_verify_body():
 def test_prompt_makes_body_verification_a_success_condition():
     assert "본문이 들어갔는지 확인하기 전에는 성공이 아닙니다" in pb.SYSTEM_PROMPT
     assert "body_chars" in pb.SYSTEM_PROMPT
+
+
+def test_naver_steps_demand_subheading_style_and_photo_descriptions(tmp_path):
+    naver = pb.build_instructions(_task("naver"), tmp_path / "j1.html")
+    assert "'소제목' 스타일" in naver and "굵게만" in naver          # h2/h3 → 소제목 서식, 볼드 대체 금지
+    assert "'사진 설명 입력' 란" in naver and "alt" in naver           # 이미지마다 사진 설명
+    assert "6. 발행 후" in naver                                        # 단계 번호가 이어진다

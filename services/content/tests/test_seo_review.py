@@ -64,3 +64,17 @@ def test_review_youtube_post_uses_post_tag():
     body, meta = sr.review_youtube_post(post, {"book": "돈의 심리학"}, topic="돈의 심리학 - 모건 하우절", runner=runner)
     assert body == rev and meta["seo_review"]["revised"] is True and meta["book"] == "돈의 심리학"
     assert "커뮤니티 게시글" in runner.calls[0]["sp"]
+
+
+def test_blog_checklist_covers_title_position_headings_and_captions():
+    sp = sr.BLOG_SYSTEM_PROMPT
+    assert "첫 15자" in sp and "[책 리뷰]" in sp and "revised_title" in sp
+    assert "5~8개" in sp and "4~6회" in sp and "figcaption" in sp
+
+
+def test_revised_title_prefix_is_stripped():
+    rev = _HTML + "<h2>자주 묻는 질문</h2><h3>어떤 책인가요?</h3><p>답입니다.</p>"
+    runner = _runner_with('{"seo":{"score":70,"issues":[]},"aeo":{"score":70,"issues":[]},"geo":{"score":70,"issues":[]},'
+                          '"revised_title":"[책 리뷰] 모건 하우절 돈의 심리학 핵심 요약 및 서평: 부는 보이지 않는다","summary":"제목"}', rev)
+    _, meta = sr.review_blog(_HTML, {"title": "t"}, topic="돈의 심리학", runner=runner)
+    assert meta["title"] == "모건 하우절 돈의 심리학 핵심 요약 및 서평: 부는 보이지 않는다"

@@ -155,3 +155,17 @@ pnpm exec wrangler d1 execute popory-portal --remote --command "
 cd services/brief
 .venv/bin/pytest -v
 ```
+
+## 10. 제목·본문 검색 유입(SEO) 규칙
+
+2026-09-06 제미나이 검토 반영. 포털·블로그 제목은 **검색어가 앞, 발행 정보가 뒤**다.
+
+```
+{핵심 검색 키워드 1~2개} {핵심 팩트 요약} | {발행 라벨} {카테고리} 브리핑
+예. 개포우성7차 가락삼익 재건축 통과와 코인 매각 주택 매수 분석 | 9월 1주차 부동산 브리핑
+```
+
+- 규칙 본문은 `popory_brief/seo_rules.py` 한 곳에 있고 `generate_brief.py` 가 카테고리 시스템 프롬프트 끝에 붙인다(제목·소제목·키워드 4~6회·수치 표 2개 이상). `generic_brief.py` 는 자체 프롬프트에 같은 규칙을 갖는다.
+- 안전망 `popory_brief/seo_title.normalize_title` — LLM 이 옛 말머리(`[부동산 주간 이슈 브리핑] 2026-09-05`)를 붙이면 앞의 말머리·날짜를 걷어내고 `| …` 꼬리를 붙인다. 키워드가 없는 제목은 옛 `subject_template` 형식으로 되돌린다. 바뀌면 로그 `title_normalized`.
+- SKILL.md frontmatter. `seo_suffix`(꼬리 템플릿, 기본 `{date_label} {name} 브리핑`; `{date_label}` 은 주 1회 카테고리면 `9월 1주차`, 아니면 `9월 5일`), `seo_body: false`(헤딩·표를 쓰지 않는 메시지형 — 제목 규칙만 적용).
+- 메일 제목(`subject_template`)은 그대로다 — 받은편지함은 날짜가 앞에 있는 편이 낫고 검색 색인과 무관하다.

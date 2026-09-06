@@ -35,6 +35,7 @@ from popory_content.youtube_playlist import assign_to_playlist
 from popory_content.image_review import (apply_people_policy, harden_prompt,
                                           is_unavailable, review_image)
 from popory_content.seo_review import review_blog, review_youtube_post
+from popory_content.seo_title import strip_prefix
 from popory_content.publish_browser import run_publish_once
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
@@ -165,6 +166,9 @@ def run_once(client) -> bool:
             draft, meta = generate(topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id)
             draft, meta = review_blog(draft, meta, topic=job["topic"], job_id=job_id)
             _log_seo_review(job_id, meta)
+            # 제목 안전망. `[책 리뷰]` 같은 말머리는 검색 키워드를 제목 앞단에서 밀어낸다(seo_title.py).
+            if meta.get("title"):
+                meta["title"] = strip_prefix(str(meta["title"]))
             _report(client, job_id, {"status": "review", "draft": draft, "meta": meta}, "review")
     except Exception as e:  # noqa: BLE001 — 생성 실패는 failed 로 회신
         msg = str(e)

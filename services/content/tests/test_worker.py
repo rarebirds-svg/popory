@@ -919,3 +919,13 @@ def test_run_cycle_skips_claude_work_while_usage_limited(monkeypatch):
     monkeypatch.setattr(worker, "usage_limited", lambda: True)
     assert worker.run_cycle(object()) is True          # 업로드가 처리됐으므로 True
     assert calls == ["up", "ig", "fb"]                 # 생성·발행은 건너뜀
+
+
+def test_blog_title_prefix_is_stripped_before_review(monkeypatch):
+    """`[책 리뷰]` 말머리는 검색 키워드를 제목 앞단에서 밀어낸다 — 검토를 거친 뒤에도 워커가 걷어낸다."""
+    monkeypatch.setattr(worker, "generate",
+                        lambda **kw: ("<p>원문</p>", {"title": "[책 리뷰] 모건 하우절 돈의 심리학 핵심 요약 및 서평: 부는 보이지 않는다"}))
+    client = FakeClient({"job": {"id": "b2", "topic": "돈의 심리학"}, "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    _, body = client.patched[0]
+    assert body["meta"]["title"] == "모건 하우절 돈의 심리학 핵심 요약 및 서평: 부는 보이지 않는다"

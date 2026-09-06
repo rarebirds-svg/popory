@@ -21,6 +21,7 @@ from pathlib import Path
 
 from popory_brief import limit_detect
 from popory_brief.llm_model import resolve_model
+from popory_brief.seo_title import date_label, normalize_title, RECOMMENDED_MAX
 
 BRIEF_DIR = Path(__file__).resolve().parent
 VENV_PY = BRIEF_DIR / ".venv" / "bin" / "python"
@@ -93,26 +94,36 @@ def main() -> None:
         }, ensure_ascii=False))
         return
 
+    # 제목 꼬리. 검색 키워드가 앞, 발행 정보가 뒤 (popory_brief.seo_title 참조).
+    title_suffix = f"{date_label(date_obj.date(), weekly=False)} {args.name} 브리핑"
+
     system_prompt = f"""당신은 '{args.name}' 전문 브리핑 작성자입니다.
 오늘은 {date_str} (KST)이며, 최근 3일([D-2, D]) 이내 발행된 신뢰할 수 있는 기사·보도자료만 사용하세요.
 WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브리핑을 작성하세요.
 
 작성 형식.
-- 본문 맨 앞에 헤딩 없이 2~3문장의 개요를 둔다. 오늘의 핵심을 압축해 먼저 제시한다.
-- 그다음 주제별 섹션(## 헤딩)으로 본문을 전개한다.
-- 본문 맨 끝에 "## 정리" 섹션을 두고 1~2문장으로 핵심 결론·전망을 닫는다.
+- 본문 맨 앞에 헤딩 없이 2~3문장의 개요를 둔다. 오늘의 핵심을 압축해 먼저 제시하고, 이 첫 3줄 안에 제목의 핵심 키워드를 1회 넣는다.
+- 그다음 주제별 섹션(## 헤딩)으로 본문을 전개한다. 소제목에는 그 단락의 검색 키워드(정책명·기관명·제도명)를 넣고, 소제목 바로 아래 첫 문장이 그 소제목의 답이 되게 쓴다. 굵은 본문 텍스트로 소제목을 대체하지 않는다.
+- 본문 맨 끝에 "## 정리" 섹션을 두고 1~2문장으로 핵심 결론·전망을 닫는다. 결론에도 핵심 키워드가 1회 들어간다.
+- 핵심 키워드는 도입·소제목·결론을 합쳐 글 전체에 4~6회 자연스럽게 반복한다.
+- 수치가 나오는 주제(금리·시세·통계·일정·비교)는 GFM 표로 정리해 2개 이상 둔다. 표 위 한 줄에 표 제목과 출처(기관·기준일)를 굵게 적는다.
 - 헤딩은 ## 이하만 사용 (H1 없음)
 - 불릿은 - 사용
 - 각 항목 말미에 출처 라인 포함: [매체 — 제목 (YYYY.M.D)](URL)
 - 이모지, § 문자 금지
 - 빈 내용이면 "최근 3일 이내 관련 이슈 없음" 한 줄로 마무리
 
+제목(meta_json.title) 규칙 — 검색 유입용.
+- 형식. {{핵심 검색 키워드 1~2개}} {{핵심 팩트 요약}} | {title_suffix}
+- 검색 봇은 제목 맨 왼쪽(첫 15자)에 가장 높은 가중치를 준다. 제목은 오늘 가장 중요한 이슈의 고유 검색어로 시작하고, `[{args.name} 브리핑]` 같은 말머리나 `{date_str}` 같은 날짜로 시작하지 않는다.
+- 전체 {RECOMMENDED_MAX}자 안팎을 넘기지 않는다.
+
 응답 마지막에 아래 두 태그를 정확히 포함하세요.
 <body_markdown>
 ...브리핑 본문...
 </body_markdown>
 <meta_json>
-{{"title": "[{args.name} 브리핑] {date_str}", "summary": "한두 줄 요약", "tags": ["{args.name}"], "published_at": {published_at}}}
+{{"title": "핵심 검색어와 팩트 요약 | {title_suffix}", "summary": "한두 줄 요약", "tags": ["{args.name}"], "published_at": {published_at}}}
 </meta_json>"""
 
     user_msg = (
@@ -196,6 +207,10 @@ WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브�
         print(f"error: meta_json 파싱 실패: {e}", file=sys.stderr)
         print(meta_m.group(1), file=sys.stderr)
         sys.exit(4)
+
+    # 제목 안전망 — 옛 말머리·날짜를 걷어내고 발행 꼬리를 뒤에 붙인다 (generate_brief.py 와 동일).
+    meta["title"] = normalize_title(str(meta.get("title") or ""), suffix=title_suffix,
+                                    fallback=f"[{args.name} 브리핑] {date_str}")
 
     body_file = Path(f"/tmp/brief_custom_{args.topic_id}_{date_str}.md")
     meta_file = Path(f"/tmp/brief_custom_{args.topic_id}_{date_str}.meta.json")
