@@ -487,11 +487,15 @@ ZOOM_SPAN_MIN, ZOOM_SPAN_MAX = 0.06, 0.18
 # 없고, 편도가 같은 여유로 두 배 멀리 간다.
 PAN_RATE_PX_PER_SEC = 7.0
 PAN_MIN_PX = 40  # 이보다 짧으면 캔버스만 키우고 체감은 없어 아예 걸지 않는다
-# 한 장면 안에서 화면 구성을 바꾸는 주기(초). 롱폼은 장면이 30~50초라 그림 한 장이 그대로 서 있는데,
-# 시청자는 6~8초마다 시각 변화가 없으면 이탈한다(2026-09 대표 영상 검토). 장면을 이 길이의 샷으로
-# 쪼개 샷마다 줌 방향·기준점을 바꾼다 — 샷 경계에서 확대율이 점프해 "컷"처럼 보인다. 이미지를 더
-# 만들지 않으므로 생성 비용이 0이고, 샷 하나가 쇼츠 장면 길이라 체감 속도도 쇼츠와 같아진다.
-SHOT_SECONDS = float(os.environ.get("POPORY_SHOT_SECONDS", "8"))
+# 줌이 방향을 바꾸는 주기(초). 롱폼은 장면이 30~50초라 폭을 장면 전체에 펴면 초당 0.2~0.4%로
+# 떨어져 정지 화면처럼 보인다(2026-09 대표 영상). 그래서 장면 길이와 무관하게 이 주기마다 줌을
+# 되돌려 초당 속도를 일정하게 유지한다.
+#
+# **경계에서 배율이 점프하면 안 된다.** 처음엔 이 주기로 장면을 "샷"으로 쪼개고 경계에서 배율을
+# 1.0 ↔ 1+폭 으로 튀게 해 컷처럼 보이게 했는데, 시청자에게는 재생 도중 화면이 갑자기 원본 크기로
+# 되돌아가는 글리치로 보였다(2026-09-06 피드백). 지금은 하나의 연속 삼각파라 배율이 끊기지 않고
+# 방향만 이 주기마다 부드럽게 바뀐다.
+ZOOM_HALF_CYCLE_SECONDS = float(os.environ.get("POPORY_ZOOM_HALF_CYCLE", "8"))
 # 장면별 무빙 변주 (확대로 시작하는지 여부, 가로 줌 기준점 0~1, 패닝 정방향 여부).
 # 전 장면이 같은 무빙이면 단조로우므로 인접 항목은 줌 방향이 서로 다르게 배열한다(순환 지점 포함).
 _MOTIONS: tuple[tuple[bool, float, bool], ...] = (
@@ -509,11 +513,12 @@ def _zoom_amplitude(dur: float) -> float:
     return min(ZOOM_SPAN_MAX, max(ZOOM_SPAN_MIN, ZOOM_RATE_PER_SEC * dur / 2))
 
 
-def _shot_count(dur: float) -> int:
-    """장면을 몇 개 샷으로 쪼갤지. 두 샷도 안 나오는 짧은 장면(쇼츠 7초)은 그대로 한 샷."""
-    if SHOT_SECONDS <= 0 or dur < 2 * SHOT_SECONDS:
-        return 1
-    return max(1, round(dur / SHOT_SECONDS))
+def _zoom_cycle(dur: float) -> tuple[float, int]:
+    """이 장면의 (줌 폭, 왕복 주기 프레임 수). 주기는 방향을 한 번 바꾸는 시간의 2배다.
+    긴 장면은 ZOOM_HALF_CYCLE_SECONDS 마다 되돌리고, 그보다 짧은 장면은 장면 절반에서 한 번만
+    되돌린다 — 쇼츠(7초 장면)는 예전과 똑같은 폭·속도로 남는다."""
+    half = min(ZOOM_HALF_CYCLE_SECONDS, max(0.1, dur / 2))
+    return _zoom_amplitude(2 * half), max(1, round(2 * half * 30))
 
 
 def _pan_headroom(size: tuple[int, int] | None, portrait: bool = False) -> int:
@@ -541,8 +546,10 @@ def _pan_amplitude(dur: float, headroom: int) -> int:
 def _zoompan_filter(dur: float, portrait: bool = False, variant: int = 0,
                     pan_px: int = 0) -> str:
     """정지 이미지에 왕복(삼각파) 줌 + 편도 패닝을 건다.
-    줌은 절반까지 갔다 되돌아온다 — 한 방향으로만 밀면 인지 가능한 속도에서 총 확대율이
-    커져 1024px 원본이 무너지는데, 왕복은 최대 확대율을 묶은 채 속도만 올릴 수 있다.
+    줌은 ZOOM_HALF_CYCLE_SECONDS 마다 방향을 바꾸며 **끊김 없이** 이어진다 — 한 방향으로만 밀면
+    인지 가능한 속도에서 총 확대율이 커져 1024px 원본이 무너지는데, 왕복은 최대 확대율을 묶은 채
+    속도만 올릴 수 있다. 배율이 도중에 점프하면 시청자에겐 화면이 원본 크기로 되돌아가는 글리치로
+    보이므로(2026-09-06 피드백) 표현식은 반드시 연속이어야 한다.
     패닝은 커버 크롭이 버리던 여유(pan_px)를 쓰므로 확대율이 늘지 않아 화질 손실이 없다.
 
     필터 순서가 핵심이다. zoompan은 **입력 종횡비 그대로** 크롭하므로 세로로 긴 캔버스를
@@ -557,26 +564,14 @@ def _zoompan_filter(dur: float, portrait: bool = False, variant: int = 0,
     slack = max(0, pan_px) * 2  # 수퍼샘플 기준 여유
     cw, ch = (bw + slack, bh) if portrait else (bw, bh + slack)
     zoom_in_first, xpos, pan_forward = _MOTIONS[variant % len(_MOTIONS)]
-    shots = _shot_count(dur)
-    if shots == 1:
-        amp = _zoom_amplitude(dur)
-        # 삼각파. on=0에서 0, on=frames/2에서 1, on=frames에서 다시 0으로 돌아온다.
-        tri = f"(1-abs(1-2*on/{frames}))"
-        z = (f"1.0+{amp:.4f}*{tri}" if zoom_in_first
-             else f"{1 + amp:.4f}-{amp:.4f}*{tri}")
-        x_expr, y_expr = f"(iw-iw/zoom)*{xpos:.2f}", "(ih-ih/zoom)*0.50"
-    else:
-        # 샷 단위 왕복 줌. 샷 길이로 폭을 잡으므로(8초 → 하한 0.06) 초당 속도가 쇼츠와 같아지고,
-        # 홀수 샷은 방향을 뒤집고 기준점을 반대편으로 옮겨 샷 경계마다 구도가 바뀐다.
-        # 짝수 샷이 1.0 에서 끝나고 홀수 샷이 1+amp 에서 시작하므로 경계에서 확대율이 점프한다 — 이게 컷이다.
-        seg = frames / shots
-        amp = _zoom_amplitude(dur / shots)
-        tri = f"(1-abs(1-2*mod(on,{seg:.3f})/{seg:.3f}))"
-        even = f"eq(mod(floor(on/{seg:.3f}),2),0)"
-        z_in, z_out = f"1.0+{amp:.4f}*{tri}", f"{1 + amp:.4f}-{amp:.4f}*{tri}"
-        z = f"if({even},{z_in},{z_out})" if zoom_in_first else f"if({even},{z_out},{z_in})"
-        x_expr = f"(iw-iw/zoom)*if({even},{xpos:.2f},{1 - xpos:.2f})"
-        y_expr = f"(ih-ih/zoom)*if({even},0.50,0.40)"
+    # 하나의 연속 삼각파. period 프레임마다 0→1→0 을 그리며 어디서도 끊기지 않는다(mod 가 0 으로
+    # 감기는 지점에서 tri 도 0 이라 값이 이어진다). 초당 배율 변화는 폭/반주기로 항상 일정하다.
+    # 기준점(x·y)도 장면 내내 고정한다 — 도중에 옮기면 그 자체가 화면이 튀는 것으로 보인다.
+    amp, period = _zoom_cycle(dur)
+    tri = f"(1-abs(1-2*mod(on,{period})/{period}))"
+    z = (f"1.0+{amp:.4f}*{tri}" if zoom_in_first
+         else f"{1 + amp:.4f}-{amp:.4f}*{tri}")
+    x_expr, y_expr = f"(iw-iw/zoom)*{xpos:.2f}", "(ih-ih/zoom)*0.50"
     graph = (
         f"scale={cw}:{ch},"
         f"zoompan=z='{z}':d={frames}"
