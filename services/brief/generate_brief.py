@@ -26,6 +26,8 @@ from popory_brief.categories import load_category
 from popory_brief.log import append_log, safe_error, KST
 from popory_brief import limit_detect
 from popory_brief.llm_model import resolve_model
+from popory_brief.seo_rules import seo_rules
+from popory_brief.seo_title import normalize_title
 
 LOGS_DIR = Path(__file__).resolve().parent / "logs"
 # 기본 claude CLI 경로. BRIEF_CLAUDE_BIN 환경변수로 오버라이드 가능(E2E 테스트용 스텁 주입).
@@ -68,7 +70,8 @@ def main() -> None:
     published_at = int(date_obj.timestamp())
 
     sys_prompt_path = Path(f"/tmp/brief_system_{category.slug}_{date_str}.txt")
-    sys_prompt_path.write_text(category.system_prompt, encoding="utf-8")
+    # 카테고리 매뉴얼 + 공통 SEO 규칙(제목 형식·소제목·키워드 배치·표). 규칙은 한 곳(seo_rules.py)에만 둔다.
+    sys_prompt_path.write_text(category.system_prompt + seo_rules(category, date_obj.date()), encoding="utf-8")
 
     user_msg = (
         f"지금은 {now_str} (KST)입니다. 시스템 매뉴얼의 절차를 따라 오늘({date_str})의 {category.name} 이슈 브리핑을 작성하세요. "
@@ -171,6 +174,17 @@ def main() -> None:
                               "category": category.slug, "date": date_str,
                               "error": f"meta_json 파싱 실패: {e}"[:200]})
         sys.exit(4)
+
+    # 제목 안전망. LLM 이 옛 말머리(`[부동산 주간 이슈 브리핑] 2026-09-05`)를 붙이면 검색 키워드가
+    # 제목 앞단에서 밀려난다. 앞의 말머리·날짜를 걷어내고 `| 9월 1주차 부동산 브리핑` 꼬리를 붙인다.
+    # 키워드가 아예 없는 제목은 옛 형식(subject)으로 돌려 사람이 알아보게 한다.
+    raw_title = str(meta.get("title") or "")
+    meta["title"] = normalize_title(raw_title, suffix=category.title_suffix(date_obj.date()),
+                                    fallback=category.subject(date_str))
+    if meta["title"] != raw_title:
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "title_normalized",
+                              "category": category.slug, "date": date_str,
+                              "from": raw_title[:120], "to": meta["title"][:120]})
 
     body_path = Path(f"/tmp/brief_{category.slug}_{date_str}.md")
     meta_path = Path(f"/tmp/brief_{category.slug}_{date_str}.meta.json")
