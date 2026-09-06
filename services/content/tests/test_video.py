@@ -195,12 +195,13 @@ def test_zoom_amplitude_clamped_at_both_ends():
 
 
 def test_zoompan_is_pingpong_returning_to_start():
+    """짧은 장면(3초)은 장면 절반에서 한 번 되돌린다 — 주기가 곧 장면 길이(90프레임)."""
     from popory_content.video import _zoompan_filter, _MOTIONS, _zoom_amplitude
     amp = _zoom_amplitude(3.0)
     f_in = _zoompan_filter(3.0, variant=0)     # 넓게 시작 → 확대 → 복귀
     f_out = _zoompan_filter(3.0, variant=1)    # 확대로 시작 → 축소 → 복귀
-    assert f"1.0+{amp:.4f}*(1-abs(1-2*on/90))" in f_in
-    assert f"{1 + amp:.4f}-{amp:.4f}*(1-abs(1-2*on/90))" in f_out
+    assert f"1.0+{amp:.4f}*(1-abs(1-2*mod(on,90)/90))" in f_in
+    assert f"{1 + amp:.4f}-{amp:.4f}*(1-abs(1-2*mod(on,90)/90))" in f_out
 
 
 def test_pan_headroom_uses_pixels_cover_crop_would_discard():
@@ -579,29 +580,57 @@ def test_spans_and_concat_accept_per_gap_lists(monkeypatch, tmp_path):
     assert inputs[1].endswith("_gap1_000.wav") and inputs[3].endswith("_gap0_700.wav")
 
 
-def test_shot_count_splits_long_scenes_only():
-    from popory_content.video import _shot_count, SHOT_SECONDS
-    assert _shot_count(7.0) == 1                        # 쇼츠 장면은 그대로
-    assert _shot_count(SHOT_SECONDS * 2 - 0.1) == 1     # 두 샷이 안 나오면 안 쪼갠다
-    assert _shot_count(SHOT_SECONDS * 2) == 2
-    assert _shot_count(35.0) == round(35.0 / SHOT_SECONDS)
+def _zoom_at(amp: float, period: int, zoom_in_first: bool, on: float) -> float:
+    """_zoompan_filter 가 만드는 z 식을 파이썬으로 그대로 재현한다(연속성·속도 검증용)."""
+    tri = 1 - abs(1 - 2 * (on % period) / period)
+    return 1.0 + amp * tri if zoom_in_first else (1 + amp) - amp * tri
 
 
-def test_zoompan_long_scene_cuts_every_shot():
-    """35초 장면은 4샷으로 쪼개져 샷마다 줌 방향·기준점이 바뀐다(샷 경계에서 확대율 점프 = 컷)."""
-    from popory_content.video import _zoompan_filter, _zoom_amplitude, SHOT_SECONDS
+def test_zoom_cycle_holds_one_speed_for_every_scene_length():
+    """긴 장면일수록 느려지던 문제의 해법 — 폭이 아니라 반주기를 고정해 초당 속도를 맞춘다."""
+    from popory_content.video import _zoom_cycle, ZOOM_HALF_CYCLE_SECONDS
+    speeds = []
+    for dur in (20.0, 35.0, 53.0):
+        amp, period = _zoom_cycle(dur)
+        half = period / 2 / 30
+        assert abs(half - ZOOM_HALF_CYCLE_SECONDS) < 1e-6      # 긴 장면은 주기 고정
+        speeds.append(amp / half)
+    assert max(speeds) - min(speeds) < 1e-9                    # 길이가 달라도 같은 속도
+    # 쇼츠(7초)는 장면 절반에서 한 번만 되돌린다 — 예전 폭·속도 그대로
+    amp, period = _zoom_cycle(7.0)
+    assert abs(period / 30 - 7.0) < 0.05 and amp == 0.06
+
+
+def test_zoom_curve_never_jumps_and_keeps_a_constant_rate():
+    """2026-09-06 피드백: 재생 도중 화면이 갑자기 원본 크기로 되돌아갔다. 샷 경계에서 배율을
+    1.0 ↔ 1+폭 으로 튀게 한 탓이다. 이제 곡선은 어디서도 끊기지 않아야 한다."""
+    from popory_content.video import _zoom_cycle, ZOOM_HALF_CYCLE_SECONDS
     dur = 35.0
-    fl = _zoompan_filter(dur, variant=0)
-    shots = round(dur / SHOT_SECONDS)
-    seg = round(dur * 30) / shots
-    amp = _zoom_amplitude(dur / shots)
-    assert amp == 0.06                                   # 8~9초 샷 → 하한 폭, 초당 속도는 쇼츠와 같다
-    assert f"mod(on,{seg:.3f})" in fl and f"floor(on/{seg:.3f})" in fl
-    assert f"if(eq(mod(floor(on/{seg:.3f}),2),0),1.0+{amp:.4f}*" in fl   # 짝수 샷 확대 시작
-    assert f"{1 + amp:.4f}-{amp:.4f}*" in fl                            # 홀수 샷 축소 시작
-    assert "if(eq(mod(floor(on/" in fl.split(":x='")[1]                  # 기준점도 샷마다 교대
-    # 짧은 장면은 예전 식 그대로(회귀 없음)
-    assert "mod(on" not in _zoompan_filter(3.0, variant=0)
+    amp, period = _zoom_cycle(dur)
+    frames = round(dur * 30)
+    zs = [_zoom_at(amp, period, True, on) for on in range(frames + 1)]
+    steps = [abs(zs[i + 1] - zs[i]) for i in range(len(zs) - 1)]
+    per_frame = amp / (period / 2)
+    # 프레임 간 변화가 전부 같다 = 점프 없음 + 등속. 예전 코드는 경계에서 amp(0.06) 만큼 튀었다.
+    assert max(steps) < per_frame * 1.5
+    assert max(steps) < amp / 2                       # 회귀 방지: 경계 점프(=amp)면 여기서 걸린다
+    assert abs(max(steps) - min(steps)) < 1e-9
+    # 배율은 언제나 [1.0, 1+폭] 안에 있고, 반주기마다 방향이 바뀐다
+    assert min(zs) >= 1.0 - 1e-9 and max(zs) <= 1 + amp + 1e-9
+    half_frames = period // 2
+    assert zs[half_frames] > zs[0] and zs[period] < zs[half_frames]
+
+
+def test_zoompan_expression_is_one_continuous_wave():
+    """식 자체에 조건 분기가 없어야 한다 — if/floor 로 구간을 나누면 그 경계가 곧 점프다."""
+    from popory_content.video import _zoompan_filter
+    fl = _zoompan_filter(35.0, variant=0)
+    z_expr = fl.split("z='")[1].split("'")[0]
+    assert "if(" not in z_expr and "floor(" not in z_expr
+    assert "mod(on," in z_expr                        # 연속 삼각파
+    # 기준점도 장면 내내 고정 — 도중에 옮기면 그 자체가 화면이 튀는 것으로 보인다
+    assert "if(" not in fl.split(":x='")[1].split("'")[0]
+    assert "if(" not in fl.split(":y='")[1].split("'")[0]
 
 
 def test_render_video_inserts_card_clip_before_scene(monkeypatch, tmp_path):
