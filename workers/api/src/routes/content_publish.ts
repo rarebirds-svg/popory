@@ -124,7 +124,11 @@ export function mountContentPublish(app: Hono<{ Bindings: Env; Variables: Vars }
     const id = c.req.param("id");
     const now = Math.floor(Date.now() / 1000);
     if (parsed.data.status === "done") {
-      await c.env.DB.prepare("UPDATE content_jobs SET publish_status='done', publish_url=?, publish_error=NULL, updated_at=? WHERE id=?").bind(parsed.data.url ?? null, now, id).run();
+      // 비공개 등록이 끝나면 검토도 끝난 것이다 — 잡 상태를 review → done 으로 함께 올려 목록에서
+      // "검토 필요" 로 남지 않게 한다(사용자가 '완료 표시' 를 따로 누르지 않아도 된다).
+      await c.env.DB.prepare(
+        "UPDATE content_jobs SET publish_status='done', publish_url=?, publish_error=NULL, status=CASE WHEN status='review' THEN 'done' ELSE status END, updated_at=? WHERE id=?",
+      ).bind(parsed.data.url ?? null, now, id).run();
     } else {
       await c.env.DB.prepare("UPDATE content_jobs SET publish_status=?, publish_error=?, updated_at=? WHERE id=?").bind(parsed.data.status, parsed.data.error ?? "unknown", now, id).run();
     }

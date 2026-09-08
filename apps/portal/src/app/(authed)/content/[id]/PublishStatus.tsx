@@ -1,6 +1,7 @@
 "use client";
 // 블로그·커뮤니티 비공개 등록 상태 — 요청 버튼 + 진행 중 폴링 + 결과 링크/오류.
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
 
 interface Props { jobId: string; platform: string; initialStatus: string | null; initialUrl: string | null; initialError: string | null; configured: boolean; }
@@ -12,6 +13,7 @@ export function PublishStatus({ jobId, platform, initialStatus, initialUrl, init
   const [url, setUrl] = useState(initialUrl);
   const [error, setError] = useState(initialError);
   const [busy, setBusy] = useState(false);
+  const router = useRouter();
   const active = status === "requested" || status === "publishing";
 
   useEffect(() => {
@@ -22,10 +24,12 @@ export function PublishStatus({ jobId, platform, initialStatus, initialUrl, init
         if (!res.ok) return;
         const j = (await res.json()) as { publish_status: string | null; publish_url: string | null; publish_error: string | null };
         setStatus(j.publish_status); setUrl(j.publish_url); setError(j.publish_error);
+        // 등록 완료면 API 가 잡 상태도 done 으로 올린다 — 페이지를 다시 그려 '완료됨' 표시를 바로 반영.
+        if (j.publish_status === "done") router.refresh();
       } catch { /* 다음 주기 */ }
     }, 5000);
     return () => clearInterval(poll);
-  }, [active, jobId]);
+  }, [active, jobId, router]);
 
   async function request() {
     setBusy(true);

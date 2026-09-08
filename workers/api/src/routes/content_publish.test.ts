@@ -104,8 +104,17 @@ describe("worker claim/result", () => {
     expect((await SELF.fetch("https://example.com/api/content/publish/claim", { method: "POST", headers: { authorization: `Bearer ${tk}` } })).status).toBe(204);
     res = await SELF.fetch("https://example.com/api/content/jobs/b2/publish-result", { method: "PATCH", headers: { authorization: `Bearer ${tk}`, "content-type": "application/json" }, body: JSON.stringify({ status: "done", url: "https://me.tistory.com/12" }) });
     expect(res.status).toBe(200);
-    const row = await env.DB.prepare("SELECT publish_status, publish_url FROM content_jobs WHERE id='b2'").first<{ publish_status: string; publish_url: string }>();
-    expect(row).toEqual({ publish_status: "done", publish_url: "https://me.tistory.com/12" });
+    const row = await env.DB.prepare("SELECT publish_status, publish_url, status FROM content_jobs WHERE id='b2'").first<{ publish_status: string; publish_url: string; status: string }>();
+    // 비공개 등록 완료 = 검토 완료. 잡 상태도 done 으로 올라간다.
+    expect(row).toEqual({ publish_status: "done", publish_url: "https://me.tistory.com/12", status: "done" });
+  });
+  it("등록 실패는 잡 상태를 건드리지 않는다", async () => {
+    await makeJob("b4", "naver-blog");
+    await env.DB.prepare("UPDATE content_jobs SET publish_status='publishing' WHERE id='b4'").run();
+    const tk = await workerToken();
+    await SELF.fetch("https://example.com/api/content/jobs/b4/publish-result", { method: "PATCH", headers: { authorization: `Bearer ${tk}`, "content-type": "application/json" }, body: JSON.stringify({ status: "failed", error: "결과 미보고" }) });
+    const row = await env.DB.prepare("SELECT publish_status, status FROM content_jobs WHERE id='b4'").first<{ publish_status: string; status: string }>();
+    expect(row).toEqual({ publish_status: "failed", status: "review" });
   });
   it("skipped/failed 는 사유를 남기고, 다른 area 토큰은 403", async () => {
     const ck = await userCookie();

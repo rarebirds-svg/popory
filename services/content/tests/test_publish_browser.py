@@ -290,3 +290,25 @@ def test_naver_steps_demand_subheading_style_and_photo_descriptions(tmp_path):
     assert "'소제목' 스타일" in naver and "굵게만" in naver          # h2/h3 → 소제목 서식, 볼드 대체 금지
     assert "'사진 설명 입력' 란" in naver and "alt" in naver           # 이미지마다 사진 설명
     assert "6. 발행 후" in naver                                        # 단계 번호가 이어진다
+
+
+def test_prompt_forbids_ending_the_turn_to_wait_for_a_notification(tmp_path):
+    """2026-09-07: 모델이 aside 백그라운드 작업의 알림을 기다리겠다며 응답을 끝냈다. --print 세션은 알림을
+    받지 못하므로 결과 태그 없이 죽고, 글은 올라갔는데 시스템은 모른다. 폴링 지시가 두 곳에 있어야 한다."""
+    assert "비대화형 단일 턴" in pb.SYSTEM_PROMPT and "폴링" in pb.SYSTEM_PROMPT
+    assert "알림을 기다리겠다" in pb.SYSTEM_PROMPT
+    naver = pb.build_instructions(_task("naver"), tmp_path / "j1.html")
+    assert "비대화형 단일 턴" in naver and "폴링" in naver
+
+
+def test_missing_result_after_waiting_for_notification_names_the_cause():
+    def waited(**kw):
+        raise GenerateError("publish_result 태그 없음 (시도 1) || 출력 꼬리: 백그라운드로 실행 중인 `aside exec` 작업이 "
+                            "완료되면 자동으로 알림을 받게 되므로, 별도의 폴링 없이 대기하겠습니다. 완료되는 대로 결과를 확인하고 보고드리겠습니다.")
+    r = pb.publish(_task("naver"), runner=waited)
+    assert r["status"] == "failed"
+    assert "원인: 브라우저 작업 완료 전에 응답을 끝냄" in r["error"]
+    assert "이미 올라갔을 수 있습니다" in r["error"]
+    # 알림 대기와 무관한 미보고에는 원인 줄이 붙지 않는다
+    assert "원인:" not in pb.publish(_task("tistory"), runner=lambda **kw: (_ for _ in ()).throw(
+        GenerateError("publish_result 태그 없음 (시도 1) || 출력 꼬리: 편집기를 열었습니다")))["error"]
