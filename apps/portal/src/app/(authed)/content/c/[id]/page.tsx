@@ -1,12 +1,13 @@
-// 카테고리 상세 — 채널 섹션 + 주제·단독작업 검색·더보기 목록 + 추천.
+// 카테고리 상세 — 채널 섹션 + [발행 컨텐츠]/[추천 컨텐츠] 탭.
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { headers } from "next/headers";
-import { Header, Kicker } from "@popory/ui";
+import { Header } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
 import { ContentList, type TopicRow, type StandaloneJob } from "./ContentList";
 import { CategoryChannels } from "./CategoryChannels";
+import { CategoryTabs } from "./CategoryTabs";
 import { RecommendationActions } from "../../RecommendationActions";
 import { BulkAddRecommendations } from "../../BulkAddRecommendations";
 
@@ -45,27 +46,34 @@ export default async function CategoryDetail({ params }: { params: Promise<{ id:
         </div>
         <CategoryChannels categoryId={id} youtube={category.youtube_channel_title} instagram={category.instagram_username} />
 
-        <ContentList categoryId={id} initialTopics={topics} initialTopicsHasMore={topicsHasMore} initialJobs={jobs} initialJobsHasMore={jobsHasMore} />
-
-        <section className="mt-12">
-          <div className="flex items-baseline gap-3">
-            <Kicker>추천 컨텐츠</Kicker>
-            <span className="ml-auto"><BulkAddRecommendations categoryId={id} /></span>
-          </div>
-          {recommendations.length === 0 ? (
-            <p className="mt-4 text-sm text-popory-muted">아직 추천 컨텐츠가 없습니다.</p>
-          ) : (
-            <ul className="mt-4 divide-y divide-popory-border">
-              {recommendations.map((r) => (
-                <li key={r.id} className="flex items-center gap-3 py-3">
-                  <span className="flex-1 truncate text-sm text-popory-fg">{r.title}{r.author && <span className="text-popory-muted"> · {r.author}</span>}</span>
-                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs ${r.recommender === "대공" ? "border-popory-accent text-popory-accent" : "border-popory-border text-popory-muted"}`}>{r.recommender}</span>
-                  <RecommendationActions rec={r} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <CategoryTabs
+          publishedCount={topics.length + jobs.length}
+          publishedHasMore={topicsHasMore || jobsHasMore}
+          recommendedCount={recommendations.length}
+          published={
+            <ContentList categoryId={id} initialTopics={topics} initialTopicsHasMore={topicsHasMore} initialJobs={jobs} initialJobsHasMore={jobsHasMore} />
+          }
+          recommended={
+            <section className="mt-4">
+              <div className="flex items-baseline gap-3">
+                <span className="ml-auto"><BulkAddRecommendations categoryId={id} /></span>
+              </div>
+              {recommendations.length === 0 ? (
+                <p className="mt-4 text-sm text-popory-muted">아직 추천 컨텐츠가 없습니다.</p>
+              ) : (
+                <ul className="mt-4 divide-y divide-popory-border">
+                  {recommendations.map((r) => (
+                    <li key={r.id} className="flex items-center gap-3 py-3">
+                      <span className="flex-1 truncate text-sm text-popory-fg">{r.title}{r.author && <span className="text-popory-muted"> · {r.author}</span>}</span>
+                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs ${r.recommender === "대공" ? "border-popory-accent text-popory-accent" : "border-popory-border text-popory-muted"}`}>{r.recommender}</span>
+                      <RecommendationActions rec={r} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          }
+        />
       </main>
     </div>
   );
