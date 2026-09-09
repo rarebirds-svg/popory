@@ -61,7 +61,7 @@ def test_run_empty_falls_back_to_instant_recommend(tmp_path, monkeypatch):
     assert bulk_body == {"owner_sub": "u", "items": [{"title": "사피엔스", "author": "유발 하라리"}], "category_slug": "book-review"}
     create_url, create_body = fc.posted[1]
     assert create_url == "/api/content/topics/service-create"
-    assert create_body["topic"] == "사피엔스"
+    assert create_body["topic"] == "사피엔스 - 유발 하라리"
     assert create_body["author"] == "유발 하라리"
     assert create_body["recommendation_id"] == "r9"
     # 폴백 후 대기열을 다시 조회해 기존 경로(used 표시 포함)로 진행한다.
@@ -148,6 +148,42 @@ def test_auto_create_passes_author(monkeypatch):
     monkeypatch.setenv("POPORY_RECOMMEND_OWNER", "u1")
     auto_create.run()
     assert sent.get("author") == "게리 켈러"
+    # 제목에도 저자를 붙인다 — 목록에서 어떤 책인지 구분되고, 구매 링크 검색어도 저자를 탄다.
+    assert sent.get("topic") == "원씽 - 게리 켈러"
+
+
+# 제목이 이미 그 저자를 달고 있으면 두 번 붙이지 않는다.
+def test_topic_with_author_is_idempotent():
+    assert auto_create.topic_with_author("원씽", "게리 켈러") == "원씽 - 게리 켈러"
+    assert auto_create.topic_with_author("원씽 - 게리 켈러", "게리 켈러") == "원씽 - 게리 켈러"
+    assert auto_create.topic_with_author("원씽", None) == "원씽"
+    assert auto_create.topic_with_author("원씽", "  ") == "원씽"
+
+
+# 대기열 앞쪽에 저자 없는 행이 있어도, 저자가 있는 행을 먼저 고른다.
+def test_choose_prefers_recommendation_with_author():
+    recs = [{"id": "r1", "title": "제목만"}, {"id": "r2", "title": "원씽", "author": "게리 켈러"}]
+    assert auto_create.choose(recs)["id"] == "r2"
+
+
+# 전부 저자가 없으면 원래대로 오래된 순 맨 앞을 쓴다.
+def test_choose_falls_back_to_first_when_no_author():
+    recs = [{"id": "r1", "title": "가"}, {"id": "r2", "title": "나", "author": "  "}]
+    assert auto_create.choose(recs)["id"] == "r1"
+
+
+# 대기열은 포털의 [추천 컨텐츠] 목록에서 오래된 순으로 가져온다(1건만 보지 않는다).
+def test_pending_scans_more_than_one(monkeypatch):
+    seen = {}
+
+    class C:
+        def get(self, url):
+            seen["url"] = url
+            return {"recommendations": []}
+    assert auto_create._pending(C(), "u") == []
+    assert "owner_sub=u" in seen["url"]
+    assert f"limit={auto_create.PENDING_SCAN}" in seen["url"]
+    assert auto_create.PENDING_SCAN > 1
 
 
 def _logs(logs_dir) -> list[dict]:
