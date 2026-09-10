@@ -28,7 +28,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from popory_content.generate import run_claude_cli, model_for, GenerateError, is_usage_limit
+from popory_content.generate import (run_claude_cli, run_claude_cli_once, model_for, GenerateError,
+                                     is_usage_limit, PARSE_FAIL_TAIL)
 from popory_content.log import append_log
 from popory_content.portal_client import PortalError
 
@@ -197,6 +198,45 @@ def parse_publish_result(stdout: str) -> dict[str, Any]:
     raise ValueError("publish_result 태그 없음")
 
 
+# 브라우저 작업이 백그라운드로 돌면 모델이 "알림을 기다리겠다" 며 턴을 끝내는 일이 반복됐다
+# (2026-09-07, 2026-09-10). --print 세션엔 다음 턴이 없어 태그가 영영 안 나오고, 글은 올라갔는데
+# 시스템은 모르는 상태가 남는다. 지시문으로 금지해도 재발했으므로 **모델의 준수에 기대지 않고**
+# 같은 대화를 이어(resume) 한 번 더 말해 마무리시킨다. 처음부터 다시 돌리는 재시도가 아니라
+# 이어 말하기라 중복 게시가 되지 않는다 — 그 세션은 자기가 무엇을 했는지 알고 있다.
+FOLLOWUP_PROMPT = """알림은 오지 않습니다. 이 세션은 비대화형이라 방금 응답으로 턴이 끝났고, 지금이 마지막 기회입니다.
+
+**새 글을 다시 올리지 마십시오.** 아까 시작한 그 작업의 결과만 확인합니다:
+1. 백그라운드 작업의 상태를 지금 직접 조회합니다(아직 돌고 있으면 끝날 때까지 반복 조회).
+2. 등록된 글을 열어 본문이 실제로 보이는지 확인하고 글자 수를 셉니다.
+3. 확인이 끝나면 <publish_result> 태그 하나로만 답합니다.
+
+확인이 안 되면 추측하지 말고 ok:false 로, 어디까지 했고 무엇을 못 봤는지 note 에 적으십시오.
+글이 이미 올라갔다면 그 주소를 note 에 꼭 남깁니다 — 그래야 사람이 찾아갈 수 있습니다."""
+
+
+def _publish_via_session(task: dict[str, Any], body_path: Path, *, call=run_claude_cli_once) -> dict[str, Any]:
+    """브라우저 세션을 돌리고, 태그 없이 끝나면 같은 대화를 이어 한 번 더 마무리시킨다."""
+    kw = dict(model=model_for("publish_browser"), timeout_seconds=TIMEOUT_SECONDS,
+              allowed_tools=BROWSER_TOOLS, cwd=PUBLISH_CWD or None)
+    text, sid = call(system_prompt=SYSTEM_PROMPT, user_msg=build_instructions(task, body_path),
+                     job_id=f"{task['job_id']}_publish", **kw)
+    try:
+        return parse_publish_result(text)
+    except ValueError:
+        first_tail = (text or "").strip()[-PARSE_FAIL_TAIL:]
+        if not sid:
+            raise ValueError(f"publish_result 태그 없음 (세션 id 없음) || 출력 꼬리: {first_tail}")
+        append_log(LOGS_DIR, {"worker": "content", "status": "publish_followup", "job": task["job_id"],
+                              "error": f"태그 없이 끝나 같은 세션에 이어 말한다 || 출력 꼬리: {first_tail}"[:600]})
+        text2, _ = call(user_msg=FOLLOWUP_PROMPT, resume=sid, job_id=f"{task['job_id']}_publish_more", **kw)
+        try:
+            return parse_publish_result(text2)
+        except ValueError:
+            tail2 = (text2 or "").strip()[-PARSE_FAIL_TAIL:]
+            raise ValueError("publish_result 태그 없음 (이어 말하기 후에도) "
+                             f"|| 1차 꼬리: {first_tail} || 2차 꼬리: {tail2}")
+
+
 def _write_payload(task: dict[str, Any]) -> tuple[Path, Path]:
     """제목·본문을 파일로 떨어뜨린다. 브라우저 스킬이 긴 HTML 을 붙여넣을 때 파일에서 읽는 편이 안전하다."""
     WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -259,18 +299,23 @@ def _run_custom_cmd(task: dict[str, Any]) -> dict[str, Any]:
     return parse_publish_result(r.stdout)
 
 
-def publish(task: dict[str, Any], *, runner=run_claude_cli) -> dict[str, Any]:
-    """발행 한 건. 반환은 publish-result 회신 바디 {status, url?, error?}."""
+def publish(task: dict[str, Any], *, runner=None, call=run_claude_cli_once) -> dict[str, Any]:
+    """발행 한 건. 반환은 publish-result 회신 바디 {status, url?, error?}.
+
+    기본 경로는 세션을 들고 도는 _publish_via_session 이다. runner 를 주면 예전처럼 단발
+    run_claude_cli 규약으로 부른다 — 이어 말하기가 필요 없는 대체 실행기를 끼울 자리다."""
     body_path, _ = _write_payload(task)
     try:
         if PUBLISH_CMD:
             result = _run_custom_cmd({**task, "body_path": str(body_path)})
-        else:
+        elif runner is not None:
             result = runner(system_prompt=SYSTEM_PROMPT, user_msg=build_instructions(task, body_path),
                             parse=parse_publish_result, job_id=f"{task['job_id']}_publish",
                             model=model_for("publish_browser"), timeout_seconds=TIMEOUT_SECONDS,
                             max_attempts=MAX_ATTEMPTS, allowed_tools=BROWSER_TOOLS,
                             cwd=PUBLISH_CWD or None)
+        else:
+            result = _publish_via_session(task, body_path, call=call)
     except (GenerateError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as e:
         msg = str(e)
         if "publish_result 태그 없음" in msg:
@@ -314,7 +359,7 @@ def publish(task: dict[str, Any], *, runner=run_claude_cli) -> dict[str, Any]:
 _claim_unavailable = False
 
 
-def run_publish_once(client, *, runner=run_claude_cli) -> bool:
+def run_publish_once(client, *, runner=None, call=run_claude_cli_once) -> bool:
     """발행 큐에서 한 건 처리. 처리했으면 True."""
     global _claim_unavailable
     if _claim_unavailable:
@@ -331,7 +376,7 @@ def run_publish_once(client, *, runner=run_claude_cli) -> bool:
     if not task:
         return False
     job_id = task["job_id"]
-    result = publish(task, runner=runner)
+    result = publish(task, runner=runner, call=call)
     if result["status"] == "deferred":
         # 결과를 회신하지 않는다(위 주석 참고). 리스가 되돌려 줄 때까지 그대로 둔다.
         append_log(LOGS_DIR, {"worker": "content", "status": "publish_deferred", "job": job_id,

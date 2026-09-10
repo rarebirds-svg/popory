@@ -1,4 +1,6 @@
 # claude CLI 재시도·지수 백오프(일시 실패 내성) 단위 테스트.
+import json
+from types import SimpleNamespace
 import subprocess
 
 import pytest
@@ -190,3 +192,66 @@ def test_parse_failure_error_carries_the_model_output_tail(harness):
         run_claude_cli(system_prompt="s", user_msg="u", parse=boom, max_attempts=1)
     assert "publish_result 태그 없음" in str(e.value)
     assert "출력 꼬리" in str(e.value) and "편집기를 열고" in str(e.value)
+
+
+# --- run_claude_cli_once: 세션을 들고 도는 단발 호출(부작용 있는 발행이 쓴다) ---
+
+class _Fake:
+    """subprocess.run 대체. 명령줄을 기록하고 정해진 JSON 봉투를 돌려준다."""
+    def __init__(self, stdout, returncode=0):
+        self.stdout, self.returncode, self.cmds = stdout, returncode, []
+
+    def __call__(self, cmd, **kw):
+        self.cmds.append(cmd)
+        return SimpleNamespace(returncode=self.returncode, stdout=self.stdout, stderr="")
+
+
+def test_run_claude_cli_once_returns_text_and_session_id(monkeypatch, tmp_path):
+    from popory_content import generate as g
+    fake = _Fake(json.dumps({"result": "답", "session_id": "sess-7"}))
+    monkeypatch.setattr(g.subprocess, "run", fake)
+    monkeypatch.setattr(g, "CLAUDE_BIN", str(_touch(tmp_path)))
+    text, sid = g.run_claude_cli_once(user_msg="hi", system_prompt="sys", job_id="j")
+    assert (text, sid) == ("답", "sess-7")
+    cmd = fake.cmds[0]
+    assert "--output-format" in cmd and cmd[cmd.index("--output-format") + 1] == "json"
+    assert "--system-prompt-file" in cmd and "--resume" not in cmd
+
+
+def test_run_claude_cli_once_resume_drops_the_system_prompt(monkeypatch, tmp_path):
+    from popory_content import generate as g
+    fake = _Fake(json.dumps({"result": "또", "session_id": "sess-7"}))
+    monkeypatch.setattr(g.subprocess, "run", fake)
+    monkeypatch.setattr(g, "CLAUDE_BIN", str(_touch(tmp_path)))
+    g.run_claude_cli_once(user_msg="더", system_prompt="sys", resume="sess-7")
+    cmd = fake.cmds[0]
+    assert cmd[cmd.index("--resume") + 1] == "sess-7"
+    # 이어 말할 땐 시스템 프롬프트를 다시 주지 않는다 — 그 대화가 이미 들고 있다.
+    assert "--system-prompt-file" not in cmd
+
+
+def test_run_claude_cli_once_keeps_raw_output_when_envelope_is_broken(monkeypatch, tmp_path):
+    # 봉투가 깨져도 본문은 버리지 않는다 — 발행에선 이게 "글이 올라갔나" 의 유일한 단서다.
+    from popory_content import generate as g
+    monkeypatch.setattr(g.subprocess, "run", _Fake("JSON 아님, 그냥 텍스트"))
+    monkeypatch.setattr(g, "CLAUDE_BIN", str(_touch(tmp_path)))
+    text, sid = g.run_claude_cli_once(user_msg="hi")
+    assert text == "JSON 아님, 그냥 텍스트" and sid == ""
+
+
+def test_run_claude_cli_once_does_not_retry_and_flags_usage_limit(monkeypatch, tmp_path):
+    from popory_content import generate as g
+    fake = _Fake("You've hit your session limit · resets 11pm (Asia/Seoul)", returncode=1)
+    monkeypatch.setattr(g.subprocess, "run", fake)
+    monkeypatch.setattr(g, "CLAUDE_BIN", str(_touch(tmp_path)))
+    monkeypatch.setattr(g, "_usage_limit_until", 0.0)
+    with pytest.raises(g.GenerateError) as e:
+        g.run_claude_cli_once(user_msg="hi")
+    assert g.is_usage_limit(str(e.value))
+    assert len(fake.cmds) == 1   # 재시도 없음 — 부작용 있는 호출이 쓴다
+
+
+def _touch(tmp_path):
+    p = tmp_path / "claude"
+    p.write_text("#!/bin/sh\n")
+    return p

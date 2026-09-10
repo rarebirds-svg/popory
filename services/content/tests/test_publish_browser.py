@@ -312,3 +312,63 @@ def test_missing_result_after_waiting_for_notification_names_the_cause():
     # 알림 대기와 무관한 미보고에는 원인 줄이 붙지 않는다
     assert "원인:" not in pb.publish(_task("tistory"), runner=lambda **kw: (_ for _ in ()).throw(
         GenerateError("publish_result 태그 없음 (시도 1) || 출력 꼬리: 편집기를 열었습니다")))["error"]
+
+
+# --- 알림 대기로 턴이 끝났을 때 같은 세션을 이어 마무리시킨다 (2026-09-10 재발) ---
+
+def _calls_recorder(replies):
+    """call(...) 을 흉내내는 가짜. replies 를 순서대로 돌려주고 호출 인자를 기록한다."""
+    seen: list[dict] = []
+
+    def call(**kw):
+        seen.append(kw)
+        return replies[len(seen) - 1]
+    return call, seen
+
+
+def test_missing_tag_resumes_the_same_session_instead_of_reposting(tmp_path):
+    # 1차: 모델이 "알림을 기다리겠다" 며 태그 없이 끝난다. 2차: 이어 말해 결과를 받는다.
+    call, seen = _calls_recorder([
+        ("백그라운드 작업이 끝나면 알림이 오므로 기다리겠습니다.", "sess-1"),
+        ('<publish_result>{"ok": true, "url": "https://me.tistory.com/72", "body_chars": 20}</publish_result>', "sess-1"),
+    ])
+    assert pb.publish(_task("tistory"), call=call) == {"status": "done", "url": "https://me.tistory.com/72"}
+    assert len(seen) == 2
+    # 2차는 **같은 세션을 이어**야 한다 — 새 세션으로 다시 돌리면 같은 글이 두 번 올라간다.
+    assert seen[0].get("resume") is None
+    assert seen[1]["resume"] == "sess-1"
+    # 2차엔 원고·단계 지시문을 다시 주지 않는다(다시 올리라는 뜻이 된다).
+    assert seen[1]["user_msg"] == pb.FOLLOWUP_PROMPT
+    assert "system_prompt" not in seen[1]
+
+
+def test_followup_prompt_forbids_reposting_and_demands_the_tag():
+    t = pb.FOLLOWUP_PROMPT
+    assert "다시 올리지 마" in t
+    assert "publish_result" in t
+    assert "알림은 오지 않습니다" in t
+
+
+def test_followup_failure_keeps_both_tails_and_the_duplicate_warning(tmp_path):
+    call, seen = _calls_recorder([("알림을 기다리겠습니다", "sess-9"), ("여전히 확인 중입니다", "sess-9")])
+    r = pb.publish(_task(), call=call)
+    assert r["status"] == "failed"
+    assert "이미 올라갔을 수 있습니다" in r["error"]
+    assert "알림을 기다리겠습니다" in r["error"]      # 1차 꼬리
+    assert "여전히 확인 중입니다" in r["error"]        # 2차 꼬리
+    assert len(seen) == 2
+
+
+def test_no_session_id_does_not_retry(tmp_path):
+    # 세션 id 를 못 받으면 이어 말할 수 없다 — 한 번만 부르고 실패로 끝낸다(중복 게시 금지).
+    call, seen = _calls_recorder([("태그 없음", "")])
+    r = pb.publish(_task(), call=call)
+    assert r["status"] == "failed"
+    assert len(seen) == 1
+    assert "이미 올라갔을 수 있습니다" in r["error"]
+
+
+def test_usage_limit_in_session_path_still_defers(tmp_path):
+    def call(**kw):
+        raise GenerateError("claude CLI 사용량 한도: You've hit your session limit · resets 11pm (Asia/Seoul)")
+    assert pb.publish(_task(), call=call)["status"] == "deferred"
