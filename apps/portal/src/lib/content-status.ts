@@ -61,6 +61,16 @@ export const TONE_DOT: Record<Tone, string> = {
   red: "bg-red-500",
 };
 
+// 톤 → 글자/아이콘 색. 목록의 플랫폼 아이콘이 상태 톤을 그대로 입는다(글자 칩 대신 색으로 읽힘).
+export const TONE_TEXT: Record<Tone, string> = {
+  muted: "text-gray-400 dark:text-gray-600",
+  yellow: "text-yellow-500",
+  blue: "text-blue-500 animate-pulse",
+  purple: "text-purple-500",
+  green: "text-green-500",
+  red: "text-red-500",
+};
+
 // 작업의 업로드 대상 상태. 목록·요약에서 생성 상태와 합산한다.
 export interface JobView {
   platform: string;
