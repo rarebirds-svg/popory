@@ -1,4 +1,5 @@
 # claude CLI(비대화형, Claude Max) 호출 공통 헬퍼 + 블로그 HTML 생성.
+import json
 import os
 import subprocess
 import sys
@@ -151,6 +152,57 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
     finally:
         sys_path.unlink(missing_ok=True)
     raise GenerateError("run_claude_cli 도달 불가 경로")
+
+
+def run_claude_cli_once(*, user_msg: str, system_prompt: str | None = None, job_id: str = "adhoc",
+                        model: str = DEFAULT_MODEL, timeout_seconds: int | None = None,
+                        allowed_tools: tuple[str, ...] = (), cwd: str | None = None,
+                        resume: str | None = None) -> tuple[str, str]:
+    """claude CLI 를 **한 번만** 호출하고 (응답 텍스트, session_id) 를 돌려준다.
+
+    run_claude_cli 와 다른 점 두 가지다. (1) 재시도하지 않는다. (2) `--output-format json` 으로
+    session_id 를 받아 **같은 대화를 이어**(`--resume`) 말할 수 있다.
+
+    부작용이 있는 호출(브라우저 발행)이 쓴다. 그런 호출은 처음부터 다시 돌리면 중복 게시가 되므로,
+    응답이 모자랄 때 재시도가 아니라 이어 말하기로 마무리시켜야 한다.
+    resume 을 주면 system_prompt 는 다시 주지 않는다 — 그 대화가 이미 들고 있다."""
+    timeout_seconds = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    if not Path(CLAUDE_BIN).exists():
+        raise GenerateError(f"claude CLI not found at {CLAUDE_BIN}")
+    sys_path: Path | None = None
+    cmd = [CLAUDE_BIN, "--print", "--model", model]
+    if allowed_tools:
+        cmd += ["--allowed-tools", *allowed_tools]
+    if resume:
+        cmd += ["--resume", resume]
+    elif system_prompt is not None:
+        sys_path = Path(f"/tmp/content_system_{job_id}.txt")
+        sys_path.write_text(system_prompt, encoding="utf-8")
+        cmd += ["--system-prompt-file", str(sys_path)]
+    cmd += ["--output-format", "json"]
+    run_cwd = cwd if cwd and Path(cwd).is_dir() else None
+    try:
+        try:
+            r = subprocess.run(cmd, input=user_msg, capture_output=True, text=True,
+                               timeout=timeout_seconds, cwd=run_cwd)
+        except subprocess.TimeoutExpired:
+            raise GenerateError(f"claude CLI timeout after {timeout_seconds}s")
+        if r.returncode != 0:
+            tail = ((r.stderr or "")[-300:] + " || stdout: " + (r.stdout or "")[-600:]).strip()
+            if is_usage_limit(tail):
+                note_usage_limit()
+                raise GenerateError(f"claude CLI 사용량 한도: {tail}")
+            raise GenerateError(f"claude CLI exit {r.returncode}: {tail}")
+    finally:
+        if sys_path is not None:
+            sys_path.unlink(missing_ok=True)
+    # 봉투가 깨져도 본문을 버리지 않는다 — 발행에서는 이 텍스트가 "글이 올라갔는가" 의 유일한 단서다.
+    try:
+        env = json.loads(r.stdout)
+        text, sid = str(env.get("result") or ""), str(env.get("session_id") or "")
+    except (json.JSONDecodeError, TypeError):
+        text, sid = r.stdout or "", ""
+    return normalize_names(text), sid
 
 
 def generate(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
