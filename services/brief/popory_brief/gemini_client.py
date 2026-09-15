@@ -37,6 +37,10 @@ RESET_FALLBACK_SECONDS = int(os.environ.get("BRIEF_GEMINI_RESET_FALLBACK_SECONDS
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
 
+# 키 파일에 env 형식('GEMINI_API_KEY=...')을 적은 실수만 골라낸다. '=' 자체로 거르면 안 된다 —
+# auth key(AQ. 접두사, base64 계열)는 패딩 '=' 로 끝날 수 있어 정상 키를 거절하게 된다.
+ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
 
 def is_gemini_model(model: str) -> bool:
     """어드민에서 고른 모델이 Gemini 인지. 공급자 분기는 이 한 곳으로만 판단한다."""
@@ -71,7 +75,7 @@ def api_key() -> str:
     # 키 파일에 env 형식('GEMINI_API_KEY=...')이나 여러 줄을 넣는 실수가 흔하다. 그대로 보내면
     # 진단하기 어려운 403 으로 돌아오므로, 키가 아니라 형식이 문제임을 여기서 분명히 말한다.
     # (env 로 준 값은 위에서 이미 반환됐다 — 이 검사는 파일 경로에만 걸린다.)
-    if "=" in key or any(ch.isspace() for ch in key):
+    if ENV_ASSIGNMENT_RE.match(key) or any(ch.isspace() for ch in key):
         raise GeminiError(
             "Gemini 키 파일 형식 오류 — 키 값만 한 줄로 넣으세요 "
             "('GEMINI_API_KEY=' 접두사·따옴표·여러 줄 없이)", exit_code=2)

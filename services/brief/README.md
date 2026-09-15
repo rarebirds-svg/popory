@@ -55,13 +55,19 @@ Gemini 키는 env 대신 `secrets/gemini_api_key` 파일로 둬도 된다. env �
 폴백이 있어야 온디맨드 생성도 같은 키를 쓴다. `secrets/` 는 git 이중 ignore 다.
 
 파일 형식은 **키 값만 한 줄**이다. `GEMINI_API_KEY=` 접두사·따옴표·여러 줄을 넣으면 그 전체가
-키로 읽혀 진단하기 어려운 403 이 된다. 그래서 `=` 나 공백이 섞이면 형식 오류(exit 2)로 막는다.
+키로 읽혀 진단하기 어려운 403 이 된다. 그래서 env 대입문 모양(`이름=...`)이나 공백·비ASCII 가
+섞이면 형식 오류(exit 2)로 막는다. 키 자체에 든 `=` 는 막지 않는다 — auth key 는 base64 계열이라
+패딩 `=` 로 끝날 수 있다.
 env(`portal_endpoints.env`)에 넣을 때는 반대로 `GEMINI_API_KEY=키` 형식이어야 한다 — shell 이
 source 하는 파일이기 때문이다.
 
+키 종류. 구글이 standard key(`AIza…`, 39자)에서 **auth key**(`AQ.` 접두사, 더 긴 base64 계열)로
+옮기는 중이고, standard key 는 2026-09 부터 거부된다. 새로 발급할 때 auth key 를 고른다.
+어느 쪽이든 `x-goog-api-key` 헤더로 보내므로 코드는 그대로다.
+
 ```bash
 # 파일로 (양쪽 경로 모두 커버). 예시 문자열이 아니라 실제 키를 넣는다.
-printf '%s\n' 'AIzaSy...' > secrets/gemini_api_key && chmod 600 secrets/gemini_api_key
+printf '%s\n' '<발급받은 키>' > secrets/gemini_api_key && chmod 600 secrets/gemini_api_key
 
 # 키·모델·검색 도구를 나눠서 점검 (실호출 1회, 키는 마스킹 출력)
 .venv/bin/python check_gemini.py
