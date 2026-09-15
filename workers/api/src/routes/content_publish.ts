@@ -11,6 +11,17 @@ const WORKER_AREA = "content-worker";
 // publishing 으로 이 시간 넘게 정체된 잡은 워커가 죽은 것으로 보고 requested 로 되돌린다.
 // 브라우저 발행은 로그인·편집기 로딩까지 포함해 수 분이 걸릴 수 있어 넉넉히 잡는다.
 const PUBLISH_LEASE_SECONDS = 20 * 60;
+
+// 리스 초과 publishing 잡을 requested 로 되돌린다. 회수한 건수를 돌려준다.
+// 생성 쪽 sweepStalledJobs 와 같은 이유로 claim 밖에 둔다 — 한도 쿨다운 중에는 발행 claim 도
+// 건너뛰는데, 한도로 deferred 된 잡은 publishing 으로 남아 바로 이 회수를 기다린다.
+export async function sweepStalledPublishes(env: Env, now: number): Promise<number> {
+  const r = await env.DB.prepare(
+    "UPDATE content_jobs SET publish_status='requested' WHERE publish_status='publishing' AND updated_at < ?",
+  ).bind(now - PUBLISH_LEASE_SECONDS).run();
+  return r.meta.changes ?? 0;
+}
+
 type Vars = AppVars & ServiceVars;
 
 type SettingsRow = { owner_sub: string; blog_platform: string | null; blog_url: string | null; youtube_community: number; auto_publish: number; updated_at: number };
@@ -89,9 +100,7 @@ export function mountContentPublish(app: Hono<{ Bindings: Env; Variables: Vars }
     const svc = c.get("service")!;
     if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
     const now = Math.floor(Date.now() / 1000);
-    await c.env.DB.prepare(
-      "UPDATE content_jobs SET publish_status='requested' WHERE publish_status='publishing' AND updated_at < ?",
-    ).bind(now - PUBLISH_LEASE_SECONDS).run();
+    await sweepStalledPublishes(c.env, now);
     const cand = await c.env.DB.prepare("SELECT id FROM content_jobs WHERE publish_status='requested' ORDER BY updated_at LIMIT 1").first<{ id: string }>();
     if (!cand) return c.body(null, 204);
     const claim = await c.env.DB.prepare("UPDATE content_jobs SET publish_status='publishing', updated_at=? WHERE id=? AND publish_status='requested'").bind(now, cand.id).run();

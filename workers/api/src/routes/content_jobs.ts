@@ -4,6 +4,7 @@ import type { Env } from "../types";
 import { ContentJobCreateSchema, ContentJobEditSchema, ContentJobResultSchema, JobServiceCreateSchema } from "@popory/types";
 import { requireAuth, type AppVars } from "../middleware/session";
 import { requireService, type ServiceVars } from "../middleware/service_auth";
+import { sweepStalledPublishes } from "./content_publish";
 import { verifyAreaToken } from "@popory/auth";
 import { loadJwks } from "../db/signing_keys";
 import { deleteContentJob } from "../db/content_delete";
@@ -16,9 +17,22 @@ function ulid(): string {
 
 const WORKER_AREA = "content-worker";
 // running 리스: 이 시간 넘게 갱신 안 된 running 잡은 워커 중단/재시작으로 고아가 된 것으로 보고
-// claim 시 queued 로 회수한다. 단일 워커라 claim 시점엔 렌더 중이 아니지만, 최장 렌더(16장면 ~60분)를
+// queued 로 회수한다. 단일 워커라 회수 시점엔 렌더 중이 아니지만, 최장 렌더(16장면 ~60분)를
 // 넘는 90분으로 잡아 정상 진행 중인 잡을 오인 회수하지 않게 한다.
 const RUNNING_LEASE_SECONDS = 90 * 60;
+
+// 리스 초과 running 잡을 queued 로 되돌린다. 회수한 건수를 돌려준다.
+//
+// **claim 안에만 두면 안 된다.** 워커는 claude 사용량 한도 쿨다운 중에 생성 claim 자체를 건너뛰는데,
+// 한도에 걸린 잡은 바로 그 경로에서 running 으로 남겨 리스 회수를 기다린다. 회수가 claim 안에만 있으면
+// "회수를 기다리는 잡"과 "회수를 돌리는 코드"가 같은 스위치에 묶여 서로를 막는다 — 2026-09-14 에 잡
+// 3건이 4시간 동안 '생성 중' 으로 굳었다. 그래서 워커가 매 사이클 따로 부를 수 있게 떼어 둔다.
+export async function sweepStalledJobs(env: Env, now: number): Promise<number> {
+  const r = await env.DB.prepare(
+    "UPDATE content_jobs SET status='queued' WHERE status='running' AND updated_at < ?",
+  ).bind(now - RUNNING_LEASE_SECONDS).run();
+  return r.meta.changes ?? 0;
+}
 
 type Vars = AppVars & ServiceVars;
 
@@ -191,14 +205,35 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     return c.json({ ok: true });
   });
 
+  // 리스 회수만 하는 엔드포인트. 워커가 **매 사이클 무조건** 부른다 — 사용량 한도 쿨다운으로
+  // 생성 claim 을 건너뛰는 동안에도 고아 잡이 제때 큐로 돌아오게 하려는 것이다.
+  app.post("/api/content/jobs/sweep", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const now = Math.floor(Date.now() / 1000);
+    const requeued = await sweepStalledJobs(c.env, now);
+    const publishRequeued = await sweepStalledPublishes(c.env, now);
+    return c.json({ requeued, publish_requeued: publishRequeued });
+  });
+
+  // 워커가 집었지만 지금은 처리할 수 없는 잡을 즉시 큐로 돌려준다(사용량 한도 등).
+  // 리스 만료를 기다리면 최대 90분 동안 화면에 '생성 중' 이라는 거짓말이 남는다.
+  app.post("/api/content/jobs/:id/release", requireService, async (c) => {
+    const svc = c.get("service")!;
+    if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
+    const r = await c.env.DB.prepare(
+      "UPDATE content_jobs SET status='queued', updated_at=? WHERE id=? AND status='running'",
+    ).bind(Math.floor(Date.now() / 1000), c.req.param("id")).run();
+    if (!r.meta.changes) return c.text("conflict", 409);
+    return c.json({ ok: true });
+  });
+
   app.post("/api/content/jobs/claim", requireService, async (c) => {
     const svc = c.get("service")!;
     if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
     const now = Math.floor(Date.now() / 1000);
     // stuck 자동복구: 리스 초과로 running 에 정체된 잡(워커 중단/재시작 추정)을 queued 로 회수.
-    await c.env.DB.prepare(
-      "UPDATE content_jobs SET status='queued' WHERE status='running' AND updated_at < ?",
-    ).bind(now - RUNNING_LEASE_SECONDS).run();
+    await sweepStalledJobs(c.env, now);
     const candidate = await c.env.DB.prepare(
       "SELECT id FROM content_jobs WHERE status='queued' ORDER BY created_at LIMIT 1",
     ).first<{ id: string }>();

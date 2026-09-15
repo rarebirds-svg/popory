@@ -91,6 +91,18 @@ def _notify_auth_failure() -> None:
         pass
 
 
+def _release(client, job_id: str) -> None:
+    """지금 처리할 수 없는 잡을 즉시 큐로 돌려준다. 실패해도 삼킨다 — 리스(90분)가 뒷받침한다.
+
+    돌려주지 않으면 잡이 running 으로 남아 화면에 '생성 중' 으로 보인다. 실제로는 아무도 돌리고
+    있지 않은데 최대 90분 동안 거짓말이 남고, 한도 쿨다운이 이어지면 그보다 더 오래 굳는다."""
+    try:
+        client.post(f"/api/content/jobs/{job_id}/release", json=None)
+    except Exception as e:  # noqa: BLE001 — 되돌리기 실패는 로그만. 리스가 최후 방어선이다
+        append_log(LOGS_DIR, {"worker": "content", "status": "release_failed",
+                              "job": job_id, "error": str(e)[:200]})
+
+
 def run_once(client) -> bool:
     """큐에서 한 건 처리. 처리했으면 True, 큐가 비었으면 False."""
     data = client.post("/api/content/jobs/claim", json=None)
@@ -178,6 +190,7 @@ def run_once(client) -> bool:
             # 남고 API 의 러닝 리스(90분)가 queued 로 되돌려 한도가 풀린 뒤 자동으로 처리된다.
             append_log(LOGS_DIR, {"worker": "content", "status": "usage_limit_deferred",
                                   "job": job_id, "error": msg[:300]})
+            _release(client, job_id)
             return True
         _report(client, job_id, {"status": "failed", "error": msg[:2000]}, "failed")
         if _is_claude_auth_failure(msg):
@@ -742,6 +755,24 @@ def refresh_model_overrides(client, *, force: bool = False) -> None:
         append_log(LOGS_DIR, {"worker": "content", "status": "llm_models_fetch_failed", "error": str(e)[:200]})
 
 
+def _sweep_stalled(client) -> int:
+    """리스 초과 running/publishing 잡을 큐로 회수한다. 회수 건수를 돌려주고, 실패는 삼킨다.
+
+    API 가 이 경로를 모르면(워커가 먼저 배포된 경우) PortalError 가 나는데, 그때도 삼킨다 —
+    예전처럼 claim 안의 회수가 계속 돌기 때문에 기능이 퇴화할 뿐 깨지지는 않는다."""
+    try:
+        out = client.post("/api/content/jobs/sweep", json=None) or {}
+    except Exception as e:  # noqa: BLE001 — 회수 실패로 사이클을 죽이지 않는다
+        append_log(LOGS_DIR, {"worker": "content", "status": "sweep_failed", "error": str(e)[:200]})
+        return 0
+    n = int(out.get("requeued") or 0)
+    pub = int(out.get("publish_requeued") or 0)
+    if n or pub:
+        append_log(LOGS_DIR, {"worker": "content", "status": "stalled_requeued",
+                              "count": n, "publish_count": pub})
+    return n + pub
+
+
 def run_cycle(client) -> bool:
     """한 폴 사이클. 생성·유튜브·IG·페이스북 업로드를 매번 각각 1회 시도한다.
     예전엔 생성 큐가 빌 때만 업로드를 claim 해서, 생성 백로그가 있으면 업로드가
@@ -751,6 +782,10 @@ def run_cycle(client) -> bool:
     사용량 한도 쿨다운 중에는 claude 를 쓰는 생성·발행을 건너뛰고 업로드만 돈다.
     """
     refresh_model_overrides(client)
+    # 고아 잡 회수는 **한도와 무관하게** 매 사이클 돌린다. 예전엔 회수가 생성 claim 안에만 있어서,
+    # 한도 쿨다운으로 claim 을 건너뛰는 동안 회수도 함께 멈췄다 — 한도에 걸려 running 으로 남긴 잡이
+    # 바로 그 회수를 기다리고 있었으므로 서로를 막았다(2026-09-14, 4시간 정체).
+    _sweep_stalled(client)
     # 사용량 한도 쿨다운 중이면 claude 를 쓰는 작업(생성·발행)은 아예 집지 않는다 — 집어봐야 같은
     # 한도에 걸려 잡만 running/publishing 으로 밀린다. 업로드는 claude 를 쓰지 않으므로 계속 돈다.
     limited = usage_limited()
