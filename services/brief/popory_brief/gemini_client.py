@@ -111,7 +111,12 @@ def _is_billing_problem(payload: dict, detail: str) -> bool:
     types = {str(d.get("@type") or "") for d in details if isinstance(d, dict)}
     if any("RetryInfo" in t or "QuotaFailure" in t for t in types):
         return False
-    return "billing" in detail.lower()
+    # 문구는 계정 상태마다 다르다. 실측 2종.
+    #   결제 미연결   : "check your plan and billing details"
+    #   선불 잔액 0   : "Your prepayment credits are depleted ... project and billing"
+    # 둘 다 사람이 콘솔에서 고쳐야 풀린다.
+    low = detail.lower()
+    return any(w in low for w in ("billing", "prepay", "credit"))
 
 
 def _raise_for_status(resp: requests.Response, now: datetime.datetime) -> None:

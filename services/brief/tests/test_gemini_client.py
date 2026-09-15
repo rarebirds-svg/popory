@@ -351,3 +351,35 @@ def test_rate_limit_429_with_retry_info_stays_a_limit():
         gc._raise_for_status(_Resp(429, payload), NOW)
     assert e.value.is_limit is True
     assert e.value.reset_epoch == int(NOW.timestamp()) + 31
+
+
+_PREPAY_DEPLETED_429 = {
+    "error": {
+        "code": 429,
+        "message": ("Your prepayment credits are depleted. Please go to AI Studio at "
+                    "https://ai.studio/projects to manage your project and billing. "
+                    "Learn more at https://ai.google.dev/gemini-api/docs/billing#prepay."),
+        "status": "RESOURCE_EXHAUSTED",
+    }
+}
+
+
+def test_prepay_depleted_429_is_not_a_retryable_limit():
+    """2026-09-15 실측 2번째 문구. 선불 잔액 0 — 재시도해도 충전 전까지 계속 막힌다."""
+    with pytest.raises(gc.GeminiError) as e:
+        gc._raise_for_status(_Resp(429, _PREPAY_DEPLETED_429), NOW)
+    assert e.value.exit_code == 3
+    assert e.value.is_limit is False
+    assert e.value.retryable is False
+
+
+def test_retired_model_404_carries_googles_migration_hint():
+    """은퇴한 모델 id 는 404 로 대체 모델을 알려준다 — 그 문구를 로그에 그대로 실어야 한다."""
+    payload = {"error": {"code": 404, "message": (
+        "This model models/gemini-2.5-flash is no longer available to new users. "
+        "Please update your code to use models/gemini-3.6-flash for the latest features.")}}
+    with pytest.raises(gc.GeminiError) as e:
+        gc._raise_for_status(_Resp(404, payload), NOW)
+    assert e.value.exit_code == 4
+    assert e.value.retryable is False
+    assert "gemini-3.6-flash" in str(e.value)
