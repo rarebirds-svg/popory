@@ -249,6 +249,83 @@ describe("POST /api/content/jobs/claim", () => {
   });
 });
 
+describe("POST /api/content/jobs/sweep", () => {
+  it("리스 초과 running/publishing 을 claim 없이 회수한다", async () => {
+    await userCookie();
+    const stale = Math.floor(Date.now() / 1000) - 100 * 60;   // 생성 리스 90분·발행 리스 20분 모두 초과
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id, owner_sub, topic, platform, status, created_at, updated_at) VALUES ('orph_g','u1','t','youtube','running',?,?)",
+    ).bind(stale, stale).run();
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id, owner_sub, topic, platform, status, publish_status, created_at, updated_at) VALUES ('orph_p','u1','t','naver-blog','review','publishing',?,?)",
+    ).bind(stale, stale).run();
+
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/sweep", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ requeued: 1, publish_requeued: 1 });
+
+    // 회수가 claim 밖에서 돌아야 하는 이유: 워커는 사용량 한도 쿨다운 중 claim 자체를 건너뛴다.
+    const g = await env.DB.prepare("SELECT status FROM content_jobs WHERE id='orph_g'").first<{ status: string }>();
+    expect(g?.status).toBe("queued");
+    const pb = await env.DB.prepare("SELECT publish_status FROM content_jobs WHERE id='orph_p'").first<{ publish_status: string }>();
+    expect(pb?.publish_status).toBe("requested");
+  });
+
+  it("리스 내 잡은 건드리지 않는다", async () => {
+    await userCookie();
+    const recent = Math.floor(Date.now() / 1000) - 5 * 60;
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id, owner_sub, topic, platform, status, created_at, updated_at) VALUES ('fresh_g','u1','t','youtube','running',?,?)",
+    ).bind(recent, recent).run();
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/sweep", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(await res.json()).toEqual({ requeued: 0, publish_requeued: 0 });
+    const row = await env.DB.prepare("SELECT status FROM content_jobs WHERE id='fresh_g'").first<{ status: string }>();
+    expect(row?.status).toBe("running");
+  });
+
+  it("잘못된 area 는 403, 토큰 없으면 401", async () => {
+    const bad = await workerToken("brief");
+    expect((await SELF.fetch("https://example.com/api/content/jobs/sweep", { method: "POST", headers: { authorization: `Bearer ${bad}` } })).status).toBe(403);
+    expect((await SELF.fetch("https://example.com/api/content/jobs/sweep", { method: "POST" })).status).toBe(401);
+  });
+});
+
+describe("POST /api/content/jobs/:id/release", () => {
+  it("running 잡을 즉시 queued 로 돌려준다(리스 만료를 기다리지 않는다)", async () => {
+    await userCookie();
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id, owner_sub, topic, platform, status, created_at, updated_at) VALUES ('rel1','u1','t','youtube','running',?,?)",
+    ).bind(now, now).run();
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/rel1/release", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    const row = await env.DB.prepare("SELECT status FROM content_jobs WHERE id='rel1'").first<{ status: string }>();
+    expect(row?.status).toBe("queued");
+  });
+
+  it("running 이 아니면 409 — 끝난 잡을 큐로 되살리지 않는다", async () => {
+    await userCookie();
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      "INSERT INTO content_jobs (id, owner_sub, topic, platform, status, created_at, updated_at) VALUES ('rel2','u1','t','youtube','done',?,?)",
+    ).bind(now, now).run();
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/rel2/release", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(409);
+    const row = await env.DB.prepare("SELECT status FROM content_jobs WHERE id='rel2'").first<{ status: string }>();
+    expect(row?.status).toBe("done");
+  });
+
+  it("잘못된 area 는 403, 토큰 없으면 401", async () => {
+    const bad = await workerToken("brief");
+    expect((await SELF.fetch("https://example.com/api/content/jobs/rel1/release", { method: "POST", headers: { authorization: `Bearer ${bad}` } })).status).toBe(403);
+    expect((await SELF.fetch("https://example.com/api/content/jobs/rel1/release", { method: "POST" })).status).toBe(401);
+  });
+});
+
 describe("PATCH /api/content/jobs/:id/result", () => {
   it("초안·메타를 저장하고 review 로 전이", async () => {
     const ck = await userCookie();

@@ -176,7 +176,9 @@ popory `services/content`가 한 주제로 4개 채널(블로그·유튜브 동�
 ## 신뢰성 / 작업 상태
 - claude CLI 일시 실패(parse 실패 등)에 재시도 내성.
 - 누락 이미지 비율로 status 결정 — 대부분 실패면 `failed`(재생성 필요), 일부면 `review`+경고.
-- 작업 상태 흐름 `queued → running → review/failed`. claim은 `queued`만 집어가고 **`running`에 고아로 남은 작업을 회수하는 lease/timeout이 없다** — worker가 생성 도중 재시작되면 그 작업이 "생성 중"에 영구히 묶인다(직접 `running→queued` 복구 필요). 재발 방지는 미구현.
+- 작업 상태 흐름 `queued → running → review/failed`. claim 은 `queued` 만 집어가고, `running` 에 고아로 남은 작업은 **리스**로 회수한다 — 생성 90분(`RUNNING_LEASE_SECONDS`, 최장 렌더 16장면 ~60분보다 넉넉히), 발행 20분(`PUBLISH_LEASE_SECONDS`).
+- **리스 회수는 claim 밖에 있어야 한다**(`sweepStalledJobs`·`sweepStalledPublishes`, `POST /api/content/jobs/sweep`). 예전엔 회수가 `claim` 핸들러 안에만 있었는데, 워커는 **사용량 한도 쿨다운 중 생성·발행 claim 자체를 건너뛴다** — 그런데 한도에 걸린 잡을 `running`/`publishing` 으로 남기고 기대는 곳이 바로 그 회수였다. 회수를 기다리는 잡과 회수를 돌리는 코드가 같은 스위치에 묶여 서로를 막았고, 쿨다운이 풀릴 때마다 다음 잡을 하나씩 더 태워 넣어 잡 3건이 **4시간 동안 '생성 중'** 으로 굳었다(2026-09-14). 지금은 `run_cycle` 이 한도와 무관하게 매 사이클 `_sweep_stalled(client)` 를 부른다. **안전장치끼리 서로를 기다리게 만들지 말 것** — 회복 경로는 고장 난 경로와 다른 스위치에 걸어야 한다.
+- **미룰 땐 즉시 돌려준다** — 한도로 생성을 미룰 때 `POST /api/content/jobs/{id}/release` 로 바로 `queued` 로 되돌린다. 리스 만료만 기다리면 최대 90분 동안 화면에 '생성 중' 이라는 거짓말이 남는다. 리스는 워커가 죽어 release 조차 못 보낸 경우의 최후 방어선으로만 남긴다(그래서 `_release` 실패는 로그만 찍고 삼킨다).
 
 ## 흔한 실수
 - 쇼츠에 구독·좋아요 CTA를 넣거나, 롱폼 **본문** 장면에 CTA 를 넣음(롱폼은 마지막 엔딩 CTA 장면에만).

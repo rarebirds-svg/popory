@@ -31,8 +31,12 @@ class FakeClient:
         self._claim = claim_response
         self.patched = []
         self.uploaded = []
+        self.released = []
 
     def post(self, path, *, json=None):
+        if path.endswith("/release"):
+            self.released.append(path)
+            return {"ok": True}
         assert path == "/api/content/jobs/claim"
         return self._claim
 
@@ -472,6 +476,17 @@ def test_youtube_few_images_failed_reports_review(monkeypatch):
     assert result[1]["meta"]["images_missing"] == 1
 
 
+class CycleClient:
+    """run_cycle 이 부르는 POST(리스 회수)만 기록하는 페이크."""
+    def __init__(self, requeued=0, publish_requeued=0):
+        self.posted = []
+        self._out = {"requeued": requeued, "publish_requeued": publish_requeued}
+
+    def post(self, path, *, json=None):
+        self.posted.append(path)
+        return self._out
+
+
 def test_run_cycle_attempts_upload_even_when_generating(monkeypatch):
     """생성이 처리돼도 같은 사이클에서 업로드/IG/FB claim 을 시도해야 한다(starvation 제거)."""
     calls = []
@@ -481,8 +496,26 @@ def test_run_cycle_attempts_upload_even_when_generating(monkeypatch):
     monkeypatch.setattr(worker, "run_facebook_upload_once", lambda c: (calls.append("fb") or False))
     monkeypatch.setattr(worker, "run_publish_once", lambda c: (calls.append("pub") or False))
     monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: (calls.append("brief") or False))
-    assert worker.run_cycle(object()) is True
+    monkeypatch.setattr(worker, "refresh_model_overrides", lambda c: None)
+    client = CycleClient()
+    assert worker.run_cycle(client) is True
     assert calls == ["gen", "up", "ig", "fb", "pub"]   # 생성 처리돼도 업로드·IG·FB·발행 시도, 저순위 브리핑은 건너뜀
+    assert client.posted == ["/api/content/jobs/sweep"]
+
+
+def test_sweep_stalled_counts_both_queues_and_swallows_failure(monkeypatch, tmp_path):
+    """회수는 생성·발행 두 큐를 합산하고, 실패해도 사이클을 죽이지 않는다."""
+    assert worker._sweep_stalled(CycleClient(requeued=2, publish_requeued=1)) == 3
+    text = "".join(f.read_text() for f in worker.LOGS_DIR.glob("*"))
+    assert "stalled_requeued" in text
+
+    class Boom:
+        def post(self, path, *, json=None):
+            raise RuntimeError("API 가 sweep 경로를 모름(404)")
+
+    assert worker._sweep_stalled(Boom()) == 0          # 예외가 밖으로 새지 않는다
+    text = "".join(f.read_text() for f in worker.LOGS_DIR.glob("*"))
+    assert "sweep_failed" in text
 
 
 def test_run_cycle_brief_only_when_all_idle(monkeypatch):
@@ -897,6 +930,9 @@ def test_usage_limit_defers_generation_instead_of_failing(monkeypatch, tmp_path)
     client = FakeClient({"job": {"id": "u1", "topic": "t"}, "sources": [], "style_samples": []})
     assert worker.run_once(client) is True
     assert client.patched == []            # failed 회신 없음
+    # 리스(90분) 만료를 기다리지 않고 즉시 queued 로 돌려준다 — 안 그러면 그동안 화면에 '생성 중'
+    # 이라는 거짓말이 남는다(2026-09-14 4시간 정체의 절반이 이것이었다).
+    assert client.released == ["/api/content/jobs/u1/release"]
     text = "".join(p.read_text() for p in worker.LOGS_DIR.glob("*"))
     assert "usage_limit_deferred" in text
     # 한도가 아닌 오류는 그대로 failed 로 회신한다(회귀 방지)
@@ -917,8 +953,13 @@ def test_run_cycle_skips_claude_work_while_usage_limited(monkeypatch):
     monkeypatch.setattr(worker, "run_custom_brief_once", lambda c: (calls.append("brief") or False))
     monkeypatch.setattr(worker, "refresh_model_overrides", lambda c: None)
     monkeypatch.setattr(worker, "usage_limited", lambda: True)
-    assert worker.run_cycle(object()) is True          # 업로드가 처리됐으므로 True
+    client = CycleClient(requeued=2)
+    assert worker.run_cycle(client) is True            # 업로드가 처리됐으므로 True
     assert calls == ["up", "ig", "fb"]                 # 생성·발행은 건너뜀
+    # 이 한 줄이 이번 수정의 핵심이다. 회수가 생성 claim 안에만 있던 시절엔 쿨다운이 claim 을
+    # 건너뛰는 동안 회수도 함께 멈췄고, 한도로 running 에 남은 잡이 바로 그 회수를 기다리느라
+    # 서로를 막았다(2026-09-14, 4시간 '생성 중').
+    assert client.posted == ["/api/content/jobs/sweep"]
 
 
 def test_blog_title_prefix_is_stripped_before_review(monkeypatch):
