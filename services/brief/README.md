@@ -50,9 +50,22 @@ POPORY_PORTAL_API_BASE=https://api.poporyfamily.com
 GEMINI_API_KEY=...
 ```
 
-Gemini 키는 env 대신 `secrets/gemini_api_key` 파일(키 한 줄)로 둬도 된다. env 가 우선이고,
-없으면 그 파일을 읽는다 — content-worker 가 `generic_brief.py` 를 부를 때는 env 가 안 실리므로
-파일 경로 폴백이 있어야 온디맨드 생성도 같은 키를 쓴다. `secrets/` 는 git 이중 ignore 다.
+Gemini 키는 env 대신 `secrets/gemini_api_key` 파일로 둬도 된다. env 가 우선이고, 없으면 그
+파일을 읽는다 — content-worker 가 `generic_brief.py` 를 부를 때는 env 가 안 실리므로 파일
+폴백이 있어야 온디맨드 생성도 같은 키를 쓴다. `secrets/` 는 git 이중 ignore 다.
+
+파일 형식은 **키 값만 한 줄**이다. `GEMINI_API_KEY=` 접두사·따옴표·여러 줄을 넣으면 그 전체가
+키로 읽혀 진단하기 어려운 403 이 된다. 그래서 `=` 나 공백이 섞이면 형식 오류(exit 2)로 막는다.
+env(`portal_endpoints.env`)에 넣을 때는 반대로 `GEMINI_API_KEY=키` 형식이어야 한다 — shell 이
+source 하는 파일이기 때문이다.
+
+```bash
+# 파일로 (양쪽 경로 모두 커버)
+printf '%s\n' "$KEY" > secrets/gemini_api_key && chmod 600 secrets/gemini_api_key
+
+# 읽히는지 확인 (마스킹 출력)
+.venv/bin/python -c "from popory_brief.gemini_client import api_key as k; v=k(); print('ok', v[:6]+'...'+v[-4:], len(v))"
+```
 
 선택 튜닝 (기본값으로 충분하다).
 

@@ -68,6 +68,13 @@ def api_key() -> str:
     if not key:
         # 경로는 자격증명 위치라 메시지에 넣지 않는다 (safe_error 와 같은 원칙).
         raise GeminiError("GEMINI_API_KEY 미설정 — env 또는 secrets 키 파일 필요", exit_code=2)
+    # 키 파일에 env 형식('GEMINI_API_KEY=...')이나 여러 줄을 넣는 실수가 흔하다. 그대로 보내면
+    # 진단하기 어려운 403 으로 돌아오므로, 키가 아니라 형식이 문제임을 여기서 분명히 말한다.
+    # (env 로 준 값은 위에서 이미 반환됐다 — 이 검사는 파일 경로에만 걸린다.)
+    if "=" in key or any(ch.isspace() for ch in key):
+        raise GeminiError(
+            "Gemini 키 파일 형식 오류 — 키 값만 한 줄로 넣으세요 "
+            "('GEMINI_API_KEY=' 접두사·따옴표·여러 줄 없이)", exit_code=2)
     return key
 
 

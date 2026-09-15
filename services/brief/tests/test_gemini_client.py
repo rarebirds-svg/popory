@@ -265,3 +265,34 @@ def test_retry_does_not_retry_non_retryable(monkeypatch):
         gc.generate_with_retry(system_prompt="s", user_msg="u", model="gemini-3-pro",
                                timeout_seconds=1, backoff=[0, 0], sleep=lambda s: None)
     assert calls["n"] == 1   # 인증 실패를 재시도하면 쿼터만 태운다.
+
+
+def test_api_key_file_rejects_env_style_line(monkeypatch, tmp_path):
+    """키 파일에 'GEMINI_API_KEY=...' 를 적는 실수 — 403 이 아니라 형식 오류로 잡아준다."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    f = tmp_path / "gemini_api_key"
+    f.write_text("GEMINI_API_KEY=AIzaSyExample\n", encoding="utf-8")
+    monkeypatch.setenv("BRIEF_GEMINI_KEY_FILE", str(f))
+    with pytest.raises(gc.GeminiError) as e:
+        gc.api_key()
+    assert e.value.exit_code == 2
+    assert "한 줄" in str(e.value)
+
+
+def test_api_key_file_rejects_multiline(monkeypatch, tmp_path):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    f = tmp_path / "gemini_api_key"
+    f.write_text("AIzaSyExample\n두번째줄\n", encoding="utf-8")
+    monkeypatch.setenv("BRIEF_GEMINI_KEY_FILE", str(f))
+    with pytest.raises(gc.GeminiError) as e:
+        gc.api_key()
+    assert e.value.exit_code == 2
+
+
+def test_api_key_file_accepts_plain_key_with_trailing_newline(monkeypatch, tmp_path):
+    """정상 형식 — 키 한 줄 + 줄바꿈. echo·printf 로 만든 파일이 그대로 통과해야 한다."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    f = tmp_path / "gemini_api_key"
+    f.write_text("AIzaSyExample-_123\n", encoding="utf-8")
+    monkeypatch.setenv("BRIEF_GEMINI_KEY_FILE", str(f))
+    assert gc.api_key() == "AIzaSyExample-_123"
