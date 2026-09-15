@@ -416,3 +416,55 @@ def test_api_key_file_still_rejects_shell_assignment(monkeypatch, tmp_path, cont
     with pytest.raises(gc.GeminiError) as e:
         gc.api_key()
     assert e.value.exit_code == 2
+
+
+# ---------------- grounding 근거 URL ----------------
+#
+# 본문에 적힌 출처 URL 은 모델이 문장을 쓰면서 만든 문자열이라 존재하지 않는 링크가 섞인다
+# (2026-09-15 실측: 7개 중 2개가 404). 인용 검증은 이 근거 목록을 기준으로 붙일 것이다.
+
+def _payload_with_chunks(chunks) -> dict:
+    return {"candidates": [{
+        "content": {"parts": [{"text": "본문"}]},
+        "groundingMetadata": {"groundingChunks": chunks},
+    }]}
+
+
+def test_grounding_sources_extracts_web_uris():
+    payload = _payload_with_chunks([
+        {"web": {"uri": "https://redirect.example/a", "title": "매체A"}},
+        {"web": {"uri": "https://redirect.example/b", "title": "매체B"}},
+    ])
+    assert gc.grounding_sources(payload) == ["https://redirect.example/a",
+                                             "https://redirect.example/b"]
+
+
+@pytest.mark.parametrize("payload", [
+    {},                                              # 응답 자체가 빔
+    {"candidates": []},                              # 후보 없음
+    {"candidates": [{"content": {"parts": []}}]},    # groundingMetadata 없음
+    _payload_with_chunks([]),                        # 청크 없음
+    _payload_with_chunks([{"web": {}}, {}, None]),    # uri 없는 청크 섞임
+])
+def test_grounding_sources_is_empty_when_absent(payload):
+    """검색 근거 없이 생성된 응답도 있다 — 빈 목록으로 조용히 넘어가야 한다."""
+    assert gc.grounding_sources(payload) == []
+
+
+def test_generate_with_sources_returns_text_and_sources(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    ok = _Resp(200, _payload_with_chunks([{"web": {"uri": "https://redirect.example/a"}}]))
+    _capture_post(monkeypatch, ok)
+
+    text, sources = gc.generate_with_sources(system_prompt="s", user_msg="u",
+                                             model="gemini-3.8-flash", timeout_seconds=10)
+    assert text == "본문"
+    assert sources == ["https://redirect.example/a"]
+
+
+def test_generate_still_returns_text_only(monkeypatch):
+    """기존 호출부(generate_brief·generic_brief)는 문자열만 받는다 — 시그니처 유지."""
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    _capture_post(monkeypatch, _Resp(200, _payload_with_chunks([])))
+    assert gc.generate(system_prompt="s", user_msg="u",
+                       model="gemini-3.8-flash", timeout_seconds=10) == "본문"

@@ -116,7 +116,7 @@ GFM Markdown 본문. H1(#)은 절대 두지 않는다. 금지 문자. `§`, `•
 
 **관련 태그.** #LegalAI #(그날 토픽 기반 5~7개)
 
-*자동 생성. Claude Legal AI 브리핑*
+*자동 생성. Legal AI 브리핑*
 *생성시각. YYYY-MM-DD HH:MM KST*
 </body_markdown>
 
