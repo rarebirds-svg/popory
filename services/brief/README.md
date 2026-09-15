@@ -68,8 +68,14 @@ printf '%s\n' 'AIzaSy...' > secrets/gemini_api_key && chmod 600 secrets/gemini_a
 ```
 
 `check_gemini.py` 는 브리핑을 돌리기 전 점검용이다. 키 형식 오류·모델 id 오류·grounding
-도구 이름 오류를 각각 구분해 알려준다 — 셋 중 무엇이 틀려도 브리핑 로그에는 "생성 실패"
+도구 이름 오류·쿼터 미할당을 각각 구분해 알려준다 — 무엇이 틀려도 브리핑 로그에는 "생성 실패"
 한 줄만 남아서, 원인을 가려내려면 이 단계가 따로 있어야 한다.
+
+주의. **Google AI Pro/Ultra 구독만으로는 API 쿼터가 생기지 않는다.** 구독은 AI Studio 안의
+한도를 올려 줄 뿐이고, 이 서비스처럼 API 를 직접 부르는 경로는 키가 속한 프로젝트에 Cloud
+결제(pay-as-you-go)가 붙어 있어야 한다. 결제 미연결 키는 첫 호출부터 429
+(`check your plan and billing details`)로 막힌다. 특히 브리핑은 Google Search grounding 을
+항상 켜므로 무료 티어만으로는 돌지 않는다.
 
 선택 튜닝 (기본값으로 충분하다).
 
@@ -134,8 +140,9 @@ ${BRIEF_DIR}/.venv/bin/python ${BRIEF_DIR}/publish_to_portal.py \
 
 | 응답 | code | 비고 |
 |------|------|------|
-| 429 | 6 | `Retry-After`·`retryDelay` 로 리셋 epoch 계산, 없으면 15분 뒤 |
+| 429 (RetryInfo·QuotaFailure 동반) | 6 | 분·일 단위 rate limit. `Retry-After`·`retryDelay` 로 리셋 epoch 계산, 없으면 15분 뒤 |
 | 401·403 | 3 | 키 문제. stdout 에 `__BRIEF_AUTH_FAIL__=gemini` 를 남겨 run_daily 가 즉시 알린다 |
+| 429 (plan·billing) | 3 | 쿼터 미할당 — 결제 미연결 프로젝트의 키. 재시도로 안 풀리므로 위와 같이 즉시 알린다 |
 | 5xx·타임아웃·네트워크 | 5 | 백오프 재시도 후 |
 | 그 외 4xx | 4 | 도구 이름·모델 id 오류 등. 서버 메시지를 로그에 싣는다 |
 | 본문 없음·차단 | 4 | `finishReason`(MAX_TOKENS 등)·`blockReason` 을 로그에 싣는다 |

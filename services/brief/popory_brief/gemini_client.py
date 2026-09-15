@@ -101,6 +101,19 @@ def _reset_epoch_from(resp: requests.Response, payload: dict, now: datetime.date
     return int(now.timestamp()) + seconds
 
 
+def _is_billing_problem(payload: dict, detail: str) -> bool:
+    """재시도로 안 풀리는 429 인가 — 결제 미연결·요금제 미적용은 창이 지나도 그대로다.
+
+    Google 은 이 경우 본문에 plan·billing 안내만 담고 RetryInfo·QuotaFailure 를 주지 않는다
+    (결제 미연결 프로젝트의 키는 첫 호출부터 이 응답이 온다). 반대로 분·일 단위 rate limit 는
+    그 details 로 언제 풀리는지 알려주므로 한도로 취급해 재시도한다."""
+    details = (payload.get("error", {}) or {}).get("details", []) or []
+    types = {str(d.get("@type") or "") for d in details if isinstance(d, dict)}
+    if any("RetryInfo" in t or "QuotaFailure" in t for t in types):
+        return False
+    return "billing" in detail.lower()
+
+
 def _raise_for_status(resp: requests.Response, now: datetime.datetime) -> None:
     """HTTP 상태를 exit code 규약으로 환원한다. 본문은 진단용으로 앞부분만 싣는다."""
     if resp.status_code < 400:
@@ -112,6 +125,13 @@ def _raise_for_status(resp: requests.Response, now: datetime.datetime) -> None:
     detail = str((payload.get("error", {}) or {}).get("message") or resp.text)[:300]
     code = resp.status_code
     if code == 429:
+        # 쿼터가 "다 떨어진" 것과 "애초에 없는" 것은 회복 경로가 다르다. 후자를 한도로 넘기면
+        # retry 잡이 10분마다 헛돌다 MAX_RETRY 로 조용히 포기한다 — 사람이 결제를 붙여야 풀린다.
+        if _is_billing_problem(payload, detail):
+            raise GeminiError(
+                f"Gemini 쿼터 미할당(429) — 키가 속한 프로젝트에 결제(pay-as-you-go)가 "
+                f"연결됐는지 확인하세요. Google AI Pro 구독만으로는 API 쿼터가 생기지 않습니다. {detail}",
+                exit_code=3)
         raise GeminiError(f"Gemini 쿼터 초과(429) — {detail}", exit_code=6, retryable=True,
                           is_limit=True, reset_epoch=_reset_epoch_from(resp, payload, now))
     if code in (401, 403):

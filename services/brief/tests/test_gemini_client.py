@@ -308,3 +308,46 @@ def test_api_key_file_rejects_placeholder_text(monkeypatch, tmp_path):
         gc.api_key()
     assert e.value.exit_code == 2
     assert "실제 키가 아닌" in str(e.value)
+
+
+# ---------------- 재시도로 안 풀리는 429 (결제 미연결) ----------------
+#
+# 2026-09-15 실측 응답. 결제 미연결 프로젝트의 키로 첫 호출부터 이것이 돌아온다 —
+# 한도로 넘기면 retry 잡이 헛돌다 조용히 포기하므로 사람이 고쳐야 하는 실패로 분류한다.
+
+_BILLING_429 = {
+    "error": {
+        "code": 429,
+        "message": ("You exceeded your current quota, please check your plan and billing "
+                    "details. For more information on this error, head to: "
+                    "https://ai.google.dev/gemini-api/docs/rate-limits."),
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [{"@type": "type.googleapis.com/google.rpc.Help",
+                     "links": [{"description": "Learn more", "url": "https://ai.google.dev/"}]}],
+    }
+}
+
+
+def test_billing_429_is_not_treated_as_retryable_limit():
+    with pytest.raises(gc.GeminiError) as e:
+        gc._raise_for_status(_Resp(429, _BILLING_429), NOW)
+    err = e.value
+    assert err.exit_code == 3          # 인증 실패와 같은 반열 — 사람이 고쳐야 풀린다
+    assert err.is_limit is False       # pending/retry 루프로 넘기지 않는다
+    assert err.retryable is False
+    assert "결제" in str(err)
+
+
+def test_rate_limit_429_with_retry_info_stays_a_limit():
+    """분·일 단위 rate limit 은 details 로 회복 시각을 알려준다 — 이건 그대로 한도로 재시도."""
+    payload = {"error": {"code": 429, "message": "Quota exceeded for quota metric ... billing",
+                         "details": [
+                             {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                              "violations": [{"quotaMetric": "generate_requests_per_model"}]},
+                             {"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                              "retryDelay": "31s"},
+                         ]}}
+    with pytest.raises(gc.GeminiError) as e:
+        gc._raise_for_status(_Resp(429, payload), NOW)
+    assert e.value.is_limit is True
+    assert e.value.reset_epoch == int(NOW.timestamp()) + 31

@@ -368,7 +368,7 @@ log "\"done dry_run=${DRY_RUN} generated_ok=${GEN_OK_COUNT} failed=${GEN_FAIL_CS
 # 고칠 대상이 공급자마다 달라 문구를 나눈다 — 무엇을 해야 하는지가 알림의 전부다.
 if [ -n "${AUTH_CAT_CSV}" ] && [ ${DRY_RUN} -eq 0 ]; then
   if [ "${AUTH_FAIL_PROVIDER}" = "gemini" ]; then
-    AUTH_REMEDY="Gemini API 키 인증 실패. secrets/portal_endpoints.env 의 GEMINI_API_KEY 를 확인하세요."
+    AUTH_REMEDY="Gemini API 호출 거부. 키 값 또는 키 프로젝트의 결제(쿼터) 설정을 확인하세요 — check_gemini.py 로 원인이 나옵니다."
   else
     AUTH_REMEDY="Claude 인증 만료. 터미널에서 claude /login 하면 10분 내 자동 재생성됩니다."
   fi
