@@ -188,17 +188,54 @@ grounding 근거 URL(`groundingMetadata`)과 대조하는 방법도 있지만, �
 
 | 변수 | 기본 | 뜻 |
 |------|------|-----|
-| `BRIEF_LINK_CHECK` | `warn` | `off` 검사 안 함 / `warn` 로그만 남기고 발행 / `strict` 죽은 링크면 exit 4 |
+| `BRIEF_LINK_CHECK` | `degrade` | `off` 검사 안 함 / `warn` 로그만 / `degrade` 죽은 링크만 벗기고 발행 / `strict` 죽은 링크면 exit 4 |
 | `BRIEF_LINK_CHECK_TIMEOUT` | `6` | URL 1개당 초 |
 | `BRIEF_LINK_CHECK_MAX` | `40` | 검사할 URL 수 상한 |
 | `BRIEF_LINK_CHECK_WORKERS` | `8` | 동시 요청 수 |
 
-기본을 `warn` 으로 둔 이유. 켜는 순간 `strict` 였다면 오판 한 건이 그날 브리핑을 통째로
-날린다. 며칠 `logs/`의 `link_warn` 빈도를 보고 사람이 `strict` 로 올리는 순서가 맞다.
-모르는 값(오타)은 `warn` 으로 되돌린다 — 오타가 검사를 조용히 끄면 안 된다.
+### 실측 빈도 (2026-09-15, claude 경로 발행분)
 
-로그 status. `link_warn`(발행 계속) / `link_fail`(strict 에서 발행 중단). 뒤쪽만 실패로
-집계돼 포털로 전송된다.
+| 카테고리 | 죽은 링크 / 전체 인용 |
+|---|---|
+| geopolitics | 0 / 9 |
+| antitrust | 0 / 4 |
+| realestate-pick5 | 0 / 5 |
+| realestate-pick5-blog | 0 / 5 |
+| anticorruption | 1 / 7 |
+| legal-ai | 3 / 7 |
+| naver | 3 / 5 |
+
+합계 7/42(17%). 같은 날 Gemini 로 생성한 naver 는 2/7 였으니 **공급자 문제가 아니다** —
+claude CLI 의 WebSearch 경로도 같은 비율로 URL 을 지어낸다. 카테고리별 편차가 큰데,
+법률신문·시사저널e 같은 전문지를 인용하는 쪽(legal-ai·naver)에 몰린다. 국제·종합지를
+인용하는 geopolitics 는 9개 중 0개였다.
+
+그래서 `strict` 는 현재 실용적이지 않다. 켜면 legal-ai·naver 가 매일 통째로 빈다.
+
+### degrade
+
+`degrade` 는 죽은 링크의 **링크 표기만 벗기고** 매체·제목·날짜 텍스트는 남긴다.
+
+```
+[법률신문 — 제목 (2026.9.15)](https://...404)   →   법률신문 — 제목 (2026.9.15)
+```
+
+출처를 아예 지우면 근거 없는 주장이 되고, 링크를 두면 열리지 않는 약속이 된다. 텍스트로
+남기면 독자가 직접 검색할 수 있다. 마크다운 링크가 아닌 맨 URL 은 손대지 않는다 — 문장
+구조를 모르는 채 지우면 문맥이 깨지므로 로그의 `dead` 목록으로 남겨 사람이 판단한다.
+
+기본이 `degrade` 인 이유. 위 실측대로 열리지 않는 출처가 이미 매일 구독자에게 나가고
+있었다. `warn`(로그만)이 기본이면 그 상태가 그대로 유지된다. `strict` 는 그 비율에서
+legal-ai·naver 를 매일 비우므로 쓰지 않는다.
+
+env 가 아니라 코드 기본값인 이유. content-worker 가 `generic_brief.py` 를 부를 때는 brief
+쪽 env 가 안 실려서, env 로 켜면 온디맨드 경로만 예전 동작으로 갈린다.
+모르는 값(오타)은 기본값으로 되돌린다 — 오타가 검사를 약화시키면 안 된다.
+
+되돌리려면 `BRIEF_LINK_CHECK=warn`(로그만) 또는 `off`(검사 안 함).
+
+로그 status. `link_warn`(로그만) / `link_degraded`(링크 벗김, `stripped` 개수 포함) /
+`link_fail`(strict 에서 발행 중단). `link_fail` 만 실패로 집계돼 포털로 전송된다.
 
 ## 5. 일자별 로그
 

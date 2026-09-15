@@ -125,14 +125,70 @@ def test_check_url_retries_with_get_when_head_rejected(monkeypatch):
 # ---------------- 모드 ----------------
 
 @pytest.mark.parametrize("raw,expected", [
-    (None, "warn"), ("", "warn"), ("warn", "warn"),
+    (None, "degrade"), ("", "degrade"), ("warn", "warn"),
     ("off", "off"), ("OFF", "off"), (" strict ", "strict"),
-    ("nonsense", "warn"),
+    ("nonsense", "degrade"),
 ])
 def test_mode_parsing(monkeypatch, raw, expected):
-    """오타가 검사를 조용히 끄면 안 된다 — 모르는 값은 warn 으로 돌린다."""
+    """오타가 검사를 약화시키면 안 된다 — 모르는 값은 기본값(degrade)으로 돌린다."""
     if raw is None:
         monkeypatch.delenv("BRIEF_LINK_CHECK", raising=False)
     else:
         monkeypatch.setenv("BRIEF_LINK_CHECK", raw)
     assert lc.mode() == expected
+
+
+# ---------------- degrade: 링크만 벗기고 출처 텍스트는 남긴다 ----------------
+#
+# 2026-09-15 실측에서 claude 경로도 인용 42개 중 7개가 404 였다(카테고리 7개 중 3개).
+# strict 면 그 카테고리가 매일 통째로 빈다 — 그래서 링크만 벗기는 중간 단계가 필요하다.
+
+_DEAD = "https://www.lawtimes.co.kr/news/articleView.html?idxno=226414"
+_LIVE = "https://www.donga.com/news/article/all/1/2"
+
+
+def test_strip_dead_links_keeps_citation_text():
+    body = f"- [법률신문 — 제목 (2026.9.15)]({_DEAD})\n"
+    out, n = lc.strip_dead_links(body, [_DEAD])
+    assert out == "- 법률신문 — 제목 (2026.9.15)\n"
+    assert n == 1
+
+
+def test_strip_dead_links_leaves_live_links_alone():
+    body = f"- [동아 — 제목]({_LIVE})\n- [법률신문 — 제목]({_DEAD})\n"
+    out, n = lc.strip_dead_links(body, [_DEAD])
+    assert f"]({_LIVE})" in out          # 살아 있는 링크는 그대로 클릭된다
+    assert _DEAD not in out
+    assert n == 1
+
+
+def test_strip_dead_links_handles_repeated_occurrences():
+    body = f"[a]({_DEAD}) 중간 [b]({_DEAD})"
+    out, n = lc.strip_dead_links(body, [_DEAD])
+    assert out == "a 중간 b"
+    assert n == 2
+
+
+def test_strip_dead_links_tolerates_title_and_spaces_in_link():
+    body = f'[매체 — 제목]( {_DEAD} "제목")'
+    out, n = lc.strip_dead_links(body, [_DEAD])
+    assert out == "매체 — 제목"
+    assert n == 1
+
+
+def test_strip_dead_links_leaves_bare_url_untouched():
+    """맨 URL 은 문장 구조를 모르는 채 지우면 문맥이 깨진다 — 로그로만 남긴다."""
+    body = f"자세히는 {_DEAD} 참고"
+    out, n = lc.strip_dead_links(body, [_DEAD])
+    assert out == body
+    assert n == 0
+
+
+def test_strip_dead_links_noop_when_nothing_dead():
+    body = f"- [동아 — 제목]({_LIVE})\n"
+    assert lc.strip_dead_links(body, []) == (body, 0)
+
+
+def test_degrade_is_a_valid_mode(monkeypatch):
+    monkeypatch.setenv("BRIEF_LINK_CHECK", "degrade")
+    assert lc.mode() == "degrade"

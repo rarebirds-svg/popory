@@ -246,6 +246,9 @@ def main() -> None:
         if dead:
             detail = ", ".join(f"{u} ({c})" for u, c in dead[:5])
             print(f"warning: 열리지 않는 인용 링크 {len(dead)}건 — {detail}", file=sys.stderr)
+            if lc_mode == "degrade":
+                body, stripped = link_check.strip_dead_links(body, [u for u, _ in dead])
+                print(f"--- 죽은 링크 {stripped}건을 텍스트 인용으로 강등 ---", file=sys.stderr)
             if lc_mode == "strict":
                 sys.exit(4)
 

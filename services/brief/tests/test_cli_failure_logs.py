@@ -749,3 +749,23 @@ def test_generate_clean_links_leave_no_warning(monkeypatch):
 
     statuses = [c[1]["status"] for c in rec.calls]
     assert "link_fail" not in statuses and "link_warn" not in statuses
+
+
+def test_generate_degrade_mode_strips_links_and_publishes(monkeypatch):
+    """degrade — 죽은 링크만 벗기고 발행은 계속한다. 본문 파일에 그 URL 이 남지 않아야 한다."""
+    rec = _patch(monkeypatch, generate_brief)
+    monkeypatch.setenv("BRIEF_LINK_CHECK", "degrade")
+    tagged = ('<body_markdown>본문 [법률신문 — 제목](https://x.test/gone)</body_markdown>'
+              '<meta_json>{"title": "제목", "published_at": 1}</meta_json>')
+    _claude_returns(monkeypatch, tagged)
+    _dead(monkeypatch, [("https://x.test/gone", 404)])
+    _link_argv(monkeypatch)
+
+    generate_brief.main()
+
+    r = next(c[1] for c in rec.calls if c[1]["status"] == "link_degraded")
+    assert r["stripped"] == 1
+    assert r["dead_count"] == 1
+    written = Path("/tmp/brief_realestate_2026-01-02.md").read_text(encoding="utf-8")
+    assert "https://x.test/gone" not in written
+    assert "법률신문 — 제목" in written      # 출처 텍스트는 남는다
