@@ -383,3 +383,36 @@ def test_retired_model_404_carries_googles_migration_hint():
     assert e.value.exit_code == 4
     assert e.value.retryable is False
     assert "gemini-3.6-flash" in str(e.value)
+
+
+# ---------------- 키 형식: '=' 가 든 정상 키를 거절하면 안 된다 ----------------
+#
+# 2026-09 현재 구글은 standard key(AIza…, 39자)에서 auth key(AQ. 접두사, 더 긴 base64 계열)로
+# 옮기고 있다. base64 는 '=' 로 패딩되므로 "'=' 가 있으면 형식 오류" 규칙은 정상 키를 막는다.
+
+@pytest.mark.parametrize("key", [
+    "AQ.Ab8EXAMPLEauthkey_not_real-0123456789abcdefgh",       # auth key 모양
+    "AQ.Ab8EXAMPLEauthkey_not_real-0123456789abcdef==",        # base64 패딩까지
+    "AIzaSyEXAMPLEstandardkey_not_real-01234",                 # 구세대 standard key 모양
+])
+def test_api_key_file_accepts_real_key_shapes(monkeypatch, tmp_path, key):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    f = tmp_path / "gemini_api_key"
+    f.write_text(key + "\n", encoding="utf-8")
+    monkeypatch.setenv("BRIEF_GEMINI_KEY_FILE", str(f))
+    assert gc.api_key() == key
+
+
+@pytest.mark.parametrize("content", [
+    "GEMINI_API_KEY=AQ.Ab8EXAMPLE",
+    "gemini_api_key=AQ.Ab8EXAMPLE",
+])
+def test_api_key_file_still_rejects_shell_assignment(monkeypatch, tmp_path, content):
+    """env 대입문 모양은 그대로 거절한다 — 이 실수가 실제로 나왔다."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    f = tmp_path / "gemini_api_key"
+    f.write_text(content + "\n", encoding="utf-8")
+    monkeypatch.setenv("BRIEF_GEMINI_KEY_FILE", str(f))
+    with pytest.raises(gc.GeminiError) as e:
+        gc.api_key()
+    assert e.value.exit_code == 2
