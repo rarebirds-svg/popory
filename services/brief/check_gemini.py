@@ -24,27 +24,36 @@ def main() -> int:
     try:
         key = gemini_client.api_key()
     except gemini_client.GeminiError as e:
-        print(f"[1/2] 키 실패 — {e}")
+        print(f"[1/3] 키 실패 — {e}")
         print("      env GEMINI_API_KEY 또는 secrets/gemini_api_key (키 값만 한 줄) 를 확인하세요.")
         return e.exit_code
-    print(f"[1/2] 키 읽힘 — {key[:6]}...{key[-4:]} (길이 {len(key)})")
+    print(f"[1/3] 키 읽힘 — {key[:6]}...{key[-4:]} (길이 {len(key)})")
 
     try:
-        out = gemini_client.generate(
+        out, sources = gemini_client.generate_with_sources(
             system_prompt="한국어로 한 줄만 답한다.",
             user_msg="오늘 한국 부동산 관련 뉴스가 있으면 기사 제목 하나만 적어라.",
             model=args.model,
             timeout_seconds=120,
         )
     except gemini_client.GeminiError as e:
-        print(f"[2/2] 호출 실패 — {e}")
+        print(f"[2/3] 호출 실패 — {e}")
         print(f"      모델 id 를 지적하면 --model 로 바꿔 보세요 (지금: {args.model}).")
         print(f"      검색 도구 이름을 지적하면 BRIEF_GEMINI_SEARCH_TOOL 로 교정할 수 있습니다 "
               f"(지금: {gemini_client.SEARCH_TOOL}).")
         return e.exit_code
 
-    print(f"[2/2] 호출·검색 정상 — 모델 {args.model}, 도구 {gemini_client.SEARCH_TOOL}, 응답 {len(out)}자")
+    print(f"[2/3] 호출·검색 정상 — 모델 {args.model}, 도구 {gemini_client.SEARCH_TOOL}, 응답 {len(out)}자")
     print(f"      응답 앞부분: {out.strip()[:120]}")
+
+    # 근거 URL 은 본문에 적힌 출처와 별개다 — 본문 URL 은 모델이 만든 문자열이라 404 가 섞인다.
+    # 이 목록이 인용 검증의 기준이 되므로, 실측 형태를 볼 수 있게 그대로 출력한다.
+    print(f"[3/3] grounding 근거 URL {len(sources)}개")
+    for i, uri in enumerate(sources[:5], start=1):
+        print(f"      {i}) {uri[:140]}")
+    if not sources:
+        print("      (없음 — 이 응답은 검색 근거 없이 생성됐다는 뜻이다)")
+
     print("모두 정상입니다. 카테고리 시범을 돌려 보세요:")
     print(f"      .venv/bin/python generate_brief.py --category naver --model {args.model}")
     return 0

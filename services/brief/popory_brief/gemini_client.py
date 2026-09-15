@@ -168,8 +168,41 @@ def _extract_text(payload: dict) -> str:
     return text
 
 
+def grounding_sources(payload: dict) -> list[str]:
+    """모델이 실제로 읽은 근거 URL 목록. 없으면 빈 리스트.
+
+    인용 검증의 기준이 될 값이다 — 본문에 적힌 출처 URL 은 모델이 문장을 쓰면서 만든
+    문자열이라 존재하지 않는 링크가 섞일 수 있다(2026-09-15 실측: 7개 중 2개가 404).
+    구글이 주는 uri 는 보통 grounding 리다이렉트 주소여서 기사 URL 과 문자열이 다르다 —
+    비교 규칙을 설계하기 전에 실측 형태를 먼저 봐야 하므로 지금은 꺼내 보이기만 한다."""
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        return []
+    meta = (candidates[0] or {}).get("groundingMetadata") or {}
+    out: list[str] = []
+    for chunk in meta.get("groundingChunks") or []:
+        uri = ((chunk or {}).get("web") or {}).get("uri") if isinstance(chunk, dict) else None
+        if isinstance(uri, str) and uri:
+            out.append(uri)
+    return out
+
+
+def generate_with_sources(*, system_prompt: str, user_msg: str, model: str,
+                          timeout_seconds: int) -> tuple[str, list[str]]:
+    """본문 텍스트와 grounding 근거 URL 을 함께 돌려준다. 인용 검증이 붙을 자리다."""
+    payload = _post(system_prompt=system_prompt, user_msg=user_msg,
+                    model=model, timeout_seconds=timeout_seconds)
+    return _extract_text(payload), grounding_sources(payload)
+
+
 def generate(*, system_prompt: str, user_msg: str, model: str, timeout_seconds: int) -> str:
     """Gemini 로 브리핑 본문 텍스트 1회 생성. 실패는 GeminiError 로 던진다."""
+    return generate_with_sources(system_prompt=system_prompt, user_msg=user_msg,
+                                 model=model, timeout_seconds=timeout_seconds)[0]
+
+
+def _post(*, system_prompt: str, user_msg: str, model: str, timeout_seconds: int) -> dict:
+    """HTTP 왕복 1회. 상태 환원까지만 하고 본문 해석은 호출부에 맡긴다."""
     key = api_key()
     body = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
@@ -192,10 +225,9 @@ def generate(*, system_prompt: str, user_msg: str, model: str, timeout_seconds: 
         raise GeminiError(f"Gemini 연결 실패 — {type(e).__name__}", exit_code=5, retryable=True)
     _raise_for_status(resp, datetime.datetime.now(KST))
     try:
-        payload = resp.json()
+        return resp.json()
     except ValueError:
         raise GeminiError("Gemini 응답 JSON 파싱 실패", exit_code=5, retryable=True)
-    return _extract_text(payload)
 
 
 def generate_with_retry(*, system_prompt: str, user_msg: str, model: str, timeout_seconds: int,
