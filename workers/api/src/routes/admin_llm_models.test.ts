@@ -149,4 +149,43 @@ describe("admin llm-models", () => {
       { features: { key: string; model: string }[] };
     expect(body.features.find((f) => f.key === "blog")!.model).toBe(DEFAULT_MODEL);
   });
+  it("모델·서비스에 공급자가 실린다", async () => {
+    const c = await cookie("admin");
+    const body = await (await SELF.fetch("https://example.com/api/admin/llm-models", { headers: { cookie: c } })).json() as
+      { models: { id: string; provider: string }[]; services: { key: string; providers: string[] }[] };
+    // UI 가 서비스별로 선택지를 걸러낼 수 있어야 한다 — 못 부르는 모델을 고르게 두면 그날 잡이 죽는다.
+    expect(body.models.every((m) => m.provider === "claude" || m.provider === "gemini")).toBe(true);
+    expect(body.models.find((m) => m.id === "gemini-3.8-flash")!.provider).toBe("gemini");
+    expect(body.services.find((s) => s.key === "brief")!.providers).toContain("gemini");
+    expect(body.services.find((s) => s.key === "content")!.providers).not.toContain("gemini");
+  });
+
+  it("브리핑 이슈 생성에는 Gemini 모델을 저장할 수 있다", async () => {
+    const c = await cookie("admin");
+    expect((await save({ brief_issue: "gemini-3.8-flash" }, c)).status).toBe(204);
+    const token = await workerToken("brief");
+    const res = await SELF.fetch("https://example.com/api/brief/llm-models", { headers: { authorization: `Bearer ${token}` } });
+    const body = await res.json() as { models: Record<string, string> };
+    // 워커는 이 값을 그대로 공급자 분기에 쓴다 (services/brief/popory_brief/gemini_client.is_gemini_model).
+    expect(body.models.brief_issue).toBe("gemini-3.8-flash");
+  });
+
+  it("컨텐츠 기능에 Gemini 모델은 400", async () => {
+    // 컨텐츠 워커는 claude CLI 로만 호출한다. 저장이 통과하면 그날 컨텐츠 생성이 전멸한다.
+    const c = await cookie("admin");
+    expect((await save({ blog: "gemini-3.8-flash" }, c)).status).toBe(400);
+    const row = await env.DB.prepare("SELECT feature FROM llm_model_settings WHERE feature = 'blog'").first();
+    expect(row).toBeNull();
+  });
+
+  it("허용 안 되는 공급자 행이 DB 에 남아 있어도 워커로 새지 않는다", async () => {
+    // 공급자 허용 범위가 줄어든 뒤 남은 행을 워커가 받으면 못 부르는 모델로 돌게 된다.
+    await env.DB.prepare(
+      "INSERT INTO llm_model_settings (feature, model, updated_at, updated_by) VALUES ('blog', 'gemini-3-pro', 1, 'x')"
+    ).run();
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/llm-models", { headers: { authorization: `Bearer ${token}` } });
+    const body = await res.json() as { models: Record<string, string> };
+    expect(body.models.blog).toBe(DEFAULT_MODEL);
+  });
 });

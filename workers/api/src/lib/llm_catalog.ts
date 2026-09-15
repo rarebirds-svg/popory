@@ -10,10 +10,17 @@ export const DEFAULT_MODEL = "claude-sonnet-5";
 
 export type ServiceKey = "content" | "brief";
 
+// 모델 공급자. 호출 경로가 아예 다르다 — claude 는 로컬 claude CLI, gemini 는 Gemini API 키.
+// 그래서 어떤 기능에 어떤 공급자를 붙일 수 있는지는 서비스 단위로 제한한다(아래 SERVICES.providers).
+export type Provider = "claude" | "gemini";
+
 // 어드민 화면에서 기능을 묶어 보여줄 순서·이름. 이 배열 순서가 화면 순서다.
-export const SERVICES: { key: ServiceKey; label: string; description: string }[] = [
-  { key: "brief", label: "뉴스 브리핑", description: "카테고리·커스텀 주제 일일 이슈" },
-  { key: "content", label: "컨텐츠 생성", description: "포포리 책방 블로그·영상·인스타" },
+// providers 는 그 서비스의 워커가 실제로 호출할 수 있는 공급자다. 목록에 없는 공급자의 모델은
+// 어드민 화면에도 안 뜨고 저장도 400 으로 막는다 — 워커가 못 부르는 모델이 저장되면 그날 잡이 죽는다.
+export const SERVICES: { key: ServiceKey; label: string; description: string; providers: Provider[] }[] = [
+  { key: "brief", label: "뉴스 브리핑", description: "카테고리·커스텀 주제 일일 이슈", providers: ["claude", "gemini"] },
+  // 컨텐츠 워커는 claude CLI 전용이다. Gemini 를 붙이려면 services/content 쪽 호출부가 먼저 필요하다.
+  { key: "content", label: "컨텐츠 생성", description: "포포리 책방 블로그·영상·인스타", providers: ["claude"] },
 ];
 
 export type FeatureKey =
@@ -41,7 +48,7 @@ export const FEATURES: {
   { key: "publish_browser", service: "content", label: "브라우저 비공개 발행", description: "aside 브라우저 스킬로 블로그·커뮤니티에 비공개 등록" },
   // 브리핑은 도입 때부터 Sonnet 4.6 으로 돌아왔다. 어드민 설정이 붙었다고 모델이
   // 저절로 바뀌면 안 되니 기본값을 그대로 유지한다.
-  { key: "brief_issue", service: "brief", label: "이슈 생성", defaultModel: "claude-sonnet-4-6", description: "WebSearch 로 이슈를 모아 브리핑 본문 작성. 카테고리·커스텀 주제 공통" },
+  { key: "brief_issue", service: "brief", label: "이슈 생성", defaultModel: "claude-sonnet-4-6", description: "웹 검색으로 이슈를 모아 브리핑 본문 작성. 카테고리·커스텀 주제 공통" },
 ];
 
 export function featuresOf(service: ServiceKey) {
@@ -53,16 +60,36 @@ export function defaultModelOf(feature: string): string {
   return FEATURES.find((f) => f.key === feature)?.defaultModel ?? DEFAULT_MODEL;
 }
 
-// tier 는 UI 정렬·설명용이다. 실제 호출은 claude CLI 의 --model 에 id 를 그대로 넘긴다.
-export const MODELS: { id: string; label: string; note: string }[] = [
-  { id: "claude-opus-5", label: "Opus 5", note: "가장 강한 추론. 호출당 비용·시간이 가장 크다" },
-  { id: "claude-opus-4-8", label: "Opus 4.8", note: "Opus 계열 직전 세대" },
-  { id: "claude-opus-4-7", label: "Opus 4.7", note: "Opus 계열" },
-  { id: "claude-opus-4-6", label: "Opus 4.6", note: "Opus 계열 구세대" },
-  { id: "claude-sonnet-5", label: "Sonnet 5", note: "현재 기본값. Sonnet 최신" },
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", note: "직전 기본값. 품질·속도 균형" },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5", note: "가장 빠르고 가볍다. 이진 판정(검수)에 적합" },
+// id 는 공급자에 그대로 넘어간다 — claude 는 claude CLI 의 --model, gemini 는 API 경로의 모델명.
+// 그래서 오탈자 하나가 그날 잡을 죽인다. 새 모델을 넣을 때 공급자 문서의 정확한 id 를 확인한다.
+export const MODELS: { id: string; label: string; note: string; provider: Provider }[] = [
+  { id: "claude-opus-5", label: "Opus 5", note: "가장 강한 추론. 호출당 비용·시간이 가장 크다", provider: "claude" },
+  { id: "claude-opus-4-8", label: "Opus 4.8", note: "Opus 계열 직전 세대", provider: "claude" },
+  { id: "claude-opus-4-7", label: "Opus 4.7", note: "Opus 계열", provider: "claude" },
+  { id: "claude-opus-4-6", label: "Opus 4.6", note: "Opus 계열 구세대", provider: "claude" },
+  { id: "claude-sonnet-5", label: "Sonnet 5", note: "현재 기본값. Sonnet 최신", provider: "claude" },
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", note: "직전 기본값. 품질·속도 균형", provider: "claude" },
+  { id: "claude-haiku-4-5", label: "Haiku 4.5", note: "가장 빠르고 가볍다. 이진 판정(검수)에 적합", provider: "claude" },
+  // Gemini 는 구독(Claude Max)이 아니라 GEMINI_API_KEY 로 과금된다. 웹 검색은 Google Search grounding.
+  { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash", note: "Gemini 최신 Flash. 속도·비용 유리 — Gemini 전환 시 먼저 시범할 모델", provider: "gemini" },
+  { id: "gemini-3-pro", label: "Gemini 3 Pro", note: "Gemini Pro 안정판. Flash 품질이 부족할 때", provider: "gemini" },
 ];
 
 export const MODEL_IDS = new Set(MODELS.map((m) => m.id));
 export const FEATURE_KEYS = new Set(FEATURES.map((f) => f.key));
+
+export function providerOf(modelId: string): Provider | undefined {
+  return MODELS.find((m) => m.id === modelId)?.provider;
+}
+
+export function providersOf(service: ServiceKey): Provider[] {
+  return SERVICES.find((s) => s.key === service)?.providers ?? [];
+}
+
+// 그 기능에 이 모델을 붙일 수 있는가. 카탈로그에 있는 id 여도 서비스가 못 부르는 공급자면 거절한다.
+export function isModelAllowed(feature: string, modelId: string): boolean {
+  const f = FEATURES.find((x) => x.key === feature);
+  const provider = providerOf(modelId);
+  if (!f || !provider) return false;
+  return providersOf(f.service).includes(provider);
+}

@@ -1,4 +1,4 @@
-# claude CLI(비대화형, Claude Max 구독)로 카테고리별 브리핑 본문·메타 생성. Anthropic API key 불필요.
+# 카테고리별 브리핑 본문·메타 생성. 공급자는 모델 id 로 갈린다 — claude CLI(Max 구독) 또는 Gemini API.
 """
 사용법.
     python generate_brief.py --category {slug} [--date YYYY-MM-DD] [--model claude-sonnet-4-6]
@@ -25,6 +25,7 @@ from pathlib import Path
 from popory_brief.categories import load_category
 from popory_brief.log import append_log, safe_error, KST
 from popory_brief import limit_detect
+from popory_brief import gemini_client
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_rules import seo_rules
 from popory_brief.seo_title import normalize_title
@@ -38,6 +39,100 @@ LLM_FEATURE = "brief_issue"
 TIMEOUT_SECONDS = 1800
 
 
+def _fail(status: str, category: str, date_str: str, error: str, exit_code: int) -> None:
+    """실패를 한 줄 로그로 남기고 규약 exit code 로 끝낸다 (README §4)."""
+    append_log(LOGS_DIR, {"cli": "generate_brief", "status": status,
+                          "category": category, "date": date_str, "error": error[:200]})
+    sys.exit(exit_code)
+
+
+def _run_claude(*, model: str, system_text: str, user_msg: str,
+                category: str, date_str: str, backoff: list[int]) -> str:
+    """claude CLI(비대화형)로 본문 텍스트를 받아온다. 검색은 CLI 내장 WebSearch 가 한다."""
+    sys_prompt_path = Path(f"/tmp/brief_system_{category}_{date_str}.txt")
+    sys_prompt_path.write_text(system_text, encoding="utf-8")
+    cmd = [
+        CLAUDE_BIN,
+        "--print",
+        "--model", model,
+        "--allowed-tools", "WebSearch", "WebFetch",
+        "--system-prompt-file", str(sys_prompt_path),
+        "--output-format", "text",
+    ]
+
+    # Claude Max 사용량 한도(5시간 윈도우)는 stdout 에 메시지를 남기고 exit 1 로 끝난다.
+    attempt = 0
+    try:
+        while True:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    input=user_msg,
+                    capture_output=True,
+                    text=True,
+                    timeout=TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
+                _fail("claude_fail", category, date_str,
+                      f"claude CLI timeout after {TIMEOUT_SECONDS}s", 5)
+
+            if result.returncode == 0:
+                return result.stdout
+
+            combined = result.stdout + result.stderr
+            is_limit = limit_detect.is_limit_message(combined)
+            is_overload = limit_detect.is_overload_message(combined)
+            print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit}, overload={is_overload})", file=sys.stderr)
+            print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
+            print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
+
+            # 한도(5시간 윈도우)와 일시 과부하(529) 모두 백오프 재시도로 흡수한다.
+            if (is_limit or is_overload) and attempt < len(backoff):
+                wait = backoff[attempt]
+                reason = "usage limit" if is_limit else "API 과부하(529)"
+                print(f"--- {reason} 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
+                time.sleep(wait)
+                attempt += 1
+                continue
+            if is_limit:
+                # 백오프로 못 흡수한 장시간 한도. reset epoch 를 stdout 에 알리고 exit 6.
+                reset_epoch = limit_detect.reset_epoch_or_fallback(combined, datetime.datetime.now(KST))
+                print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+                append_log(LOGS_DIR, {"cli": "generate_brief", "status": "limit_fail",
+                                      "category": category, "date": date_str,
+                                      "reset_epoch": reset_epoch,
+                                      "error": "claude 사용량 한도 — retry 잡 대기"})
+                sys.exit(6)
+            # claude CLI 원본 출력은 남기지 않는다 (인증 메시지가 섞일 수 있다). 요약만 기록.
+            _fail("claude_fail", category, date_str,
+                  f"claude CLI exit {result.returncode} (limit={is_limit}, overload={is_overload})", 5)
+    finally:
+        sys_prompt_path.unlink(missing_ok=True)
+
+
+def _run_gemini(*, model: str, system_text: str, user_msg: str,
+                category: str, date_str: str, backoff: list[int]) -> str:
+    """Gemini API 로 본문 텍스트를 받아온다. 검색은 서버측 Google Search grounding 이 한다."""
+    try:
+        return gemini_client.generate_with_retry(
+            system_prompt=system_text, user_msg=user_msg,
+            model=model, timeout_seconds=TIMEOUT_SECONDS, backoff=backoff)
+    except gemini_client.GeminiError as e:
+        if e.is_limit:
+            # 쿼터는 claude 한도와 같은 규약으로 넘긴다 — retry 잡이 그대로 복구한다.
+            reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())
+            print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+            append_log(LOGS_DIR, {"cli": "generate_brief", "status": "limit_fail",
+                                  "category": category, "date": date_str,
+                                  "reset_epoch": reset_epoch, "error": str(e)[:200]})
+            sys.exit(6)
+        # 인증 실패는 사람이 키를 고쳐야 풀린다 — run_daily.sh 가 즉시 알림을 걸도록 마커를 남긴다.
+        if e.exit_code == 3:
+            print("__BRIEF_AUTH_FAIL__=gemini")
+        _fail("gemini_fail", category, date_str, str(e), e.exit_code)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--category", required=True, help="categories/{slug}/SKILL.md 의 slug")
@@ -46,7 +141,13 @@ def main() -> None:
                    help="생략 시 어드민(/admin/llm-models)의 brief_issue 설정, 그것도 없으면 기본 모델")
     args = p.parse_args()
 
-    if not Path(CLAUDE_BIN).exists():
+    # 명시한 --model > 어드민 설정 > 코드 기본값. 조회 실패는 기본값으로 흘린다.
+    # 공급자는 모델 id 로 갈린다 — Gemini 는 API 키로, claude 는 로컬 CLI 로 돈다.
+    model = args.model or resolve_model(LLM_FEATURE, DEFAULT_MODEL)
+    use_gemini = gemini_client.is_gemini_model(model)
+
+    # claude 경로에서만 CLI 존재를 따진다. Gemini 경로는 CLI 가 없는 머신에서도 돌아야 한다.
+    if not use_gemini and not Path(CLAUDE_BIN).exists():
         print(f"error: claude CLI not found at {CLAUDE_BIN}", file=sys.stderr)
         append_log(LOGS_DIR, {"cli": "generate_brief", "status": "init_fail",
                               "category": args.category,
@@ -69,90 +170,27 @@ def main() -> None:
     now_str = date_obj.strftime("%Y-%m-%d %H:%M")
     published_at = int(date_obj.timestamp())
 
-    sys_prompt_path = Path(f"/tmp/brief_system_{category.slug}_{date_str}.txt")
     # 카테고리 매뉴얼 + 공통 SEO 규칙(제목 형식·소제목·키워드 배치·표). 규칙은 한 곳(seo_rules.py)에만 둔다.
-    sys_prompt_path.write_text(category.system_prompt + seo_rules(category, date_obj.date()), encoding="utf-8")
+    system_text = category.system_prompt + seo_rules(category, date_obj.date())
 
+    # 검색 지시는 공급자마다 다르게 적는다. claude 는 WebSearch 라는 도구를 실제로 들고 있고,
+    # Gemini 는 도구 이름 대신 서버측 Google Search grounding 이 붙는다.
+    search_hint = "웹 검색(Google Search)으로" if use_gemini else "WebSearch 도구로"
     user_msg = (
         f"지금은 {now_str} (KST)입니다. 시스템 매뉴얼의 절차를 따라 오늘({date_str})의 {category.name} 이슈 브리핑을 작성하세요. "
-        f"WebSearch 도구로 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
+        f"{search_hint} 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
         f"마지막 응답에 <body_markdown>...</body_markdown> 과 <meta_json>...</meta_json> 두 태그를 정확히 포함하세요. "
         f"meta_json의 published_at은 {published_at}을 그대로 사용하세요."
     )
 
-    # 명시한 --model > 어드민 설정 > 코드 기본값. 조회 실패는 기본값으로 흘린다.
-    model = args.model or resolve_model(LLM_FEATURE, DEFAULT_MODEL)
+    # 한도·과부하는 백오프 재시도로 흡수하고, 흡수 못 한 장시간 한도는 exit 6 + reset epoch 로
+    # 알려 retry 잡이 복구한다. BRIEF_BACKOFF_SECONDS(csv)로 오버라이드(E2E 테스트는 "0").
+    # 모듈 로드 시점이 아니라 여기서 읽는다 — 테스트가 env 를 나중에 주입한다.
+    backoff = [int(s) for s in os.environ.get("BRIEF_BACKOFF_SECONDS", "60,180").split(",") if s.strip()]
 
-    cmd = [
-        CLAUDE_BIN,
-        "--print",
-        "--model", model,
-        "--allowed-tools", "WebSearch", "WebFetch",
-        "--system-prompt-file", str(sys_prompt_path),
-        "--output-format", "text",
-    ]
-
-    # Claude Max 사용량 한도(5시간 윈도우)는 stdout에 메시지를 남기고 exit 1로 끝난다.
-    # 일시적 throttle는 백오프 재시도로 흡수하고, 그 외 에러는 즉시 실패한다.
-    # 백오프로도 못 흡수하는 장시간 한도는 exit 6 + reset epoch로 알려 retry 잡이 복구한다.
-    # BRIEF_BACKOFF_SECONDS(csv)로 오버라이드 가능(E2E 테스트는 "0"). 1차 실패 후 대기 초. 길이 = 추가 재시도 횟수.
-    BACKOFF_SECONDS = [int(s) for s in os.environ.get("BRIEF_BACKOFF_SECONDS", "60,180").split(",") if s.strip()]
-
-    attempt = 0
-    try:
-        while True:
-            try:
-                result = subprocess.run(
-                    cmd,
-                    input=user_msg,
-                    capture_output=True,
-                    text=True,
-                    timeout=TIMEOUT_SECONDS,
-                )
-            except subprocess.TimeoutExpired:
-                print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
-                append_log(LOGS_DIR, {"cli": "generate_brief", "status": "claude_fail",
-                                      "category": category.slug, "date": date_str,
-                                      "error": f"claude CLI timeout after {TIMEOUT_SECONDS}s"})
-                sys.exit(5)
-
-            if result.returncode == 0:
-                break
-
-            combined = result.stdout + result.stderr
-            is_limit = limit_detect.is_limit_message(combined)
-            is_overload = limit_detect.is_overload_message(combined)
-            print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit}, overload={is_overload})", file=sys.stderr)
-            print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
-            print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
-
-            # 한도(5시간 윈도우)와 일시 과부하(529) 모두 백오프 재시도로 흡수한다.
-            if (is_limit or is_overload) and attempt < len(BACKOFF_SECONDS):
-                wait = BACKOFF_SECONDS[attempt]
-                reason = "usage limit" if is_limit else "API 과부하(529)"
-                print(f"--- {reason} 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
-                time.sleep(wait)
-                attempt += 1
-                continue
-            if is_limit:
-                # 백오프로 못 흡수한 장시간 한도. reset epoch를 stdout에 알리고 exit 6.
-                reset_epoch = limit_detect.reset_epoch_or_fallback(combined, datetime.datetime.now(KST))
-                print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
-                append_log(LOGS_DIR, {"cli": "generate_brief", "status": "limit_fail",
-                                      "category": category.slug, "date": date_str,
-                                      "reset_epoch": reset_epoch,
-                                      "error": "claude 사용량 한도 — retry 잡 대기"})
-                sys.exit(6)
-            # claude CLI 원본 출력은 남기지 않는다 (인증 메시지가 섞일 수 있다). 요약만 기록.
-            append_log(LOGS_DIR, {"cli": "generate_brief", "status": "claude_fail",
-                                  "category": category.slug, "date": date_str,
-                                  "error": f"claude CLI exit {result.returncode} "
-                                           f"(limit={is_limit}, overload={is_overload})"[:200]})
-            sys.exit(5)
-    finally:
-        sys_prompt_path.unlink(missing_ok=True)
-
-    final_text = result.stdout
+    runner = _run_gemini if use_gemini else _run_claude
+    final_text = runner(model=model, system_text=system_text, user_msg=user_msg,
+                        category=category.slug, date_str=date_str, backoff=backoff)
 
     body_m = re.search(r"<body_markdown>(.*?)</body_markdown>", final_text, re.DOTALL)
     meta_m = re.search(r"<meta_json>\s*(\{.*?\})\s*</meta_json>", final_text, re.DOTALL)

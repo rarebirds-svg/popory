@@ -91,7 +91,8 @@ GEN_FAIL_SLUGS=""
 GEN_OK_COUNT=0
 LIMIT_FAIL_SLUGS=""     # 한도(exit 6)로 실패한 카테고리 — 자동 재시도 대상
 LIMIT_FAIL_CUSTOM=""    # 한도로 실패한 커스텀 주제 id
-AUTH_FAIL_SLUGS=""      # claude OAuth 만료로 실패한 카테고리 — /login 후 자동 재시도 대상
+AUTH_FAIL_SLUGS=""      # LLM 인증 실패로 막힌 카테고리 — 사람이 고친 뒤 자동 재시도 대상
+AUTH_FAIL_PROVIDER=""   # 무엇을 고쳐야 하는지(claude=/login, gemini=API 키) — 알림 문구를 가른다
 LIMIT_RESET_MAX=0       # 수집한 reset epoch 중 최대값
 
 # 카테고리 목록을 배열로 적재
@@ -230,6 +231,12 @@ while IFS=' ' read -r SLUG MODE; do
   AUTH_FAIL=0
   if [ -f "${OUT_FILE}" ] && grep -qE 'OAuth session expired|Failed to authenticate|Not logged in' "${OUT_FILE}"; then
     AUTH_FAIL=1
+    [ -z "${AUTH_FAIL_PROVIDER}" ] && AUTH_FAIL_PROVIDER="claude"
+  fi
+  # Gemini 는 CLI 가 아니라 API 키라 위 문구가 안 나온다. generate_brief 가 남기는 마커로 잡는다.
+  if [ -f "${OUT_FILE}" ] && grep -q '__BRIEF_AUTH_FAIL__=gemini' "${OUT_FILE}"; then
+    AUTH_FAIL=1
+    AUTH_FAIL_PROVIDER="gemini"
   fi
   rm -f "${EXIT_FILE}" "${OUT_FILE}"
 
@@ -356,11 +363,17 @@ LIMIT_CUS_CSV="${LIMIT_FAIL_CUSTOM%,}"
 AUTH_CAT_CSV="${AUTH_FAIL_SLUGS%,}"
 log "\"done dry_run=${DRY_RUN} generated_ok=${GEN_OK_COUNT} failed=${GEN_FAIL_CSV:-none} limit_fail=${LIMIT_CAT_CSV:-none} auth_fail=${AUTH_CAT_CSV:-none}\""
 
-# OAuth 만료는 다음 정기 점검(10:00/20:00)까지 기다리면 그날 브리핑이 통째로 날아간다.
-# 사람이 /login 해야만 풀리므로 즉시 알린다. 하루 1회만(--once-key).
+# 인증 실패는 다음 정기 점검(09:00/21:00)까지 기다리면 그날 브리핑이 통째로 날아간다.
+# 사람이 고쳐야만 풀리므로 즉시 알린다. 하루 1회만(--once-key).
+# 고칠 대상이 공급자마다 달라 문구를 나눈다 — 무엇을 해야 하는지가 알림의 전부다.
 if [ -n "${AUTH_CAT_CSV}" ] && [ ${DRY_RUN} -eq 0 ]; then
+  if [ "${AUTH_FAIL_PROVIDER}" = "gemini" ]; then
+    AUTH_REMEDY="Gemini API 키 인증 실패. secrets/portal_endpoints.env 의 GEMINI_API_KEY 를 확인하세요."
+  else
+    AUTH_REMEDY="Claude 인증 만료. 터미널에서 claude /login 하면 10분 내 자동 재생성됩니다."
+  fi
   bash /Users/daegong/projects/popory/services/healthcheck/notify.sh --once-key=brief_auth \
-    "[popory] 브리핑 생성 실패 — Claude 인증 만료. 터미널에서 claude /login 하면 10분 내 자동 재생성됩니다. (실패: ${AUTH_CAT_CSV})" \
+    "[popory] 브리핑 생성 실패 — ${AUTH_REMEDY} (실패: ${AUTH_CAT_CSV})" \
     >> "${LOG_FILE}" 2>&1 || log "\"auth notify failed\""
 fi
 

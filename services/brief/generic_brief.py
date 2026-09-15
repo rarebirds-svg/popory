@@ -1,4 +1,4 @@
-# 커스텀 주제명을 입력받아 claude CLI로 범용 브리핑을 생성하고 포털에 publish
+# 커스텀 주제명을 입력받아 범용 브리핑을 생성하고 포털에 publish. 공급자는 모델 id 로 갈린다(claude CLI / Gemini API).
 """
 사용법.
     python generic_brief.py --topic-id {id} --name {주제명} [--date YYYY-MM-DD]
@@ -20,6 +20,7 @@ import urllib.request
 from pathlib import Path
 
 from popory_brief import limit_detect
+from popory_brief import gemini_client
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_title import date_label, normalize_title, RECOMMENDED_MAX
 
@@ -71,7 +72,13 @@ def main() -> None:
                    help="온디맨드 강제 재생성. 멱등성 가드를 건너뛰고 오늘치를 교체 발행한다")
     args = p.parse_args()
 
-    if not Path(CLAUDE_BIN).exists():
+    # 명시한 --model > 어드민 설정 > 코드 기본값. 조회 실패는 기본값으로 흘린다.
+    # 공급자는 모델 id 로 갈린다 — Gemini 는 API 키로, claude 는 로컬 CLI 로 돈다.
+    model = args.model or resolve_model(LLM_FEATURE, DEFAULT_MODEL)
+    use_gemini = gemini_client.is_gemini_model(model)
+
+    # claude 경로에서만 CLI 존재를 따진다. Gemini 경로는 CLI 가 없는 머신에서도 돌아야 한다.
+    if not use_gemini and not Path(CLAUDE_BIN).exists():
         print(f"error: claude CLI not found at {CLAUDE_BIN}", file=sys.stderr)
         sys.exit(2)
 
@@ -97,9 +104,15 @@ def main() -> None:
     # 제목 꼬리. 검색 키워드가 앞, 발행 정보가 뒤 (popory_brief.seo_title 참조).
     title_suffix = f"{date_label(date_obj.date(), weekly=False)} {args.name} 브리핑"
 
+    # 검색 지시는 공급자마다 다르게 적는다. claude 는 WebSearch·WebFetch 도구를 실제로 들고 있고,
+    # Gemini 는 도구 이름 대신 서버측 Google Search grounding 이 붙는다.
+    search_hint = "웹 검색(Google Search)으로" if use_gemini else "WebSearch 도구로"
+    collect_hint = ("웹 검색(Google Search)으로" if use_gemini
+                    else "WebSearch와 WebFetch 도구로")
+
     system_prompt = f"""당신은 '{args.name}' 전문 브리핑 작성자입니다.
 오늘은 {date_str} (KST)이며, 최근 3일([D-2, D]) 이내 발행된 신뢰할 수 있는 기사·보도자료만 사용하세요.
-WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브리핑을 작성하세요.
+{collect_hint} 최신 이슈를 수집한 뒤 한국어로 브리핑을 작성하세요.
 
 작성 형식.
 - 본문 맨 앞에 헤딩 없이 2~3문장의 개요를 둔다. 오늘의 핵심을 압축해 먼저 제시하고, 이 첫 3줄 안에 제목의 핵심 키워드를 1회 넣는다.
@@ -129,69 +142,82 @@ WebSearch와 WebFetch 도구로 최신 이슈를 수집한 뒤 한국어로 브�
     user_msg = (
         f"오늘은 {date_str} (KST)입니다. "
         f"'{args.name}' 관련 최근 3일간 주요 이슈를 조사하여 브리핑을 작성하세요. "
-        f"WebSearch 도구로 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
+        f"{search_hint} 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
         f"마지막 응답에 <body_markdown>...</body_markdown> 과 <meta_json>...</meta_json> 두 태그를 정확히 포함하세요. "
         f"meta_json의 published_at은 {published_at}을 그대로 사용하세요."
     )
 
-    sys_prompt_path = Path(f"/tmp/brief_system_custom_{args.topic_id}_{date_str}.txt")
-    sys_prompt_path.write_text(system_prompt, encoding="utf-8")
-
-    # 명시한 --model > 어드민 설정 > 코드 기본값. 조회 실패는 기본값으로 흘린다.
-    model = args.model or resolve_model(LLM_FEATURE, DEFAULT_MODEL)
-
-    cmd = [
-        CLAUDE_BIN,
-        "--print",
-        "--model", model,
-        "--allowed-tools", "WebSearch", "WebFetch",
-        "--system-prompt-file", str(sys_prompt_path),
-        "--output-format", "text",
-    ]
-
-    attempt = 0
-    try:
-        while True:
-            try:
-                result = subprocess.run(
-                    cmd,
-                    input=user_msg,
-                    capture_output=True,
-                    text=True,
-                    timeout=TIMEOUT_SECONDS,
-                )
-            except subprocess.TimeoutExpired:
-                print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
-                sys.exit(5)
-
-            if result.returncode == 0:
-                break
-
-            combined = result.stdout + result.stderr
-            is_limit = limit_detect.is_limit_message(combined)
-            is_overload = limit_detect.is_overload_message(combined)
-            print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit}, overload={is_overload})", file=sys.stderr)
-            print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
-            print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
-
-            # 한도와 일시 과부하(529) 모두 백오프 재시도로 흡수한다.
-            if (is_limit or is_overload) and attempt < len(BACKOFF_SECONDS):
-                wait = BACKOFF_SECONDS[attempt]
-                reason = "usage limit" if is_limit else "API 과부하(529)"
-                print(f"--- {reason} 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
-                time.sleep(wait)
-                attempt += 1
-                continue
-            if is_limit:
-                # 백오프로 못 흡수한 장시간 한도. reset epoch를 stdout에 알리고 exit 6.
-                reset_epoch = limit_detect.reset_epoch_or_fallback(combined, datetime.datetime.now(KST))
+    if use_gemini:
+        try:
+            final_text = gemini_client.generate_with_retry(
+                system_prompt=system_prompt, user_msg=user_msg,
+                model=model, timeout_seconds=TIMEOUT_SECONDS, backoff=BACKOFF_SECONDS)
+        except gemini_client.GeminiError as e:
+            if e.is_limit:
+                # 쿼터는 claude 한도와 같은 규약으로 넘긴다 — retry 잡이 그대로 복구한다.
+                reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())
                 print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
                 sys.exit(6)
-            sys.exit(5)
-    finally:
-        sys_prompt_path.unlink(missing_ok=True)
+            # 인증 실패는 사람이 키를 고쳐야 풀린다 — run_daily.sh 가 즉시 알림을 걸도록 마커를 남긴다.
+            if e.exit_code == 3:
+                print("__BRIEF_AUTH_FAIL__=gemini")
+            sys.exit(e.exit_code)
+    else:
+        sys_prompt_path = Path(f"/tmp/brief_system_custom_{args.topic_id}_{date_str}.txt")
+        sys_prompt_path.write_text(system_prompt, encoding="utf-8")
 
-    final_text = result.stdout
+        cmd = [
+            CLAUDE_BIN,
+            "--print",
+            "--model", model,
+            "--allowed-tools", "WebSearch", "WebFetch",
+            "--system-prompt-file", str(sys_prompt_path),
+            "--output-format", "text",
+        ]
+
+        attempt = 0
+        try:
+            while True:
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        input=user_msg,
+                        capture_output=True,
+                        text=True,
+                        timeout=TIMEOUT_SECONDS,
+                    )
+                except subprocess.TimeoutExpired:
+                    print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
+                    sys.exit(5)
+
+                if result.returncode == 0:
+                    break
+
+                combined = result.stdout + result.stderr
+                is_limit = limit_detect.is_limit_message(combined)
+                is_overload = limit_detect.is_overload_message(combined)
+                print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit}, overload={is_overload})", file=sys.stderr)
+                print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
+                print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
+
+                # 한도와 일시 과부하(529) 모두 백오프 재시도로 흡수한다.
+                if (is_limit or is_overload) and attempt < len(BACKOFF_SECONDS):
+                    wait = BACKOFF_SECONDS[attempt]
+                    reason = "usage limit" if is_limit else "API 과부하(529)"
+                    print(f"--- {reason} 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
+                    time.sleep(wait)
+                    attempt += 1
+                    continue
+                if is_limit:
+                    # 백오프로 못 흡수한 장시간 한도. reset epoch를 stdout에 알리고 exit 6.
+                    reset_epoch = limit_detect.reset_epoch_or_fallback(combined, datetime.datetime.now(KST))
+                    print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+                    sys.exit(6)
+                sys.exit(5)
+        finally:
+            sys_prompt_path.unlink(missing_ok=True)
+
+        final_text = result.stdout
 
     body_m = re.search(r"<body_markdown>(.*?)</body_markdown>", final_text, re.DOTALL)
     meta_m = re.search(r"<meta_json>\s*(\{.*?\})\s*</meta_json>", final_text, re.DOTALL)
