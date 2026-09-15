@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { requireAdmin, type AppVars } from "../middleware/session";
 import { requireService, type ServiceVars } from "../middleware/service_auth";
-import { DEFAULT_MODEL, FEATURES, SERVICES, MODELS, MODEL_IDS, FEATURE_KEYS, featuresOf, defaultModelOf, type ServiceKey } from "../lib/llm_catalog";
+import { DEFAULT_MODEL, FEATURES, SERVICES, MODELS, FEATURE_KEYS, featuresOf, defaultModelOf, isModelAllowed, type ServiceKey } from "../lib/llm_catalog";
 
 type HonoEnv = { Bindings: Env; Variables: AppVars & ServiceVars };
 // 서비스별 조회 엔드포인트를 여는 area. 각 서비스는 자기 기능만 읽어간다.
@@ -15,10 +15,11 @@ async function loadOverrides(env: Env): Promise<Map<string, Row>> {
   const { results } = await env.DB.prepare(
     `SELECT feature, model, updated_at, updated_by FROM llm_model_settings`
   ).all<Row>();
-  // 카탈로그에 없는 기능·모델은 무시한다 — 카탈로그가 줄어든 뒤 남은 행이 워커로 새면 안 된다.
+  // 카탈로그에 없는 기능·모델, 그 서비스가 못 부르는 공급자의 행은 무시한다 — 카탈로그·공급자
+  // 허용 범위가 줄어든 뒤 남은 행이 워커로 새면 그날 잡이 죽는다.
   return new Map(
     (results ?? [])
-      .filter((r) => FEATURE_KEYS.has(r.feature as never) && MODEL_IDS.has(r.model))
+      .filter((r) => isModelAllowed(r.feature, r.model))
       .map((r) => [r.feature, r]),
   );
 }
@@ -62,7 +63,10 @@ export function mountAdminLlmModels(app: Hono<HonoEnv>) {
         stmts.push(c.env.DB.prepare(`DELETE FROM llm_model_settings WHERE feature = ?`).bind(feature));
         continue;
       }
-      if (typeof raw !== "string" || !MODEL_IDS.has(raw)) return c.json({ error: `unknown model: ${String(raw)}` }, 400);
+      // 카탈로그에 있어도 그 기능의 서비스가 못 부르는 공급자면 거절한다(예: 컨텐츠에 Gemini).
+      if (typeof raw !== "string" || !isModelAllowed(feature, raw)) {
+        return c.json({ error: `unknown or unsupported model for ${feature}: ${String(raw)}` }, 400);
+      }
       stmts.push(
         c.env.DB.prepare(
           `INSERT INTO llm_model_settings (feature, model, updated_at, updated_by) VALUES (?, ?, ?, ?)

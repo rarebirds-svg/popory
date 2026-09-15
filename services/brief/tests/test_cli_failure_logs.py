@@ -561,3 +561,109 @@ def test_unexpected_exception_keeps_exit_code_and_traceback(tmp_path):
     rows = [json.loads(l) for l in next(iter(logs_dir.glob("*.log"))).read_text().splitlines()]
     assert [r["status"] for r in rows] == ["unexpected_fail"]
     assert rows[0]["error"] == "FileNotFoundError"
+
+
+# ---------------- generate_brief · Gemini 공급자 경로 ----------------
+#
+# 공급자가 갈려도 run_daily.sh·retry_pending.sh 가 읽는 규약은 하나다.
+# (exit 6 + __BRIEF_LIMIT_RESET__ / 인증 실패 마커 / 실패 로그 1줄)
+
+from popory_brief import gemini_client   # noqa: E402
+
+
+def _gemini_argv(monkeypatch, category: str = "realestate"):
+    monkeypatch.setenv("BRIEF_BACKOFF_SECONDS", "")   # 재시도 대기 없음
+    _argv(monkeypatch, "--category", category, "--date", "2026-09-15",
+          "--model", "gemini-3.8-flash")
+
+
+def _gemini_raises(monkeypatch, err: gemini_client.GeminiError):
+    monkeypatch.setattr(generate_brief.gemini_client, "generate_with_retry", _raise(err))
+
+
+def test_generate_gemini_failure_logs_gemini_fail(monkeypatch):
+    rec = _patch(monkeypatch, generate_brief)
+    _gemini_raises(monkeypatch, gemini_client.GeminiError("요청 거부(400)", exit_code=4))
+    _gemini_argv(monkeypatch)
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 4
+    r = rec.one(generate_brief)
+    assert r["cli"] == "generate_brief"
+    assert r["status"] == "gemini_fail"
+    assert r["category"] == "realestate"
+
+
+def test_generate_gemini_quota_exits_6_with_reset(monkeypatch, capsys):
+    """Gemini 쿼터도 claude 한도와 같은 규약으로 넘어가야 retry 잡이 복구한다."""
+    rec = _patch(monkeypatch, generate_brief)
+    _gemini_raises(monkeypatch, gemini_client.GeminiError(
+        "쿼터 초과(429)", exit_code=6, retryable=True, is_limit=True, reset_epoch=1789000000))
+    _gemini_argv(monkeypatch)
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 6
+    assert "__BRIEF_LIMIT_RESET__=1789000000" in capsys.readouterr().out
+    r = rec.one(generate_brief)
+    assert r["status"] == "limit_fail"
+    assert r["reset_epoch"] == 1789000000
+
+
+def test_generate_gemini_auth_failure_prints_marker(monkeypatch, capsys):
+    """키 문제는 사람이 고쳐야 풀린다 — run_daily.sh 가 즉시 알림을 걸 마커를 남긴다."""
+    rec = _patch(monkeypatch, generate_brief)
+    _gemini_raises(monkeypatch, gemini_client.GeminiError("인증 실패(403)", exit_code=3))
+    _gemini_argv(monkeypatch)
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 3
+    assert "__BRIEF_AUTH_FAIL__=gemini" in capsys.readouterr().out
+    assert rec.one(generate_brief)["status"] == "gemini_fail"
+
+
+def test_generate_gemini_missing_key_is_config_exit_2(monkeypatch):
+    """키가 없으면 설정 누락(exit 2) — 재시도 대상이 아니다."""
+    rec = _patch(monkeypatch, generate_brief)
+    _gemini_raises(monkeypatch, gemini_client.GeminiError("GEMINI_API_KEY 미설정", exit_code=2))
+    _gemini_argv(monkeypatch)
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 2
+    assert rec.one(generate_brief)["status"] == "gemini_fail"
+
+
+def test_generate_gemini_does_not_require_claude_cli(monkeypatch, tmp_path):
+    """Gemini 경로는 claude CLI 가 없는 머신에서도 돌아야 한다 — init_fail 로 죽지 않는다."""
+    rec = _patch(monkeypatch, generate_brief)
+    monkeypatch.setattr(generate_brief, "CLAUDE_BIN", str(tmp_path / "no-claude"))
+    _gemini_raises(monkeypatch, gemini_client.GeminiError("여기까지 왔다", exit_code=4))
+    _gemini_argv(monkeypatch)
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 4                       # CLI 부재의 exit 2 가 아니다
+    assert rec.one(generate_brief)["status"] == "gemini_fail"
+
+
+def test_generate_claude_path_still_requires_cli(monkeypatch, tmp_path):
+    """반대로 claude 모델을 고른 경우엔 CLI 부재가 그대로 init_fail 이어야 한다."""
+    rec = _patch(monkeypatch, generate_brief)
+    monkeypatch.setattr(generate_brief, "CLAUDE_BIN", str(tmp_path / "no-claude"))
+    monkeypatch.setenv("BRIEF_BACKOFF_SECONDS", "")
+    _argv(monkeypatch, "--category", "realestate", "--date", "2026-09-15",
+          "--model", "claude-sonnet-4-6")
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 2
+    assert rec.one(generate_brief)["status"] == "init_fail"

@@ -40,11 +40,63 @@ pnpm exec wrangler d1 execute popory-portal \
 ## 2. 환경변수
 
 routine 호출 시 다음 두 변수가 필요하다 (`secrets/portal_endpoints.env` 에 저장 후 source).
+`run_daily.sh` 가 `set -a` 로 source 하므로 이 파일에 적은 값은 하위 CLI 에 그대로 실린다.
 
 ```
 POPORY_BRIEF_KEY_FILE=/Users/daegong/projects/popory/services/brief/secrets/brief_signing_key.json
 POPORY_PORTAL_API_BASE=https://api.poporyfamily.com
+
+# Gemini 모델을 쓸 때만 필요 (claude 모델만 쓰면 없어도 된다).
+GEMINI_API_KEY=...
 ```
+
+Gemini 키는 env 대신 `secrets/gemini_api_key` 파일로 둬도 된다. env 가 우선이고, 없으면 그
+파일을 읽는다 — content-worker 가 `generic_brief.py` 를 부를 때는 env 가 안 실리므로 파일
+폴백이 있어야 온디맨드 생성도 같은 키를 쓴다. `secrets/` 는 git 이중 ignore 다.
+
+파일 형식은 **키 값만 한 줄**이다. `GEMINI_API_KEY=` 접두사·따옴표·여러 줄을 넣으면 그 전체가
+키로 읽혀 진단하기 어려운 403 이 된다. 그래서 `=` 나 공백이 섞이면 형식 오류(exit 2)로 막는다.
+env(`portal_endpoints.env`)에 넣을 때는 반대로 `GEMINI_API_KEY=키` 형식이어야 한다 — shell 이
+source 하는 파일이기 때문이다.
+
+```bash
+# 파일로 (양쪽 경로 모두 커버). 예시 문자열이 아니라 실제 키를 넣는다.
+printf '%s\n' 'AIzaSy...' > secrets/gemini_api_key && chmod 600 secrets/gemini_api_key
+
+# 키·모델·검색 도구를 나눠서 점검 (실호출 1회, 키는 마스킹 출력)
+.venv/bin/python check_gemini.py
+```
+
+`check_gemini.py` 는 브리핑을 돌리기 전 점검용이다. 키 형식 오류·모델 id 오류·grounding
+도구 이름 오류·쿼터 미할당을 각각 구분해 알려준다 — 무엇이 틀려도 브리핑 로그에는 "생성 실패"
+한 줄만 남아서, 원인을 가려내려면 이 단계가 따로 있어야 한다.
+
+주의. **Google AI Pro/Ultra 구독만으로는 API 쿼터가 생기지 않는다.** 구독은 AI Studio 안의
+한도를 올려 줄 뿐이고, 이 서비스처럼 API 를 직접 부르는 경로는 키가 속한 프로젝트에 Cloud
+결제(pay-as-you-go)가 붙어 있어야 한다. 결제 미연결 키는 첫 호출부터 429
+(`check your plan and billing details`)로 막힌다. 특히 브리핑은 Google Search grounding 을
+항상 켜므로 무료 티어만으로는 돌지 않는다.
+
+선택 튜닝 (기본값으로 충분하다).
+
+| 변수 | 기본 | 뜻 |
+|------|------|-----|
+| `BRIEF_GEMINI_SEARCH_TOOL` | `google_search` | grounding 도구 이름. 모델 세대에 따라 갈리면 여기서 교정 |
+| `BRIEF_GEMINI_MAX_OUTPUT_TOKENS` | `32768` | 출력 상한. 낮으면 본문이 잘려 태그 파싱이 깨진다 |
+| `BRIEF_GEMINI_RESET_FALLBACK_SECONDS` | `900` | 429 가 리셋 시각을 안 알려줄 때 대기 |
+
+## 2-1. 모델·공급자
+
+브리핑 생성 모델은 어드민(`/admin/llm-models` → 뉴스 브리핑 → 이슈 생성)에서 고른다.
+모델 id 로 공급자가 갈린다 — `claude-*` 는 로컬 claude CLI(Max 구독, 내장 WebSearch),
+`gemini-*` 는 Gemini API(`GEMINI_API_KEY`, 서버측 Google Search grounding).
+
+- 카탈로그는 `workers/api/src/lib/llm_catalog.ts` 한 곳에만 있다. 새 모델은 거기 추가한다.
+- 기본값은 `claude-sonnet-4-6` 이다. 어드민에서 바꾸지 않으면 동작이 그대로다.
+- 한 카테고리만 시범해 보려면 어드민을 건드리지 않고 CLI 로 직접 준다.
+  `.venv/bin/python generate_brief.py --category naver --model gemini-3.8-flash`
+- 컨텐츠 생성 서비스는 claude CLI 전용이라 Gemini 모델이 선택지에 뜨지 않는다
+  (`SERVICES[].providers`). 붙이려면 `services/content` 호출부가 먼저 필요하다.
 
 ## 3. routine 호출 시퀀스
 
@@ -82,6 +134,18 @@ ${BRIEF_DIR}/.venv/bin/python ${BRIEF_DIR}/publish_to_portal.py \
 | 3 | 인증 실패 (Gmail refresh / portal 401·403) | 키·토큰 재발급 |
 | 4 | 외부 API 4xx | 입력 점검 — 재시도 안 함 |
 | 5 | 외부 API 5xx / 네트워크 (1회 재시도 후) | 사후 점검 |
+| 6 | LLM 사용량 한도·쿼터 (백오프 소진) | stdout `__BRIEF_LIMIT_RESET__=<epoch>` → retry 잡이 복구 |
+
+공급자가 갈려도 이 규약은 하나다. Gemini 경로의 환원은 이렇다.
+
+| 응답 | code | 비고 |
+|------|------|------|
+| 429 (RetryInfo·QuotaFailure 동반) | 6 | 분·일 단위 rate limit. `Retry-After`·`retryDelay` 로 리셋 epoch 계산, 없으면 15분 뒤 |
+| 401·403 | 3 | 키 문제. stdout 에 `__BRIEF_AUTH_FAIL__=gemini` 를 남겨 run_daily 가 즉시 알린다 |
+| 429 (plan·billing) | 3 | 쿼터 미할당 — 결제 미연결 프로젝트의 키. 재시도로 안 풀리므로 위와 같이 즉시 알린다 |
+| 5xx·타임아웃·네트워크 | 5 | 백오프 재시도 후 |
+| 그 외 4xx | 4 | 도구 이름·모델 id 오류 등. 서버 메시지를 로그에 싣는다 |
+| 본문 없음·차단 | 4 | `finishReason`(MAX_TOKENS 등)·`blockReason` 을 로그에 싣는다 |
 
 routine 분기.
 

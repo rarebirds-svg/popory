@@ -8,8 +8,10 @@ import { useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Button } from "../_components/Button";
 
-export interface ModelOption { id: string; label: string; note: string }
-export interface ServiceGroup { key: string; label: string; description: string }
+export interface ModelOption { id: string; label: string; note: string; provider: string }
+// providers 는 그 서비스의 워커가 실제로 부를 수 있는 공급자다. 이 목록 밖의 모델은 선택지에
+// 넣지 않는다 — 워커가 못 부르는 모델을 고를 수 있게 두면 그날 잡이 죽는다.
+export interface ServiceGroup { key: string; label: string; description: string; providers: string[] }
 export interface FeatureRow {
   key: string;
   service: string;
@@ -65,6 +67,7 @@ export function ModelForm({
           <ul className="mt-4 space-y-4">
             {g.rows.map((f) => {
               const changed = picked[f.key] !== f.model;
+              const options = models.filter((m) => g.providers.includes(m.provider));
               return (
                 <li key={f.key} className="border-b border-popory-border pb-4">
                   <div className="flex flex-wrap items-baseline gap-2">
@@ -82,7 +85,7 @@ export function ModelForm({
                     autoComplete="off"
                     className="mt-2 w-full rounded border border-popory-border bg-popory-bg px-2 py-1.5 text-sm text-popory-fg"
                   >
-                    {models.map((m) => (
+                    {options.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.label}{m.id === f.default_model ? " (기본값)" : ""} — {m.note}
                       </option>
