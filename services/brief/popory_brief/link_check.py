@@ -38,17 +38,20 @@ USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.3
 
 
 def mode() -> str:
-    """off(검사 안 함) / warn(로그만) / degrade(링크만 벗김) / strict(실패). 기본 warn.
+    """off(검사 안 함) / warn(로그만) / degrade(링크만 벗김) / strict(실패). 기본 degrade.
 
-    기본을 warn 으로 두는 이유. 켜는 순간 strict 였다면 오판 한 건이 그날 브리핑을 통째로
-    날린다. 먼저 며칠 빈도를 보고 사람이 올리는 순서가 맞다.
+    2026-09-15 실측으로 기본값을 degrade 로 정했다. claude 경로 발행분에서 인용 42개 중
+    7개가 404 였다(카테고리 7개 중 3개). 즉 열리지 않는 출처가 이미 매일 구독자에게 나가고
+    있었다 — 기본이 warn(로그만)이면 그 상태가 그대로 유지된다.
 
-    strict 는 현재 실용적이지 않다 — 2026-09-15 실측에서 claude 경로도 인용 42개 중 7개가
-    404 였다(카테고리 7개 중 3개에서 발생). strict 면 그 카테고리들이 매일 통째로 빈다.
-    degrade 는 죽은 링크만 벗겨 `매체 — 제목 (날짜)` 텍스트로 남기므로, 브리핑을 죽이지
-    않으면서 열리지 않는 링크를 독자에게 내보내지 않는다."""
-    raw = (os.environ.get("BRIEF_LINK_CHECK") or "warn").strip().lower()
-    return raw if raw in VALID_MODES else "warn"
+    strict 는 쓰지 않는다. 그 비율이면 legal-ai·naver 가 매일 통째로 빈다. degrade 는 죽은
+    링크만 벗겨 `매체 — 제목 (날짜)` 텍스트로 남기므로, 브리핑을 죽이지 않으면서 거짓 링크를
+    내보내지 않는다.
+
+    env 지시가 아니라 코드 기본값인 이유. content-worker 가 generic_brief 를 부를 때는
+    brief 쪽 env 가 안 실려서, env 로 켜면 온디맨드 경로만 예전 동작으로 갈린다."""
+    raw = (os.environ.get("BRIEF_LINK_CHECK") or "degrade").strip().lower()
+    return raw if raw in VALID_MODES else "degrade"
 
 
 def extract_urls(markdown: str, *, limit: int = MAX_URLS) -> list[str]:

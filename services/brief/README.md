@@ -188,7 +188,7 @@ grounding 근거 URL(`groundingMetadata`)과 대조하는 방법도 있지만, �
 
 | 변수 | 기본 | 뜻 |
 |------|------|-----|
-| `BRIEF_LINK_CHECK` | `warn` | `off` 검사 안 함 / `warn` 로그만 / `degrade` 죽은 링크만 벗기고 발행 / `strict` 죽은 링크면 exit 4 |
+| `BRIEF_LINK_CHECK` | `degrade` | `off` 검사 안 함 / `warn` 로그만 / `degrade` 죽은 링크만 벗기고 발행 / `strict` 죽은 링크면 exit 4 |
 | `BRIEF_LINK_CHECK_TIMEOUT` | `6` | URL 1개당 초 |
 | `BRIEF_LINK_CHECK_MAX` | `40` | 검사할 URL 수 상한 |
 | `BRIEF_LINK_CHECK_WORKERS` | `8` | 동시 요청 수 |
@@ -224,9 +224,15 @@ claude CLI 의 WebSearch 경로도 같은 비율로 URL 을 지어낸다. 카테
 남기면 독자가 직접 검색할 수 있다. 마크다운 링크가 아닌 맨 URL 은 손대지 않는다 — 문장
 구조를 모르는 채 지우면 문맥이 깨지므로 로그의 `dead` 목록으로 남겨 사람이 판단한다.
 
-기본을 `warn` 으로 둔 이유. 켜는 순간 `strict` 였다면 오판 한 건이 그날 브리핑을 통째로
-날린다. 며칠 `logs/`의 `link_warn` 빈도를 보고 사람이 올리는 순서가 맞다.
-모르는 값(오타)은 `warn` 으로 되돌린다 — 오타가 검사를 조용히 끄면 안 된다.
+기본이 `degrade` 인 이유. 위 실측대로 열리지 않는 출처가 이미 매일 구독자에게 나가고
+있었다. `warn`(로그만)이 기본이면 그 상태가 그대로 유지된다. `strict` 는 그 비율에서
+legal-ai·naver 를 매일 비우므로 쓰지 않는다.
+
+env 가 아니라 코드 기본값인 이유. content-worker 가 `generic_brief.py` 를 부를 때는 brief
+쪽 env 가 안 실려서, env 로 켜면 온디맨드 경로만 예전 동작으로 갈린다.
+모르는 값(오타)은 기본값으로 되돌린다 — 오타가 검사를 약화시키면 안 된다.
+
+되돌리려면 `BRIEF_LINK_CHECK=warn`(로그만) 또는 `off`(검사 안 함).
 
 로그 status. `link_warn`(로그만) / `link_degraded`(링크 벗김, `stripped` 개수 포함) /
 `link_fail`(strict 에서 발행 중단). `link_fail` 만 실패로 집계돼 포털로 전송된다.

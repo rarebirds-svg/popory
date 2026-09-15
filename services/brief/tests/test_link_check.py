@@ -125,12 +125,12 @@ def test_check_url_retries_with_get_when_head_rejected(monkeypatch):
 # ---------------- 모드 ----------------
 
 @pytest.mark.parametrize("raw,expected", [
-    (None, "warn"), ("", "warn"), ("warn", "warn"),
+    (None, "degrade"), ("", "degrade"), ("warn", "warn"),
     ("off", "off"), ("OFF", "off"), (" strict ", "strict"),
-    ("nonsense", "warn"),
+    ("nonsense", "degrade"),
 ])
 def test_mode_parsing(monkeypatch, raw, expected):
-    """오타가 검사를 조용히 끄면 안 된다 — 모르는 값은 warn 으로 돌린다."""
+    """오타가 검사를 약화시키면 안 된다 — 모르는 값은 기본값(degrade)으로 돌린다."""
     if raw is None:
         monkeypatch.delenv("BRIEF_LINK_CHECK", raising=False)
     else:
