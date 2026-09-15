@@ -21,6 +21,7 @@ from pathlib import Path
 
 from popory_brief import limit_detect
 from popory_brief import gemini_client
+from popory_brief import link_check
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_title import date_label, normalize_title, RECOMMENDED_MAX
 
@@ -237,6 +238,16 @@ def main() -> None:
     # 제목 안전망 — 옛 말머리·날짜를 걷어내고 발행 꼬리를 뒤에 붙인다 (generate_brief.py 와 동일).
     meta["title"] = normalize_title(str(meta.get("title") or ""), suffix=title_suffix,
                                     fallback=f"[{args.name} 브리핑] {date_str}")
+
+    # 인용 링크 점검 (generate_brief 와 같은 규약). 기본 warn.
+    lc_mode = link_check.mode()
+    if lc_mode != "off":
+        dead = link_check.dead_links(body)
+        if dead:
+            detail = ", ".join(f"{u} ({c})" for u, c in dead[:5])
+            print(f"warning: 열리지 않는 인용 링크 {len(dead)}건 — {detail}", file=sys.stderr)
+            if lc_mode == "strict":
+                sys.exit(4)
 
     body_file = Path(f"/tmp/brief_custom_{args.topic_id}_{date_str}.md")
     meta_file = Path(f"/tmp/brief_custom_{args.topic_id}_{date_str}.meta.json")

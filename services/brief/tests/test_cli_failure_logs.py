@@ -667,3 +667,85 @@ def test_generate_claude_path_still_requires_cli(monkeypatch, tmp_path):
 
     assert e.value.code == 2
     assert rec.one(generate_brief)["status"] == "init_fail"
+
+
+# ---------------- generate_brief · 인용 링크 점검 ----------------
+#
+# grounding 은 존재하지 않는 URL 을 적어 넣는다(2026-09-15 실측: 7개 중 2개 404).
+# 기본은 warn(로그만) 이고, strict 로 올리면 발행하지 않는다.
+
+_TAGGED_OK = ('<body_markdown>본문 [t](https://x.test/gone)</body_markdown>'
+              '<meta_json>{"title": "제목", "published_at": 1}</meta_json>')
+
+
+def _claude_returns(monkeypatch, stdout: str):
+    monkeypatch.setattr(generate_brief, "CLAUDE_BIN", sys.executable)
+    monkeypatch.setattr(generate_brief.subprocess, "run",
+                        lambda *a, **k: _Completed(0, stdout=stdout))
+
+
+def _dead(monkeypatch, pairs):
+    monkeypatch.setattr(generate_brief.link_check, "dead_links", lambda body, **k: pairs)
+
+
+def _link_argv(monkeypatch):
+    monkeypatch.setenv("BRIEF_BACKOFF_SECONDS", "")
+    _argv(monkeypatch, "--category", "realestate", "--date", "2026-01-02")
+
+
+def test_generate_strict_mode_refuses_to_publish_dead_links(monkeypatch):
+    rec = _patch(monkeypatch, generate_brief)
+    monkeypatch.setenv("BRIEF_LINK_CHECK", "strict")
+    _claude_returns(monkeypatch, _TAGGED_OK)
+    _dead(monkeypatch, [("https://x.test/gone", 404)])
+    _link_argv(monkeypatch)
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 4
+    # 제목 정규화 기록이 함께 남으므로 rec.one() 이 아니라 해당 레코드를 찾는다.
+    r = next(c[1] for c in rec.calls if c[1]["status"] == "link_fail")
+    assert is_failure(r["status"])
+    assert r["dead_count"] == 1
+    assert "https://x.test/gone" in r["dead"]
+
+
+def test_generate_warn_mode_publishes_but_logs(monkeypatch):
+    """기본 warn — 발행은 계속하고 죽은 링크만 기록한다. 켜는 순간 브리핑이 죽으면 안 된다."""
+    rec = _patch(monkeypatch, generate_brief)
+    monkeypatch.setenv("BRIEF_LINK_CHECK", "warn")
+    _claude_returns(monkeypatch, _TAGGED_OK)
+    _dead(monkeypatch, [("https://x.test/gone", 404)])
+    _link_argv(monkeypatch)
+
+    generate_brief.main()   # SystemExit 없이 끝난다
+
+    statuses = [rec_call[1]["status"] for rec_call in rec.calls]
+    assert "link_warn" in statuses
+    assert "ok" in statuses          # 생성 성공 기록도 남는다
+
+
+def test_generate_off_mode_skips_the_check(monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("off 면 링크 점검을 하지 않아야 한다")
+    _patch(monkeypatch, generate_brief)
+    monkeypatch.setenv("BRIEF_LINK_CHECK", "off")
+    monkeypatch.setattr(generate_brief.link_check, "dead_links", _boom)
+    _claude_returns(monkeypatch, _TAGGED_OK)
+    _link_argv(monkeypatch)
+
+    generate_brief.main()
+
+
+def test_generate_clean_links_leave_no_warning(monkeypatch):
+    rec = _patch(monkeypatch, generate_brief)
+    monkeypatch.setenv("BRIEF_LINK_CHECK", "strict")
+    _claude_returns(monkeypatch, _TAGGED_OK)
+    _dead(monkeypatch, [])
+    _link_argv(monkeypatch)
+
+    generate_brief.main()
+
+    statuses = [c[1]["status"] for c in rec.calls]
+    assert "link_fail" not in statuses and "link_warn" not in statuses
