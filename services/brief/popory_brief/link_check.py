@@ -28,7 +28,7 @@ URL_RE = re.compile(r"""https?://[^\s)\]<>"'`]+""")
 DEAD_CODES = frozenset({404, 410})
 # HEAD 를 막는 서버가 있다 — 이때만 GET 으로 한 번 더 본다.
 HEAD_REJECTED = frozenset({403, 405, 501})
-VALID_MODES = ("off", "warn", "strict")
+VALID_MODES = ("off", "warn", "degrade", "strict")
 TIMEOUT_SECONDS = float(os.environ.get("BRIEF_LINK_CHECK_TIMEOUT", "6"))
 MAX_URLS = int(os.environ.get("BRIEF_LINK_CHECK_MAX", "40"))
 WORKERS = int(os.environ.get("BRIEF_LINK_CHECK_WORKERS", "8"))
@@ -38,10 +38,15 @@ USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.3
 
 
 def mode() -> str:
-    """off(검사 안 함) / warn(로그만) / strict(죽은 링크면 실패). 기본 warn.
+    """off(검사 안 함) / warn(로그만) / degrade(링크만 벗김) / strict(실패). 기본 warn.
 
     기본을 warn 으로 두는 이유. 켜는 순간 strict 였다면 오판 한 건이 그날 브리핑을 통째로
-    날린다. 먼저 며칠 빈도를 보고 사람이 strict 로 올리는 순서가 맞다."""
+    날린다. 먼저 며칠 빈도를 보고 사람이 올리는 순서가 맞다.
+
+    strict 는 현재 실용적이지 않다 — 2026-09-15 실측에서 claude 경로도 인용 42개 중 7개가
+    404 였다(카테고리 7개 중 3개에서 발생). strict 면 그 카테고리들이 매일 통째로 빈다.
+    degrade 는 죽은 링크만 벗겨 `매체 — 제목 (날짜)` 텍스트로 남기므로, 브리핑을 죽이지
+    않으면서 열리지 않는 링크를 독자에게 내보내지 않는다."""
     raw = (os.environ.get("BRIEF_LINK_CHECK") or "warn").strip().lower()
     return raw if raw in VALID_MODES else "warn"
 
@@ -81,3 +86,25 @@ def dead_links(markdown: str, *, timeout: float = TIMEOUT_SECONDS,
     with ThreadPoolExecutor(max_workers=max(1, min(workers, len(urls)))) as pool:
         codes = list(pool.map(lambda u: check_url(u, timeout=timeout), urls))
     return [(u, c) for u, c in zip(urls, codes) if c in DEAD_CODES]
+
+
+# 마크다운 링크 `[텍스트](URL)`. URL 뒤에 공백·title 이 붙는 변형까지 받는다.
+def _link_pattern(url: str) -> re.Pattern[str]:
+    return re.compile(r"\[([^\]]*)\]\(\s*" + re.escape(url) + r"[^)]*\)")
+
+
+def strip_dead_links(markdown: str, dead_urls: list[str]) -> tuple[str, int]:
+    """죽은 링크를 링크 표기만 벗겨 텍스트로 남긴다. (새 본문, 벗긴 개수).
+
+    `[법률신문 — 제목 (2026.9.15)](https://...404)` → `법률신문 — 제목 (2026.9.15)`
+    출처 자체를 지우면 근거 없는 주장이 되고, 링크를 두면 열리지 않는 약속이 된다. 매체·제목·
+    날짜는 남겨 독자가 직접 검색할 수 있게 하는 편이 둘 다보다 낫다.
+
+    마크다운 링크가 아닌 맨 URL 은 손대지 않는다 — 문장 구조를 모르는 채로 지우면 문맥이
+    깨진다. 그런 경우는 로그의 dead 목록으로 남아 사람이 판단한다."""
+    out = markdown
+    replaced = 0
+    for url in dead_urls:
+        out, n = _link_pattern(url).subn(lambda m: m.group(1), out)
+        replaced += n
+    return out, replaced

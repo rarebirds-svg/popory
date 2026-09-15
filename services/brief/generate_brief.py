@@ -233,13 +233,21 @@ def main() -> None:
         if dead:
             detail = ", ".join(f"{u} ({c})" for u, c in dead[:5])
             print(f"warning: 열리지 않는 인용 링크 {len(dead)}건 — {detail}", file=sys.stderr)
-            append_log(LOGS_DIR, {
-                "cli": "generate_brief",
-                "status": "link_fail" if lc_mode == "strict" else "link_warn",
+            stripped = 0
+            if lc_mode == "degrade":
+                # 링크 표기만 벗기고 매체·제목·날짜는 남긴다. 발행은 계속한다.
+                body, stripped = link_check.strip_dead_links(body, [u for u, _ in dead])
+                print(f"--- 죽은 링크 {stripped}건을 텍스트 인용으로 강등 ---", file=sys.stderr)
+            status = {"strict": "link_fail", "degrade": "link_degraded"}.get(lc_mode, "link_warn")
+            record = {
+                "cli": "generate_brief", "status": status,
                 "category": category.slug, "date": date_str,
                 "dead_count": len(dead), "dead": [u for u, _ in dead][:10],
                 "error": detail[:200],
-            })
+            }
+            if lc_mode == "degrade":
+                record["stripped"] = stripped
+            append_log(LOGS_DIR, record)
             if lc_mode == "strict":
                 sys.exit(4)
 
