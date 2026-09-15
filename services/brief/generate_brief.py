@@ -26,6 +26,7 @@ from popory_brief.categories import load_category
 from popory_brief.log import append_log, safe_error, KST
 from popory_brief import limit_detect
 from popory_brief import gemini_client
+from popory_brief import link_check
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_rules import seo_rules
 from popory_brief.seo_title import normalize_title
@@ -223,6 +224,24 @@ def main() -> None:
         append_log(LOGS_DIR, {"cli": "generate_brief", "status": "title_normalized",
                               "category": category.slug, "date": date_str,
                               "from": raw_title[:120], "to": meta["title"][:120]})
+
+    # 인용 링크 점검. grounding 은 URL 을 지어낼 수 있어 실측이 유일한 방어다(README §4-1).
+    # 기본 warn — 로그만 남기고 진행한다. strict 로 올리면 죽은 링크가 있을 때 발행하지 않는다.
+    lc_mode = link_check.mode()
+    if lc_mode != "off":
+        dead = link_check.dead_links(body)
+        if dead:
+            detail = ", ".join(f"{u} ({c})" for u, c in dead[:5])
+            print(f"warning: 열리지 않는 인용 링크 {len(dead)}건 — {detail}", file=sys.stderr)
+            append_log(LOGS_DIR, {
+                "cli": "generate_brief",
+                "status": "link_fail" if lc_mode == "strict" else "link_warn",
+                "category": category.slug, "date": date_str,
+                "dead_count": len(dead), "dead": [u for u, _ in dead][:10],
+                "error": detail[:200],
+            })
+            if lc_mode == "strict":
+                sys.exit(4)
 
     body_path = Path(f"/tmp/brief_{category.slug}_{date_str}.md")
     meta_path = Path(f"/tmp/brief_{category.slug}_{date_str}.meta.json")
