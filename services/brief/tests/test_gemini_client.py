@@ -296,3 +296,15 @@ def test_api_key_file_accepts_plain_key_with_trailing_newline(monkeypatch, tmp_p
     f.write_text("AIzaSyExample-_123\n", encoding="utf-8")
     monkeypatch.setenv("BRIEF_GEMINI_KEY_FILE", str(f))
     assert gc.api_key() == "AIzaSyExample-_123"
+
+
+def test_api_key_file_rejects_placeholder_text(monkeypatch, tmp_path):
+    """안내문 예시('여기에_키')를 그대로 저장한 경우 — 403 이 아니라 형식 오류로 잡아준다."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    f = tmp_path / "gemini_api_key"
+    f.write_text("여기에_키\n", encoding="utf-8")
+    monkeypatch.setenv("BRIEF_GEMINI_KEY_FILE", str(f))
+    with pytest.raises(gc.GeminiError) as e:
+        gc.api_key()
+    assert e.value.exit_code == 2
+    assert "실제 키가 아닌" in str(e.value)

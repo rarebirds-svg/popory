@@ -75,6 +75,12 @@ def api_key() -> str:
         raise GeminiError(
             "Gemini 키 파일 형식 오류 — 키 값만 한 줄로 넣으세요 "
             "('GEMINI_API_KEY=' 접두사·따옴표·여러 줄 없이)", exit_code=2)
+    # 안내문의 예시 문자열('여기에_키')을 그대로 저장하는 실수. API 키는 항상 ASCII 라서
+    # 비ASCII 가 섞였으면 키가 아니다. 그대로 보내면 403 이 되므로 여기서 분명히 말한다.
+    if not key.isascii():
+        raise GeminiError(
+            "Gemini 키 파일에 실제 키가 아닌 값이 들어 있습니다 "
+            "(예시 문자열을 그대로 저장했는지 확인하세요)", exit_code=2)
     return key
 
 

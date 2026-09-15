@@ -60,12 +60,16 @@ env(`portal_endpoints.env`)에 넣을 때는 반대로 `GEMINI_API_KEY=키` 형�
 source 하는 파일이기 때문이다.
 
 ```bash
-# 파일로 (양쪽 경로 모두 커버)
-printf '%s\n' "$KEY" > secrets/gemini_api_key && chmod 600 secrets/gemini_api_key
+# 파일로 (양쪽 경로 모두 커버). 예시 문자열이 아니라 실제 키를 넣는다.
+printf '%s\n' 'AIzaSy...' > secrets/gemini_api_key && chmod 600 secrets/gemini_api_key
 
-# 읽히는지 확인 (마스킹 출력)
-.venv/bin/python -c "from popory_brief.gemini_client import api_key as k; v=k(); print('ok', v[:6]+'...'+v[-4:], len(v))"
+# 키·모델·검색 도구를 나눠서 점검 (실호출 1회, 키는 마스킹 출력)
+.venv/bin/python check_gemini.py
 ```
+
+`check_gemini.py` 는 브리핑을 돌리기 전 점검용이다. 키 형식 오류·모델 id 오류·grounding
+도구 이름 오류를 각각 구분해 알려준다 — 셋 중 무엇이 틀려도 브리핑 로그에는 "생성 실패"
+한 줄만 남아서, 원인을 가려내려면 이 단계가 따로 있어야 한다.
 
 선택 튜닝 (기본값으로 충분하다).
 
