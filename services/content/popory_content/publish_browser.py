@@ -25,6 +25,7 @@ import json
 import os
 import re
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -52,8 +53,12 @@ WORK_DIR = Path(os.environ.get("POPORY_PUBLISH_WORK_DIR", "/tmp/popory_publish")
 # 띄운 claude 엔 서버가 아예 없다.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 PUBLISH_CWD = os.environ.get("POPORY_PUBLISH_CWD", "")
-# 유튜브 커뮤니티 글은 비공개 옵션이 없다 — 예약 게시를 이 일수 뒤로 잡아 검수 전 노출을 막는다.
-YOUTUBE_SCHEDULE_DAYS = int(os.environ.get("POPORY_YOUTUBE_POST_SCHEDULE_DAYS", "30"))
+# 유튜브 커뮤니티 글은 비공개 옵션이 없다 — 등록 시점에서 이 시간 뒤로 예약해 검수 시간을 확보한다.
+# 처음엔 30일 뒤였는데 너무 멀어 매번 사람이 예약을 당겨야 했다(2026-09-22 운영자 요청으로 3시간).
+# **예약 시각이 지나면 검수 여부와 무관하게 공개된다** — 검수는 이 시간 안에 끝나야 한다.
+YOUTUBE_SCHEDULE_HOURS = float(os.environ.get("POPORY_YOUTUBE_POST_SCHEDULE_HOURS", "3"))
+# Studio 예약 선택기는 15분 단위다. 그 사이 시각을 주면 에이전트가 임의로 반올림한다 — 여기서 올려 준다.
+YOUTUBE_SCHEDULE_SLOT_MINUTES = 15
 # 성공 보고를 믿기 전에 본문이 실제로 들어갔는지 대조하는 하한 비율. 2026-09-05 티스토리에 제목·태그만
 # 들어가고 본문이 빈 글이 "등록 완료" 로 보고됐다 — 편집기 모드 전환이 본문을 날렸는데 확인을 안 했다.
 # 그래서 성공 보고에 body_chars(편집기에서 확인한 본문 글자 수)를 요구하고 원고 텍스트 길이와 견준다.
@@ -249,7 +254,21 @@ def _write_payload(task: dict[str, Any]) -> tuple[Path, Path]:
     return body, meta
 
 
-def build_instructions(task: dict[str, Any], body_path: Path) -> str:
+def youtube_schedule_at(now: datetime | None = None) -> datetime:
+    """커뮤니티 글 예약 시각 — 지금 + YOUTUBE_SCHEDULE_HOURS 를 15분 단위로 **올림**. 워커의 로컬 시간대.
+
+    구체적인 시각을 지시문에 박는다. "3시간 뒤" 처럼 상대값으로 주면 에이전트가 브라우저 작업 도중의
+    시각 기준으로 제각각 계산한다."""
+    base = now if now is not None else datetime.now().astimezone()
+    at = base + timedelta(hours=YOUTUBE_SCHEDULE_HOURS)
+    at = at.replace(second=0, microsecond=0)
+    over = at.minute % YOUTUBE_SCHEDULE_SLOT_MINUTES
+    if over:
+        at += timedelta(minutes=YOUTUBE_SCHEDULE_SLOT_MINUTES - over)
+    return at
+
+
+def build_instructions(task: dict[str, Any], body_path: Path, *, now: datetime | None = None) -> str:
     """플랫폼별 단계 지시문. 스킬 호출은 사용자 메시지 첫 줄의 `/스킬명` 으로 한다."""
     kind = task["target"]["kind"]
     title = task["title"]
@@ -281,11 +300,15 @@ def build_instructions(task: dict[str, Any], body_path: Path) -> str:
             "6. 비공개가 선택된 것을 확인한 뒤 '비공개 저장/발행' 하고, 그 글을 열어 **본문이 실제로 보이는지** 확인합니다. 글 주소를 url 에 넣습니다.",
         ]
     else:  # youtube-community
+        at = youtube_schedule_at(now)
+        tz = at.tzname() or "로컬"
+        when = f"{at:%Y-%m-%d %H:%M} ({tz})"
         steps = [
             "대상: YouTube Studio(studio.youtube.com) → 콘텐츠 → 게시물(커뮤니티) → 만들기.",
-            "1. 본문 파일의 텍스트를 게시물 내용으로 그대로 입력합니다(해시태그 포함).",
-            f"2. 커뮤니티 글에는 비공개 옵션이 없습니다. **'예약'** 을 골라 오늘로부터 {YOUTUBE_SCHEDULE_DAYS}일 뒤로 잡아 검수 전에는 노출되지 않게 합니다. 예약이 불가능하면 게시하지 말고 reason=no_private_option 으로 보고합니다.",
-            "3. 예약된 게시물의 주소(또는 Studio 게시물 목록 주소)를 url 에 넣습니다.",
+            "1. 본문 파일의 텍스트를 게시물 내용으로 그대로 입력합니다(해시태그 포함). 입력 후 편집창에 글이 남아 있는지 보고 **글자 수를 셉니다** — 이 값이 body_chars 입니다.",
+            f"2. 커뮤니티 글에는 비공개 옵션이 없습니다. **'예약'** 을 골라 **{when}** 으로 잡습니다(등록 시점 {YOUTUBE_SCHEDULE_HOURS:g}시간 뒤, 15분 단위 올림). 선택기가 그 시각을 못 고르면 **그 이후의 가장 가까운** 시각을 고릅니다 — 더 이른 시각은 안 됩니다. Studio 의 시간대가 {tz} 와 다르면 같은 순간이 되게 환산합니다. 예약이 불가능하면 게시하지 말고 reason=no_private_option 으로 보고합니다.",
+            "3. 예약 후 게시물 목록에서 그 글이 **'예약됨'** 으로 보이고 본문이 들어 있는지 확인합니다. 목록에서 본문이 안 보이면 열어서 확인합니다.",
+            "4. 예약된 게시물의 주소(또는 Studio 게시물 목록 주소)를 url 에, visibility 에는 \"scheduled\" 를, note 에 예약 시각을 넣습니다.",
         ]
     tail = ["", "--- 본문 전문 ---", task["draft"]]
     return "\n".join(head + steps + tail)
@@ -334,7 +357,9 @@ def publish(task: dict[str, Any], *, runner=None, call=run_claude_cli_once) -> d
         return {"status": "failed", "error": msg[:500]}
     if result.get("ok"):
         url = str(result.get("url") or "")[:2000]
-        if str(result.get("visibility") or "private") not in ("private", "scheduled"):
+        # 이 검사의 목적은 **공개 게시**를 잡는 것이다. 에이전트가 '예약'·'비공개' 처럼 한글로 적어도
+        # 공개는 아니므로 통과시킨다 — 표기 차이로 성공한 예약을 실패로 돌리면 사람이 헛수고를 한다.
+        if str(result.get("visibility") or "private").strip().lower() not in ("private", "scheduled", "비공개", "예약"):
             # 스킬이 공개로 올렸다고 보고하면 성공으로 기록하지 않는다 — 사람이 바로 확인해야 한다.
             return {"status": "failed", "error": f"공개 상태로 등록됨({result.get('visibility')}) — 즉시 확인 필요: {url}"[:500]}
         body_problem = check_body(result, task.get("draft", ""))

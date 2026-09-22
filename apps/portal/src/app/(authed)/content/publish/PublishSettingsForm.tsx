@@ -56,7 +56,7 @@ export function PublishSettingsForm({ initial }: { initial: PublishSettings }) {
           <input type="checkbox" checked={s.youtube_community} onChange={(e) => setS({ ...s, youtube_community: e.target.checked })} />
           ‘오늘의 인생 문장’ 게시글을 YouTube Studio 에 등록
         </label>
-        <p className="mt-1 text-xs text-popory-muted">커뮤니티 글에는 비공개 옵션이 없어 30일 뒤 예약으로 올립니다. 검수 후 예약 시각을 바꾸거나 바로 게시하세요.</p>
+        <p className="mt-1 text-xs text-popory-muted">커뮤니티 글에는 비공개 옵션이 없어 등록 시점 3시간 뒤로 예약합니다. 그 안에 검수하세요 — 예약 시각이 지나면 그대로 공개됩니다. 미리 게시하거나 미루려면 Studio 에서 예약을 바꾸세요.</p>
       </fieldset>
       <fieldset>
         <legend className="text-sm font-medium text-popory-fg">자동 발행</legend>

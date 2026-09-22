@@ -32,7 +32,21 @@ def test_instructions_force_private_per_platform(tmp_path):
     tistory = pb.build_instructions(_task("tistory"), body)
     assert "HTML' 모드" in tistory and "'비공개'" in tistory
     yt = pb.build_instructions(_task("youtube-community", "youtube-post"), body)
-    assert "예약" in yt and f"{pb.YOUTUBE_SCHEDULE_DAYS}일" in yt and "no_private_option" in yt
+    assert "예약" in yt and "no_private_option" in yt and "body_chars" in yt
+
+
+def test_youtube_schedule_is_three_hours_out_rounded_up_to_slot():
+    """커뮤니티 글 예약은 등록 시점 + 3시간, 15분 단위 올림. 30일은 너무 멀어 매번 사람이 당겨야 했다."""
+    from datetime import datetime, timezone, timedelta
+    kst = timezone(timedelta(hours=9), "KST")
+    now = datetime(2026, 9, 22, 18, 7, 42, tzinfo=kst)
+    at = pb.youtube_schedule_at(now)
+    assert at == datetime(2026, 9, 22, 21, 15, tzinfo=kst)          # 21:07 → 21:15 로 올림
+    assert pb.youtube_schedule_at(datetime(2026, 9, 22, 18, 0, tzinfo=kst)) == datetime(2026, 9, 22, 21, 0, tzinfo=kst)
+    # 지시문에는 상대값이 아니라 구체적 시각이 박힌다 — 에이전트가 제각각 계산하지 않게
+    yt = pb.build_instructions(_task("youtube-community", "youtube-post"), Path("/tmp/x.txt"), now=now)
+    assert "2026-09-22 21:15 (KST)" in yt and "30일" not in yt
+    assert "가장 가까운" in yt and "더 이른 시각은 안 됩니다" in yt
 
 
 def test_parse_publish_result():
@@ -96,6 +110,11 @@ def test_publish_maps_results_and_writes_payload_files(tmp_path):
     # 공개로 올렸다고 보고하면 성공으로 치지 않는다
     r = pb.publish(_task(), runner=lambda **kw: kw["parse"]('<publish_result>{"ok": true, "url": "u", "visibility": "public", "body_chars": 20}</publish_result>'))
     assert r["status"] == "failed" and "즉시 확인" in r["error"]
+    # 예약(커뮤니티)·한글 표기는 공개가 아니다 — 표기 차이로 성공을 실패로 돌리지 않는다
+    for vis in ("scheduled", "Scheduled", "예약", "비공개"):
+        r = pb.publish(_task("youtube-community", "youtube-post"),
+                       runner=lambda **kw: kw["parse"]('<publish_result>{"ok": true, "url": "u", "visibility": "%s", "body_chars": 20}</publish_result>' % vis))
+        assert r["status"] == "done", vis
 
 
 def test_publish_fail_open_on_cli_error():
