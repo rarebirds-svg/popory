@@ -912,3 +912,18 @@ def test_generate_gemini_failure_without_cli_does_not_try_fallback(monkeypatch, 
     r = rec.one(generate_brief)
     assert r["status"] == "gemini_fail"
     assert "fallback" not in r
+
+
+def test_generate_past_date_tells_model_the_day_is_over(monkeypatch):
+    """자정을 넘긴 재시도(run_daily --date=전날)는 그날이 다 지난 시점으로 알린다.
+
+    0시로 알리면 모델이 그날 기사는 아직 없다고 보고 전일 기사로 채운다."""
+    _patch(monkeypatch, generate_brief)
+    seen, _stub = _gemini_then_claude(monkeypatch, gemini_client.GeminiError("x", exit_code=4),
+                                      _Completed(0, stdout=_TAGGED_OK))
+    _gemini_argv(monkeypatch)   # --date 2026-09-15, 대체 끔
+
+    with pytest.raises(SystemExit):
+        generate_brief.main()
+
+    assert "지금은 2026-09-15 23:59 (KST)" in seen["user_msg"]

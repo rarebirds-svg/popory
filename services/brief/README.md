@@ -166,6 +166,11 @@ ${BRIEF_DIR}/.venv/bin/python ${BRIEF_DIR}/publish_to_portal.py \
   키·결제(3)였으면 `__BRIEF_AUTH_FAIL__=gemini` 를 남긴다. 그 밖엔 claude 경로의 exit code 그대로.
 - 끄기. `BRIEF_FALLBACK_MODEL=off`. claude CLI 가 없는 머신에서는 자동으로 꺼진다.
 
+**자정을 넘긴 재시도.** `retry_pending.sh`(10분마다)는 오늘과 전날 pending 중 리셋 시각이 지난
+것을 전날 것부터 하나 처리한다. 전날 항목은 `run_daily.sh --date=<전날>` 로 원래 날짜의 브리핑으로
+생성·발행하고 로그도 그날 파일에 남긴다. 예전엔 오늘 날짜 pending 만 봐서, 2026-09-14 09:27 claude
+한도(리셋 09-15 01:00)로 실패한 7개 카테고리가 재시도 없이 통째로 유실됐다. 이틀 이상 지난 pending 은 보지 않는다.
+
 Gemini 로 보낼 때는 카테고리 매뉴얼 끝에 실행 환경 안내를 덧붙인다
 (`gemini_client.TOOL_NOTE`). 매뉴얼은 claude CLI 기준이라 "WebFetch 로 열어 확인" 같은 절차가
 있는데 Gemini 에는 Google Search 하나뿐이다 — 할 수 없는 절차를 무엇으로 대신할지 적어 둔다.

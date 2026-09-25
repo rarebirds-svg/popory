@@ -215,6 +215,10 @@ def main() -> None:
         date_obj = datetime.datetime.now(KST)
     date_str = date_obj.strftime("%Y-%m-%d")
     now_str = date_obj.strftime("%Y-%m-%d %H:%M")
+    # 지난 날짜(자정을 넘긴 한도 재시도)는 그날이 다 지난 시점으로 알린다. 0시로 알리면
+    # 모델이 "오늘 기사는 아직 없다" 고 보고 전일 기사로 채운다.
+    if args.date and date_obj.date() < datetime.datetime.now(KST).date():
+        now_str = f"{date_str} 23:59"
     published_at = int(date_obj.timestamp())
 
     # 카테고리 매뉴얼 + 공통 SEO 규칙(제목 형식·소제목·키워드 배치·표). 규칙은 한 곳(seo_rules.py)에만 둔다.
