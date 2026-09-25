@@ -160,6 +160,7 @@ fetch_subscribers     exit ≠ 0  →  routine 중단.
 send_gmail (1명)      exit ≠ 0  →  해당 수신자 skip, 다음 진행.
 send_gmail 전원 실패            →  publish 호출 안 함.
 publish_to_portal     exit ≠ 0  →  메일은 이미 갔으므로 로그만 남기고 종료.
+fetch_custom_topics   exit ≠ 0  →  "custom_topics lookup failed" 로그, 커스텀 주제만 skip (빈 목록은 exit 0).
 ```
 
 ## 4-1. 인용 링크 점검

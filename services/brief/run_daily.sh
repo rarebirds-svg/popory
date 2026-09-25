@@ -139,19 +139,17 @@ print(sign_for_portal(m, area='custom-service'), end='')
 
 if [ -n "${ONLY_SLUG}" ]; then
   # --only 모드에서는 커스텀 주제 생성 skip
-  CUSTOM_TOPICS_JSON='{"topics":[]}'
+  CUSTOM_SLUGS=""
 else
-  CUSTOM_TOPICS_JSON=$(curl -sf \
-    -H "Authorization: Bearer $(${VENV_PY} -c "${SERVICE_JWT_PY}" 2>/dev/null)" \
-    "${POPORY_PORTAL_API_BASE}/api/brief/custom-topics/active" 2>/dev/null || echo '{"topics":[]}')
+  # 빈 목록(exit 0)과 조회 실패(비제로)를 가른다. 종전엔 JWT 서명·curl·파싱 중 어디가 실패해도
+  # 빈 목록으로 삼켜 그날 커스텀 주제가 소리 없이 빠졌다. 실패는 헬스체크가 이 줄로 잡는다.
+  CUSTOM_SLUGS=$("${VENV_PY}" "${BRIEF_DIR}/fetch_custom_topics.py" 2>>"${LOG_FILE}")
+  CUSTOM_LOOKUP_EXIT=$?
+  if [ ${CUSTOM_LOOKUP_EXIT} -ne 0 ]; then
+    log "\"custom_topics lookup failed exit=${CUSTOM_LOOKUP_EXIT}\""
+    CUSTOM_SLUGS=""
+  fi
 fi
-
-CUSTOM_SLUGS=$( echo "${CUSTOM_TOPICS_JSON}" | /usr/bin/python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for t in data.get('topics', []):
-    print(t['id'], t['name'].replace(' ', '_'))
-" 2>/dev/null || true)
 
 if [ -n "${CUSTOM_SLUGS}" ]; then
   declare -a CUSTOM_IDS=()
