@@ -14,6 +14,7 @@
     POPORY_PORTAL_API_BASE  포털 API base (예: https://api.poporyfamily.com)
 """
 import os
+import re
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -49,8 +50,9 @@ def main() -> None:
     except PortalError as e:
         _fail("fetch_fail", str(e), e.exit_code)
     # 전부 만든 뒤 한 번에 찍는다 — 중간 항목이 깨졌을 때 앞 항목만 나가면 부분 목록이 성공처럼 보인다.
-    # 이름의 공백은 `_` 로 — run_daily.sh 가 `read -r TID TNAME` 으로 읽고 되돌린다.
-    lines = [f"{t['id']} {t['name'].replace(' ', '_')}" for t in body["topics"]]
+    # 이름의 공백류는 `_` 로 — run_daily.sh 가 `read -r TID TNAME` 으로 읽고 되돌린다. 개행까지
+    # 바꾸는 이유. 이름은 포털 사용자 입력이라, 개행이 남으면 둘째 줄이 별도 주제(임의 id)로 읽힌다.
+    lines = [f"{t['id']} " + re.sub(r"\s", "_", t["name"]) for t in body["topics"]]
     if lines:
         print("\n".join(lines))
 

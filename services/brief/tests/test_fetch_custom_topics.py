@@ -59,6 +59,17 @@ def test_prints_one_line_per_topic_for_run_daily(env, capsys):
 
 
 @responses.activate
+def test_newline_in_name_cannot_inject_another_topic_line(env, capsys):
+    """이름은 포털 사용자 입력이다. 개행이 그대로 나가면 run_daily.sh 가 둘째 줄을 별도
+    주제(임의 id·이름)로 읽어 생성·발행한다."""
+    responses.add(responses.GET, ACTIVE, status=200, json={"topics": [
+        {"id": "t1", "name": "AI\nfffffffffffff 가짜\t주제"},
+    ]})
+    fetch_custom_topics.run()
+    assert capsys.readouterr().out == "t1 AI_fffffffffffff_가짜_주제\n"
+
+
+@responses.activate
 def test_signs_with_custom_service_area(env, capsys):
     """포털 requireService 가 받는 서비스 토큰이어야 한다 — 틀리면 prod 에서 매일 401 이다."""
     responses.add(responses.GET, ACTIVE, status=200, json={"topics": []})
