@@ -26,6 +26,16 @@ import requests
 # 단 한 단계 균형 괄호는 URL 의 일부로 받는다 — 위키식 `Foo_(bar)` 를 `Foo_(bar` 로 자르면
 # 없는 주소를 404 로 판정하고 링크를 벗길 때 `)` 가 본문에 남는다.
 URL_RE = re.compile(r"""https?://(?:\([^\s()\]<>"'`]*\)|[^\s)\]<>"'`])+""")
+# 인라인 링크 `[텍스트](목적지 "title")` 와 자동링크 `<URL>`.
+# 텍스트는 한 단계 중첩 대괄호(`[[단독] 제목]`)와 이스케이프를, 목적지는 `<URL>` 표기와
+# 한 단계 균형 괄호를 받는다 — URL_RE 가 뽑는 주소와 같은 범위다.
+_TEXT = r"(?:[^\[\]\\]|\\.|\[(?:[^\[\]\\]|\\.)*\])*"
+_DEST = r"<([^<>\n]*)>|((?:[^\s()\\]|\\.|\((?:[^\s()\\]|\\.)*\))+)"
+_TITLE = r"""(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?"""
+_LINK_RE = re.compile(
+    rf"\[({_TEXT})\]\(\s*(?:{_DEST}){_TITLE}\s*\)|<(https?://[^\s<>]*)>", re.S)
+# 본문을 한 번 훑어 링크(목적지)와 맨 URL 을 등장 순서대로 찾는다.
+_TOKEN_RE = re.compile(f"{_LINK_RE.pattern}|{URL_RE.pattern}", re.S)
 # 없는 문서라고 단정할 수 있는 상태코드만. 나머지는 판정 불가로 본다.
 DEAD_CODES = frozenset({404, 410})
 # HEAD 를 막는 서버가 있다 — 이때만 GET 으로 한 번 더 본다.
@@ -57,10 +67,19 @@ def mode() -> str:
 
 
 def extract_urls(markdown: str, *, limit: int = MAX_URLS) -> list[str]:
-    """본문에서 중복 없는 URL 목록. 등장 순서를 유지하고 limit 개까지만 본다."""
+    """본문에서 중복 없는 URL 목록. 등장 순서를 유지하고 limit 개까지만 본다.
+
+    마크다운 링크는 목적지를 그대로 쓴다. strip_dead_links 가 같은 문자열로 대조하므로 여기서
+    모양을 바꾸면 점검한 주소와 벗기는 링크가 어긋난다 — `…/Apple_Inc.` 를 `…/Apple_Inc` 로
+    점검하면 살아 있는 링크를 벗기거나 죽은 링크를 놓친다. 문장 끝 구두점은 맨 URL 에서만 뗀다."""
     seen: dict[str, None] = {}
-    for m in URL_RE.finditer(markdown or ""):
-        url = m.group(0).rstrip(".,;:")   # 문장 끝 구두점이 붙어 오는 경우
+    for m in _TOKEN_RE.finditer(markdown or ""):
+        if m.group(0)[0] in "[<":
+            url = _link_url(m)
+            if not url.startswith(("http://", "https://")):
+                continue
+        else:
+            url = m.group(0).rstrip(".,;:")   # 문장 끝 구두점이 붙어 오는 경우
         if url not in seen:
             seen[url] = None
         if len(seen) >= limit:
@@ -93,14 +112,16 @@ def dead_links(markdown: str, *, timeout: float = TIMEOUT_SECONDS,
     return [(u, c) for u, c in zip(urls, codes) if c in DEAD_CODES]
 
 
-# 인라인 링크 `[텍스트](목적지 "title")` 와 자동링크 `<URL>`.
-# 텍스트는 한 단계 중첩 대괄호(`[[단독] 제목]`)와 이스케이프를, 목적지는 `<URL>` 표기와
-# 한 단계 균형 괄호를 받는다 — URL_RE 가 뽑는 주소와 같은 범위다.
-_TEXT = r"(?:[^\[\]\\]|\\.|\[(?:[^\[\]\\]|\\.)*\])*"
-_DEST = r"<([^<>\n]*)>|((?:[^\s()\\]|\\.|\((?:[^\s()\\]|\\.)*\))+)"
-_TITLE = r"""(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?"""
-_LINK_RE = re.compile(
-    rf"\[({_TEXT})\]\(\s*(?:{_DEST}){_TITLE}\s*\)|<(https?://[^\s<>]*)>", re.S)
+def _link_url(m: re.Match[str]) -> str:
+    """_LINK_RE 매치의 목적지(`<URL>` 표기면 괄호 안, 자동링크면 그 URL)."""
+    return m.group(2) or m.group(3) or m.group(4) or ""
+
+
+def _same_address(text: str, url: str) -> bool:
+    """텍스트가 스킴·`www.`·끝 `/` 만 다른 같은 주소인가 — 렌더러는 이런 텍스트도 링크로 만든다."""
+    def bare(s: str) -> str:
+        return re.sub(r"^(?:https?://)?(?:www\.)?", "", s.strip()).rstrip("/")
+    return bare(text) == bare(url)
 
 
 def strip_dead_links(markdown: str, dead_urls: list[str]) -> tuple[str, int]:
@@ -113,8 +134,9 @@ def strip_dead_links(markdown: str, dead_urls: list[str]) -> tuple[str, int]:
     목적지가 죽은 주소와 정확히 같을 때만 벗긴다. 접두 일치로 보면 `…/a` 가 죽었을 때
     살아 있는 `…/a?b=1` 까지 벗겨진다.
 
-    텍스트가 URL 자체(`[URL](URL)`, `<URL>`)면 표기만 벗겨도 맨 URL 이 남아 메일(linkify)·
-    포털(remark-gfm)이 다시 링크로 만든다. 그 URL 은 코드 표기로 바꿔 보이되 눌리지 않게 한다.
+    텍스트가 URL 자체(`[URL](URL)`, `<URL>`, 스킴·www 만 다른 표기)면 표기만 벗겨도 맨 URL 이
+    남아 메일(linkify)·포털(remark-gfm)이 다시 링크로 만든다. 그 URL 은 코드 표기로 바꿔 보이되
+    눌리지 않게 한다.
 
     마크다운 링크가 아닌 맨 URL 은 손대지 않는다 — 문장 구조를 모르는 채로 지우면 문맥이
     깨진다. 그런 경우는 로그의 dead 목록으로 남아 사람이 판단한다."""
@@ -123,12 +145,13 @@ def strip_dead_links(markdown: str, dead_urls: list[str]) -> tuple[str, int]:
 
     def _degrade(m: re.Match[str]) -> str:
         nonlocal replaced
-        text, url = m.group(1), m.group(2) or m.group(3) or m.group(4)
+        url = _link_url(m)
         if url not in dead:
             return m.group(0)
         replaced += 1
-        if text is None:   # 자동링크 — 텍스트가 곧 URL
-            return f"`{url}`"
+        text = url if m.group(1) is None else m.group(1)   # 자동링크는 텍스트가 곧 URL
+        if _same_address(text, url):
+            return f"`{text.strip()}`"
         return text.replace(url, f"`{url}`")
 
     return _LINK_RE.sub(_degrade, markdown), replaced

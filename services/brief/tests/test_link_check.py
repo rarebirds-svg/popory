@@ -256,6 +256,32 @@ def test_degrade_keeps_live_link_with_parentheses(monkeypatch):
     assert lc.strip_dead_links(body, dead) == (body, 0)
 
 
+@pytest.mark.parametrize("codes,expected", [
+    # 목적지 끝의 `.` 까지가 주소다. 떼고 점검하면 죽은 링크를 놓친다.
+    ({"https://x.test/a.": 404, "https://x.test/a": 200}, ("t", 1)),
+    # 반대로 뗀 주소로 판정해 벗기면 살아 있는 링크(위키 `Apple_Inc.` 형태)가 사라진다.
+    ({"https://x.test/a.": 200, "https://x.test/a": 404}, ("[t](https://x.test/a.)", 0)),
+])
+def test_degrade_checks_link_destination_verbatim(monkeypatch, codes, expected):
+    body = "[t](https://x.test/a.)"
+    _stub(monkeypatch, codes)
+    dead = [u for u, _ in lc.dead_links(body)]
+    assert lc.strip_dead_links(body, dead) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "www.lawtimes.co.kr/news/articleView.html?idxno=226414",
+    "lawtimes.co.kr/news/articleView.html?idxno=226414",
+    "http://www.lawtimes.co.kr/news/articleView.html?idxno=226414",
+])
+def test_strip_dead_links_neutralizes_url_text_written_differently(text):
+    """스킴·www 만 다른 같은 주소도 렌더러가 다시 링크로 만든다."""
+    out, n = lc.strip_dead_links(f"- [{text}]({_DEAD})\n", [_DEAD])
+    assert out == f"- `{text}`\n"
+    assert n == 1
+    assert "href" not in _email_html(out)
+
+
 def test_strip_dead_links_noop_when_nothing_dead():
     body = f"- [동아 — 제목]({_LIVE})\n"
     assert lc.strip_dead_links(body, []) == (body, 0)
