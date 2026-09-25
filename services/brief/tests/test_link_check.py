@@ -35,6 +35,16 @@ def test_extract_urls_excludes_markdown_closing_bracket():
     assert lc.extract_urls("[제목](https://x.test/a)") == ["https://x.test/a"]
 
 
+def test_extract_urls_keeps_balanced_parentheses():
+    """위키식 `Foo_(bar)` 를 `Foo_(bar` 로 자르면 없는 주소를 404 로 판정하고 `)` 가 본문에 남는다."""
+    body = "[위키](https://en.wikipedia.org/wiki/Foo_(bar)) 참고"
+    assert lc.extract_urls(body) == ["https://en.wikipedia.org/wiki/Foo_(bar)"]
+
+
+def test_extract_urls_stops_at_closing_paren_that_is_not_part_of_url():
+    assert lc.extract_urls("(출처 https://x.test/a) 그리고") == ["https://x.test/a"]
+
+
 def test_extract_urls_respects_limit():
     body = " ".join(f"https://x.test/{i}" for i in range(50))
     assert len(lc.extract_urls(body, limit=5)) == 5
@@ -182,6 +192,68 @@ def test_strip_dead_links_leaves_bare_url_untouched():
     out, n = lc.strip_dead_links(body, [_DEAD])
     assert out == body
     assert n == 0
+
+
+@pytest.mark.parametrize("text", [
+    "[단독] 법률신문 — 제목 (2026.9.15)",   # 언론사 말머리
+    r"법률신문 — 제목 \[속보\]",            # 이스케이프된 대괄호
+])
+def test_strip_dead_links_handles_brackets_in_link_text(text):
+    body = f"- [{text}]({_DEAD})\n"
+    out, n = lc.strip_dead_links(body, [_DEAD])
+    assert out == f"- {text}\n"
+    assert n == 1
+
+
+def test_strip_dead_links_handles_angle_bracket_destination():
+    body = f"- [법률신문 — 제목](<{_DEAD}>)\n"
+    out, n = lc.strip_dead_links(body, [_DEAD])
+    assert out == "- 법률신문 — 제목\n"
+    assert n == 1
+
+
+def _email_html(body: str) -> str:
+    """발송 경로 그대로 렌더한 HTML — 맨 URL 도 linkify 로 링크가 된다."""
+    from popory_brief.markdown import markdown_to_email_html
+    return markdown_to_email_html(body)
+
+
+@pytest.mark.parametrize("link", [f"[{_DEAD}]({_DEAD})", f"<{_DEAD}>"])
+def test_strip_dead_links_does_not_leave_url_text_clickable(link):
+    """텍스트가 URL 자체면 표기만 벗겨도 맨 URL 이 남아 렌더러가 다시 링크로 만든다.
+    코드 표기로 남겨 주소는 보이되 눌리지 않게 한다."""
+    body = f"- 출처 {link}\n"
+    out, n = lc.strip_dead_links(body, [_DEAD])
+    assert out == f"- 출처 `{_DEAD}`\n"
+    assert n == 1
+    assert "href" not in _email_html(out)
+
+
+def test_strip_dead_links_leaves_live_link_that_extends_dead_url():
+    """접두 일치로 벗기면 살아 있는 링크가 사라진다 — 주소 전체가 같아야 한다."""
+    dead = "https://x.test/a"
+    body = "[살아 있음](https://x.test/a?b=1) [죽음](https://x.test/a)"
+    out, n = lc.strip_dead_links(body, [dead])
+    assert out == "[살아 있음](https://x.test/a?b=1) 죽음"
+    assert n == 1
+
+
+def test_strip_dead_links_handles_parentheses_in_url():
+    """URL 안의 괄호를 끝으로 보면 링크가 덜 벗겨지고 `)` 가 본문에 남는다."""
+    dead = "https://en.wikipedia.org/wiki/Foo_(bar)"
+    out, n = lc.strip_dead_links(f"[위키 — Foo]({dead}) 참고", [dead])
+    assert out == "위키 — Foo 참고"
+    assert n == 1
+
+
+def test_degrade_keeps_live_link_with_parentheses(monkeypatch):
+    """잘린 주소(`Foo_(bar`)는 실제로 404 다 — 그걸로 판정하면 살아 있는 링크가 벗겨지고
+    `)` 가 본문에 남는다. 점검부터 벗기기까지 한 흐름으로 본다."""
+    full = "https://en.wikipedia.org/wiki/Foo_(bar)"
+    body = f"[위키 — Foo]({full}) 참고"
+    _stub(monkeypatch, {full: 200, full[:-1]: 404})
+    dead = [u for u, _ in lc.dead_links(body)]
+    assert lc.strip_dead_links(body, dead) == (body, 0)
 
 
 def test_strip_dead_links_noop_when_nothing_dead():

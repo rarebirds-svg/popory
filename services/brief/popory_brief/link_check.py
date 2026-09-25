@@ -23,7 +23,9 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 
 # 마크다운 링크에서 URL 만 뽑는다. 닫는 괄호·인용부호는 URL 에 포함하지 않는다.
-URL_RE = re.compile(r"""https?://[^\s)\]<>"'`]+""")
+# 단 한 단계 균형 괄호는 URL 의 일부로 받는다 — 위키식 `Foo_(bar)` 를 `Foo_(bar` 로 자르면
+# 없는 주소를 404 로 판정하고 링크를 벗길 때 `)` 가 본문에 남는다.
+URL_RE = re.compile(r"""https?://(?:\([^\s()\]<>"'`]*\)|[^\s)\]<>"'`])+""")
 # 없는 문서라고 단정할 수 있는 상태코드만. 나머지는 판정 불가로 본다.
 DEAD_CODES = frozenset({404, 410})
 # HEAD 를 막는 서버가 있다 — 이때만 GET 으로 한 번 더 본다.
@@ -91,9 +93,14 @@ def dead_links(markdown: str, *, timeout: float = TIMEOUT_SECONDS,
     return [(u, c) for u, c in zip(urls, codes) if c in DEAD_CODES]
 
 
-# 마크다운 링크 `[텍스트](URL)`. URL 뒤에 공백·title 이 붙는 변형까지 받는다.
-def _link_pattern(url: str) -> re.Pattern[str]:
-    return re.compile(r"\[([^\]]*)\]\(\s*" + re.escape(url) + r"[^)]*\)")
+# 인라인 링크 `[텍스트](목적지 "title")` 와 자동링크 `<URL>`.
+# 텍스트는 한 단계 중첩 대괄호(`[[단독] 제목]`)와 이스케이프를, 목적지는 `<URL>` 표기와
+# 한 단계 균형 괄호를 받는다 — URL_RE 가 뽑는 주소와 같은 범위다.
+_TEXT = r"(?:[^\[\]\\]|\\.|\[(?:[^\[\]\\]|\\.)*\])*"
+_DEST = r"<([^<>\n]*)>|((?:[^\s()\\]|\\.|\((?:[^\s()\\]|\\.)*\))+)"
+_TITLE = r"""(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?"""
+_LINK_RE = re.compile(
+    rf"\[({_TEXT})\]\(\s*(?:{_DEST}){_TITLE}\s*\)|<(https?://[^\s<>]*)>", re.S)
 
 
 def strip_dead_links(markdown: str, dead_urls: list[str]) -> tuple[str, int]:
@@ -103,11 +110,25 @@ def strip_dead_links(markdown: str, dead_urls: list[str]) -> tuple[str, int]:
     출처 자체를 지우면 근거 없는 주장이 되고, 링크를 두면 열리지 않는 약속이 된다. 매체·제목·
     날짜는 남겨 독자가 직접 검색할 수 있게 하는 편이 둘 다보다 낫다.
 
+    목적지가 죽은 주소와 정확히 같을 때만 벗긴다. 접두 일치로 보면 `…/a` 가 죽었을 때
+    살아 있는 `…/a?b=1` 까지 벗겨진다.
+
+    텍스트가 URL 자체(`[URL](URL)`, `<URL>`)면 표기만 벗겨도 맨 URL 이 남아 메일(linkify)·
+    포털(remark-gfm)이 다시 링크로 만든다. 그 URL 은 코드 표기로 바꿔 보이되 눌리지 않게 한다.
+
     마크다운 링크가 아닌 맨 URL 은 손대지 않는다 — 문장 구조를 모르는 채로 지우면 문맥이
     깨진다. 그런 경우는 로그의 dead 목록으로 남아 사람이 판단한다."""
-    out = markdown
+    dead = set(dead_urls)
     replaced = 0
-    for url in dead_urls:
-        out, n = _link_pattern(url).subn(lambda m: m.group(1), out)
-        replaced += n
-    return out, replaced
+
+    def _degrade(m: re.Match[str]) -> str:
+        nonlocal replaced
+        text, url = m.group(1), m.group(2) or m.group(3) or m.group(4)
+        if url not in dead:
+            return m.group(0)
+        replaced += 1
+        if text is None:   # 자동링크 — 텍스트가 곧 URL
+            return f"`{url}`"
+        return text.replace(url, f"`{url}`")
+
+    return _LINK_RE.sub(_degrade, markdown), replaced
