@@ -129,7 +129,7 @@ done
 
 # 3) 발송 끝난 뒤 publish 1회
 ${BRIEF_DIR}/.venv/bin/python ${BRIEF_DIR}/publish_to_portal.py \
-  --area brief --meta-file "$META" --body-file "$BODY"
+  --area brief-{slug} --meta-file "$META" --body-file "$BODY"
 ```
 
 ## 4. Exit code 규약

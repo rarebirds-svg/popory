@@ -1,7 +1,7 @@
 # 그날의 brief 본문을 portal에 publish 하는 CLI (하루 1회 호출)
 """
 사용법.
-    python publish_to_portal.py --area brief \\
+    python publish_to_portal.py --area brief-{slug} \\
         --meta-file /tmp/brief_YYYY-MM-DD.meta.json \\
         --body-file /tmp/brief_YYYY-MM-DD.md
 
@@ -73,7 +73,10 @@ def publish(*, area: str, meta_file: Path, body_file: Path, replace_same_day: bo
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--area", default="brief")
+    # 기본값을 두지 않는다. 2026-09-25 수동 발행에서 --area 가 빠져 블로그판이 기본값 "brief" 영역으로
+    # 조용히 들어갔고, 제 영역(brief-realestate-pick5-blog)에는 발행이 없었다.
+    p.add_argument("--area", required=True,
+                   help="발행 영역 — 카테고리는 brief-{slug}, 커스텀 주제는 custom-{id}")
     p.add_argument("--meta-file", required=True)
     p.add_argument("--body-file", required=True)
     p.add_argument("--replace-same-day", action="store_true",

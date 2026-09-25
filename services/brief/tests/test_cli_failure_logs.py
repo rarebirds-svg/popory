@@ -549,7 +549,7 @@ def test_unexpected_exception_keeps_exit_code_and_traceback(tmp_path):
         "from pathlib import Path",
         "import publish_to_portal",
         f"publish_to_portal.LOGS_DIR = Path({str(logs_dir)!r})",
-        f"sys.argv = ['cli', '--meta-file', {meta!r}, '--body-file', {str(tmp_path / 'no-body.md')!r}]",
+        f"sys.argv = ['cli', '--area', 'brief-naver', '--meta-file', {meta!r}, '--body-file', {str(tmp_path / 'no-body.md')!r}]",
         "publish_to_portal.run()",
     ])
     env = {k: v for k, v in os.environ.items()
@@ -1015,3 +1015,11 @@ def test_generate_todays_date_keeps_run_time(monkeypatch):
 
     published_at = int(seen["user_msg"].split("published_at은 ")[1].split("을")[0])
     assert abs(published_at - now.timestamp()) < 60
+
+
+def test_publish_requires_area(monkeypatch, tmp_path):
+    """--area 를 빠뜨리면 기본 영역으로 조용히 발행하지 않고 인자 오류로 멈춘다(2026-09-25 오발행)."""
+    _argv(monkeypatch, "--meta-file", str(tmp_path / "m.json"), "--body-file", str(tmp_path / "b.md"))
+    with pytest.raises(SystemExit) as e:
+        publish_to_portal.main()
+    assert e.value.code == 2
