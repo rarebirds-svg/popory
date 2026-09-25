@@ -162,6 +162,8 @@ _BRIEF_FAIL_MARKERS = (
 _BRIEF_DONE = re.compile(
     r'done dry_run=\d+ generated_ok=(\d+) failed=([^\s"]+) limit_fail=([^\s"]+) auth_fail=([^\s"]+)'
 )
+# run_daily.sh 4단계가 커스텀 주제 조회에 실패하면 남기는 줄. 빈 목록(주제 없음)과 구분된다.
+_BRIEF_CUSTOM_LOOKUP_FAIL = "custom_topics lookup failed"
 
 
 def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
@@ -175,12 +177,24 @@ def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
     한도·인증을 구분해 띄운다. 인증 만료는 사람이 /login 해야만 풀리므로 가장
     먼저, 가장 구체적으로 알려야 한다.
 
-    오전(am)은 생성 창과 겹치므로 미완료를 경보하지 않는다 — 확정은 pm 이 한다."""
+    오전(am)은 생성 창과 겹치므로 미완료를 경보하지 않는다 — 확정은 pm 이 한다.
+
+    커스텀 주제 조회 실패는 위 판정에 덧붙여 warn 으로 올린다. 조회는 done 몇 초 전에
+    일어나고 재시도(--only)가 다시 하지 않으므로, done 이 정상이어도 그날 커스텀 주제는
+    빠진 것이다 — done 전에만 보는 실패 마커로는 점검 시각에 이미 안 보인다. 수동 전체
+    재실행으로 복구한 날도 경고가 남는다(드물고, 복구한 사람이 안다)."""
     try:
         with open(log_path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
         return ("warn", "오늘 브리핑 잡 미기동 — 로그 없음(launchd 로드 여부 확인)")
+    status, msg = _brief_run_verdict(text, mode)
+    if _BRIEF_CUSTOM_LOOKUP_FAIL in text:
+        return ("warn", f"{msg} · 커스텀 주제 조회 실패 — 오늘 커스텀 주제 생략")
+    return (status, msg)
+
+
+def _brief_run_verdict(text: str, mode: str) -> tuple[str, str]:
     dones = _BRIEF_DONE.findall(text)
     if dones:
         ok, failed, limit, auth = dones[-1]
