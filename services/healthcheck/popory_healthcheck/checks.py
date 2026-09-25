@@ -1,4 +1,5 @@
 # popory 상태 점검 함수 모음 — 각자 (status, message) 반환, 예외는 fail로 환원.
+import json
 import os
 import re
 import subprocess
@@ -157,11 +158,56 @@ _BRIEF_FAIL_MARKERS = (
     ('"status": "claude_fail"', "Claude 호출 실패"),
     ('"status": "parse_fail"', "응답 파싱 실패"),
 )
+# generate_brief 가 Gemini 실패 시 claude 로 대체 생성할 때 gemini_fail 에 이 필드를 싣는다.
+# 대체 중인 실패는 진행 중 경보에서 뺀다 — 대체가 성공하면 실패가 아니다.
+_GEMINI_FAIL = '"status": "gemini_fail"'
+_FALLBACK_FIELD = '"fallback": "'
+# run_daily.sh 가 generate 출력(stdout)을 로그에 합칠 때 남는 Gemini 키·결제 실패 마커.
+_GEMINI_AUTH_MARKER = "__BRIEF_AUTH_FAIL__=gemini"
+_CAUSE_MAX = 40
 # run_daily.sh 종료부 요약. 하루에 여러 번 찍힐 수 있다(정규 + 재시도 + 수동) —
 # 마지막 것이 그날의 최종 상태다.
 _BRIEF_DONE = re.compile(
     r'done dry_run=\d+ generated_ok=(\d+) failed=([^\s"]+) limit_fail=([^\s"]+) auth_fail=([^\s"]+)'
 )
+
+
+def _brief_records(text: str) -> list[dict]:
+    """generate_brief 가 남긴 JSONL 레코드만 추린다. 깨진 줄·셸 로그는 건너뛴다."""
+    out = []
+    for line in text.splitlines():
+        if '"cli": "generate_brief"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
+def _cause(rec: dict) -> str:
+    """실패 레코드 → 짧은 원인. 진단 꼬리(" — usage=…")는 떼고 앞부분만 쓴다."""
+    err = str(rec.get("error") or rec.get("status") or "").split(" — ")[0].strip()
+    return err[:_CAUSE_MAX]
+
+
+def _causes_by_slug(records: list[dict], slugs: list[str], *, fallback_only: bool = False) -> str:
+    """카테고리별 실패 원인을 시간순으로 이어 붙인다. 같은 원인이 반복되면 한 번만 적는다."""
+    parts = []
+    for slug in slugs:
+        seen: list[str] = []
+        for rec in records:
+            if rec.get("category") != slug or not str(rec.get("status", "")).endswith("_fail"):
+                continue
+            if fallback_only and not rec.get("fallback"):
+                continue
+            c = _cause(rec)
+            if c and c not in seen:
+                seen.append(c)
+        parts.append(f"{slug}({' → '.join(seen)})" if seen else slug)
+    return ", ".join(parts)
 
 
 def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
@@ -175,23 +221,42 @@ def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
     한도·인증을 구분해 띄운다. 인증 만료는 사람이 /login 해야만 풀리므로 가장
     먼저, 가장 구체적으로 알려야 한다.
 
+    실패 카테고리에는 로그에 남은 원인을 붙인다 — 2026-09-25 PICK 5 두 카테고리는
+    "생성 실패 — 슬러그" 만 떠서 Gemini 빈 응답이라는 걸 로그를 열어야 알 수 있었다.
+    Gemini 가 실패했지만 claude 대체로 발행된 날은 warn 이다. 발행은 됐어도 Gemini 쪽
+    (크레딧·키·프롬프트)을 누군가 봐야 하고, 대체가 매일 조용히 돌면 Max 사용량을 먹는다.
+
     오전(am)은 생성 창과 겹치므로 미완료를 경보하지 않는다 — 확정은 pm 이 한다."""
     try:
         with open(log_path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
         return ("warn", "오늘 브리핑 잡 미기동 — 로그 없음(launchd 로드 여부 확인)")
+    records = _brief_records(text)
     dones = _BRIEF_DONE.findall(text)
     if dones:
         ok, failed, limit, auth = dones[-1]
         if failed == "none":
+            fb_slugs = []
+            for rec in records:
+                slug = rec.get("category")
+                if rec.get("status") == "gemini_fail" and rec.get("fallback") and slug not in fb_slugs:
+                    fb_slugs.append(slug)
+            if fb_slugs:
+                return ("warn", f"브리핑 {ok}개 발행 — Gemini 실패 {len(fb_slugs)}건 Claude 대체 "
+                                f"({_causes_by_slug(records, fb_slugs, fallback_only=True)})")
             return ("ok", f"브리핑 데일리 잡 완료 — {ok}개 발행")
         if auth != "none":
+            if _GEMINI_AUTH_MARKER in text:
+                return ("warn", f"브리핑 생성 실패 — Gemini 키·결제 거부, check_gemini.py 로 원인 확인 ({auth})")
             return ("warn", f"브리핑 생성 실패 — Claude 인증 만료, 터미널에서 claude /login 필요 ({auth})")
         if limit != "none":
             return ("warn", f"브리핑 생성 실패 — Claude 세션 한도, 자동 재시도 대기 ({limit})")
-        return ("warn", f"브리핑 생성 실패 — {failed}")
+        return ("warn", f"브리핑 생성 실패 — {_causes_by_slug(records, failed.split(','))}")
     hits = [label for marker, label in _BRIEF_FAIL_MARKERS if marker in text]
+    # 대체 생성이 걸린 Gemini 실패는 아직 실패가 아니다(claude 가 쓰는 중).
+    if any(_GEMINI_FAIL in line and _FALLBACK_FIELD not in line for line in text.splitlines()):
+        hits.append("Gemini 호출 실패")
     if hits:
         return ("warn", f"브리핑 생성 실패 — {', '.join(hits)}")
     if mode == "am":

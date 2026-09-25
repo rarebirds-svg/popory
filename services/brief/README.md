@@ -90,6 +90,7 @@ printf '%s\n' '<발급받은 키>' > secrets/gemini_api_key && chmod 600 secrets
 | `BRIEF_GEMINI_SEARCH_TOOL` | `google_search` | grounding 도구 이름. 모델 세대에 따라 갈리면 여기서 교정 |
 | `BRIEF_GEMINI_MAX_OUTPUT_TOKENS` | `32768` | 출력 상한. 낮으면 본문이 잘려 태그 파싱이 깨진다 |
 | `BRIEF_GEMINI_RESET_FALLBACK_SECONDS` | `900` | 429 가 리셋 시각을 안 알려줄 때 대기 |
+| `BRIEF_FALLBACK_MODEL` | `claude-sonnet-4-6` | Gemini 실패 시 대신 쓸 claude 모델. `off` 면 대체 안 함 (§4) |
 
 ## 2-1. 모델·공급자
 
@@ -151,7 +152,23 @@ ${BRIEF_DIR}/.venv/bin/python ${BRIEF_DIR}/publish_to_portal.py \
 | 429 (plan·billing) | 3 | 쿼터 미할당 — 결제 미연결 프로젝트의 키. 재시도로 안 풀리므로 위와 같이 즉시 알린다 |
 | 5xx·타임아웃·네트워크 | 5 | 백오프 재시도 후 |
 | 그 외 4xx | 4 | 도구 이름·모델 id 오류 등. 서버 메시지를 로그에 싣는다 |
-| 본문 없음·차단 | 4 | `finishReason`(MAX_TOKENS 등)·`blockReason` 을 로그에 싣는다 |
+| candidates 없음·본문 없음 | 5 | 백오프 재시도 후. 토큰 사용량(`thoughtsTokenCount`·`toolUsePromptTokenCount` 등)·`modelVersion`·`finishReason` 을 로그 `diag` 에 싣는다 |
+| 차단·MAX_TOKENS | 4 | `blockReason`·정책 차단 `finishReason`·토큰 상한은 재시도해도 같아서 바로 넘긴다 |
+
+**claude 대체.** Gemini 가 위 어느 이유로든 재시도까지 실패하면 그 카테고리를 claude CLI 로
+한 번 더 쓴다(기본 `claude-sonnet-4-6`, 프롬프트는 claude 용 원본). 2026-09-25 부동산 PICK 5
+두 카테고리가 Gemini 빈 응답으로 그날 유실된 뒤 넣었다.
+
+- 로그. `gemini_fail` 레코드에 `"fallback": "<모델>"` 이 붙고, 이어서 claude 경로의 `ok`/`*_fail` 이 남는다.
+- 대체 성공. exit 0. 인증 마커를 남기지 않는다 — 대신 21:00 헬스체크 `브리핑잡` 이
+  "Gemini 실패 N건 Claude 대체" 로 warn 을 띄운다(크레딧·키·프롬프트를 봐야 한다는 신호).
+- 대체도 실패. Gemini 가 쿼터(6)였으면 exit 6 + Gemini 리셋 epoch(retry 잡 대기),
+  키·결제(3)였으면 `__BRIEF_AUTH_FAIL__=gemini` 를 남긴다. 그 밖엔 claude 경로의 exit code 그대로.
+- 끄기. `BRIEF_FALLBACK_MODEL=off`. claude CLI 가 없는 머신에서는 자동으로 꺼진다.
+
+Gemini 로 보낼 때는 카테고리 매뉴얼 끝에 실행 환경 안내를 덧붙인다
+(`gemini_client.TOOL_NOTE`). 매뉴얼은 claude CLI 기준이라 "WebFetch 로 열어 확인" 같은 절차가
+있는데 Gemini 에는 Google Search 하나뿐이다 — 할 수 없는 절차를 무엇으로 대신할지 적어 둔다.
 
 routine 분기.
 

@@ -27,6 +27,7 @@ from popory_brief.log import append_log, safe_error, KST
 from popory_brief import limit_detect
 from popory_brief import gemini_client
 from popory_brief import link_check
+from popory_brief.fallback import fallback_model
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_rules import seo_rules
 from popory_brief.seo_title import normalize_title
@@ -112,26 +113,71 @@ def _run_claude(*, model: str, system_text: str, user_msg: str,
         sys_prompt_path.unlink(missing_ok=True)
 
 
+def _gemini_fail_record(category: str, date_str: str, e: "gemini_client.GeminiError",
+                        fallback: str | None) -> dict:
+    """Gemini 실패 로그 1줄. 빈 응답이면 원인을 가릴 응답 메타(diag)를 같이 남긴다."""
+    record = {"cli": "generate_brief", "status": "gemini_fail",
+              "category": category, "date": date_str,
+              "exit_code": e.exit_code, "error": str(e)[:200]}
+    if e.diag:
+        record["diag"] = e.diag
+    if fallback:
+        # 헬스체크가 "대체 발행" 을 이 필드로 가른다.
+        record["fallback"] = fallback
+    return record
+
+
 def _run_gemini(*, model: str, system_text: str, user_msg: str,
-                category: str, date_str: str, backoff: list[int]) -> str:
-    """Gemini API 로 본문 텍스트를 받아온다. 검색은 서버측 Google Search grounding 이 한다."""
+                category: str, date_str: str, backoff: list[int],
+                claude_prompts=None) -> str:
+    """Gemini API 로 본문 텍스트를 받아온다. 검색은 서버측 Google Search grounding 이 한다.
+
+    재시도까지 소진되면 claude CLI 로 한 번 더 쓴다(claude_prompts 는 그 경로용 (system, user)).
+    대체까지 실패하면 복구 경로가 남는 쪽 규약으로 끝낸다 — 쿼터는 exit 6(retry 잡 대기),
+    키·결제는 인증 마커(즉시 알림)."""
     try:
         return gemini_client.generate_with_retry(
             system_prompt=system_text, user_msg=user_msg,
             model=model, timeout_seconds=TIMEOUT_SECONDS, backoff=backoff)
     except gemini_client.GeminiError as e:
-        if e.is_limit:
-            # 쿼터는 claude 한도와 같은 규약으로 넘긴다 — retry 잡이 그대로 복구한다.
-            reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())
-            print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
-            append_log(LOGS_DIR, {"cli": "generate_brief", "status": "limit_fail",
-                                  "category": category, "date": date_str,
-                                  "reset_epoch": reset_epoch, "error": str(e)[:200]})
-            sys.exit(6)
-        # 인증 실패는 사람이 키를 고쳐야 풀린다 — run_daily.sh 가 즉시 알림을 걸도록 마커를 남긴다.
-        if e.exit_code == 3:
+        err = e
+
+    fallback = fallback_model(CLAUDE_BIN) if claude_prompts else None
+    if fallback is None:
+        _exit_gemini(err, category, date_str)
+
+    append_log(LOGS_DIR, _gemini_fail_record(category, date_str, err, fallback))
+    print(f"--- Gemini 실패(exit {err.exit_code}) — {fallback} 로 대체 생성 ---", file=sys.stderr)
+    fb_system, fb_user = claude_prompts
+    try:
+        return _run_claude(model=fallback, system_text=fb_system, user_msg=fb_user,
+                           category=category, date_str=date_str, backoff=backoff)
+    except SystemExit as fb_exit:
+        # 대체도 실패. claude 쪽 실패는 _run_claude 가 이미 기록했다.
+        if err.exit_code == 3:
             print("__BRIEF_AUTH_FAIL__=gemini")
-        _fail("gemini_fail", category, date_str, str(e), e.exit_code)
+        if err.is_limit and fb_exit.code != 6:
+            reset_epoch = err.reset_epoch or int(datetime.datetime.now(KST).timestamp())
+            print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+            sys.exit(6)
+        raise
+
+
+def _exit_gemini(e: "gemini_client.GeminiError", category: str, date_str: str) -> None:
+    """대체 없이 Gemini 실패를 규약 exit code 로 끝낸다."""
+    if e.is_limit:
+        # 쿼터는 claude 한도와 같은 규약으로 넘긴다 — retry 잡이 그대로 복구한다.
+        reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())
+        print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "limit_fail",
+                              "category": category, "date": date_str,
+                              "reset_epoch": reset_epoch, "error": str(e)[:200]})
+        sys.exit(6)
+    # 인증 실패는 사람이 키를 고쳐야 풀린다 — run_daily.sh 가 즉시 알림을 걸도록 마커를 남긴다.
+    if e.exit_code == 3:
+        print("__BRIEF_AUTH_FAIL__=gemini")
+    append_log(LOGS_DIR, _gemini_fail_record(category, date_str, e, None))
+    sys.exit(e.exit_code)
 
 
 def main() -> None:
@@ -172,26 +218,35 @@ def main() -> None:
     published_at = int(date_obj.timestamp())
 
     # 카테고리 매뉴얼 + 공통 SEO 규칙(제목 형식·소제목·키워드 배치·표). 규칙은 한 곳(seo_rules.py)에만 둔다.
-    system_text = category.system_prompt + seo_rules(category, date_obj.date())
+    base_system = category.system_prompt + seo_rules(category, date_obj.date())
 
-    # 검색 지시는 공급자마다 다르게 적는다. claude 는 WebSearch 라는 도구를 실제로 들고 있고,
-    # Gemini 는 도구 이름 대신 서버측 Google Search grounding 이 붙는다.
-    search_hint = "웹 검색(Google Search)으로" if use_gemini else "WebSearch 도구로"
-    user_msg = (
-        f"지금은 {now_str} (KST)입니다. 시스템 매뉴얼의 절차를 따라 오늘({date_str})의 {category.name} 이슈 브리핑을 작성하세요. "
-        f"{search_hint} 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
-        f"마지막 응답에 <body_markdown>...</body_markdown> 과 <meta_json>...</meta_json> 두 태그를 정확히 포함하세요. "
-        f"meta_json의 published_at은 {published_at}을 그대로 사용하세요."
-    )
+    def prompts(gemini: bool) -> tuple[str, str]:
+        # 검색 지시는 공급자마다 다르게 적는다. claude 는 WebSearch 라는 도구를 실제로 들고 있고,
+        # Gemini 는 도구 이름 대신 서버측 Google Search grounding 이 붙는다. Gemini 대체 실패 시
+        # claude 로 다시 쓰므로 두 벌을 모두 만들 수 있어야 한다.
+        system_text = gemini_client.adapt_system_prompt(base_system) if gemini else base_system
+        search_hint = "웹 검색(Google Search)으로" if gemini else "WebSearch 도구로"
+        user_msg = (
+            f"지금은 {now_str} (KST)입니다. 시스템 매뉴얼의 절차를 따라 오늘({date_str})의 {category.name} 이슈 브리핑을 작성하세요. "
+            f"{search_hint} 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
+            f"마지막 응답에 <body_markdown>...</body_markdown> 과 <meta_json>...</meta_json> 두 태그를 정확히 포함하세요. "
+            f"meta_json의 published_at은 {published_at}을 그대로 사용하세요."
+        )
+        return system_text, user_msg
 
     # 한도·과부하는 백오프 재시도로 흡수하고, 흡수 못 한 장시간 한도는 exit 6 + reset epoch 로
     # 알려 retry 잡이 복구한다. BRIEF_BACKOFF_SECONDS(csv)로 오버라이드(E2E 테스트는 "0").
     # 모듈 로드 시점이 아니라 여기서 읽는다 — 테스트가 env 를 나중에 주입한다.
     backoff = [int(s) for s in os.environ.get("BRIEF_BACKOFF_SECONDS", "60,180").split(",") if s.strip()]
 
-    runner = _run_gemini if use_gemini else _run_claude
-    final_text = runner(model=model, system_text=system_text, user_msg=user_msg,
-                        category=category.slug, date_str=date_str, backoff=backoff)
+    system_text, user_msg = prompts(use_gemini)
+    if use_gemini:
+        final_text = _run_gemini(model=model, system_text=system_text, user_msg=user_msg,
+                                 category=category.slug, date_str=date_str, backoff=backoff,
+                                 claude_prompts=prompts(False))
+    else:
+        final_text = _run_claude(model=model, system_text=system_text, user_msg=user_msg,
+                                 category=category.slug, date_str=date_str, backoff=backoff)
 
     body_m = re.search(r"<body_markdown>(.*?)</body_markdown>", final_text, re.DOTALL)
     meta_m = re.search(r"<meta_json>\s*(\{.*?\})\s*</meta_json>", final_text, re.DOTALL)
