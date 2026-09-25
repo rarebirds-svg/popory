@@ -428,3 +428,163 @@ def test_brief_run_am_does_not_warn_while_generating(tmp_path):
     log.write_text('{"msg":"jitter_sleep=5400s"}', encoding="utf-8")
     assert checks.check_brief_run(str(log), mode="am")[0] == "ok"
     assert checks.check_brief_run(str(log), mode="pm")[0] == "warn"
+
+
+# 2026-09-25 실제 로그 형태 — Gemini 빈 응답으로 PICK 5 두 카테고리 유실.
+_GEMINI_EMPTY = ('{"ts": "2026-09-25T09:47:07+09:00", "cli": "generate_brief", "status": "gemini_fail", '
+                 '"category": "%s", "date": "2026-09-25", "exit_code": 5, '
+                 '"error": "Gemini 응답에 candidates 없음 — usage={\'promptTokenCount\': 9000}", '
+                 '"diag": {"usage": {"promptTokenCount": 9000}}%s}')
+_DONE_PICK5 = ('{"ts":"2026-09-25T09:48:26+09:00","cli":"run_daily","msg":"done dry_run=0 generated_ok=5 '
+               'failed=realestate-pick5,realestate-pick5-blog limit_fail=none auth_fail=none"}')
+
+
+def test_brief_run_names_gemini_empty_response_per_category(tmp_path):
+    """실패 카테고리마다 로그에 남은 원인을 붙인다 — 슬러그만으론 조치할 수 없다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        _GEMINI_EMPTY % ("realestate-pick5", ""),
+        _GEMINI_EMPTY % ("realestate-pick5-blog", ""),
+        _DONE_PICK5,
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "realestate-pick5(Gemini 응답에 candidates 없음)" in msg
+    assert "realestate-pick5-blog(Gemini 응답에 candidates 없음)" in msg
+    assert "usage" not in msg    # 진단 꼬리는 로그에만
+
+
+def test_brief_run_chains_gemini_then_claude_causes(tmp_path):
+    """대체까지 실패하면 두 원인을 순서대로 보여 준다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        _GEMINI_EMPTY % ("realestate-pick5", ', "fallback": "claude-sonnet-4-6"'),
+        '{"cli": "generate_brief", "status": "claude_fail", "category": "realestate-pick5", '
+        '"error": "claude CLI exit 1 (limit=False, overload=False)"}',
+        _DONE_PICK5.replace(",realestate-pick5-blog", ""),
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "Gemini 응답에 candidates 없음 → claude CLI exit 1" in msg
+
+
+def test_brief_run_warns_when_published_only_through_claude_fallback(tmp_path):
+    """발행은 됐어도 Gemini 쪽을 누군가 봐야 한다 — 대체가 매일 조용히 돌면 안 된다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        _GEMINI_EMPTY % ("realestate-pick5", ', "fallback": "claude-sonnet-4-6"'),
+        '{"cli": "generate_brief", "status": "ok", "category": "realestate-pick5", '
+        '"fallback": "claude-sonnet-4-6"}',
+        _DONE_OK,
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "7개 발행" in msg and "Claude 대체" in msg
+    assert "realestate-pick5(Gemini 응답에 candidates 없음)" in msg
+
+
+def test_brief_run_does_not_call_retry_recovery_a_claude_fallback(tmp_path):
+    """대체가 실패한 뒤 재시도에서 Gemini 로 복구된 날은 Claude 대체가 아니다 — ok 로 끝난다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        _GEMINI_EMPTY % ("realestate-pick5", ', "fallback": "claude-sonnet-4-6"'),
+        '{"cli": "generate_brief", "status": "limit_fail", "category": "realestate-pick5", '
+        '"error": "claude 사용량 한도 — retry 잡 대기"}',
+        _DONE_PICK5.replace(",realestate-pick5-blog", ""),
+        '{"cli": "generate_brief", "status": "ok", "category": "realestate-pick5"}',
+        _DONE_OK,
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "ok", msg
+
+
+def test_brief_run_names_gemini_key_problem_instead_of_claude_login(tmp_path):
+    """auth_fail 이 Gemini 키·결제 때문이면 claude /login 안내는 틀린 조치다."""
+    log = tmp_path / "d.log"
+    log.write_text("__BRIEF_AUTH_FAIL__=gemini\n" + _DONE_AUTH, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "Gemini" in msg and "check_gemini.py" in msg
+    assert "/login" not in msg
+
+
+def test_brief_run_in_progress_ignores_gemini_failure_under_fallback(tmp_path):
+    """claude 가 대신 쓰는 중인 Gemini 실패는 아직 실패가 아니다."""
+    log = tmp_path / "d.log"
+    log.write_text('{"msg":"start"}\n' + _GEMINI_EMPTY % ("naver", ', "fallback": "claude-sonnet-4-6"'),
+                   encoding="utf-8")
+    assert checks.check_brief_run(str(log), mode="am")[0] == "ok"
+
+
+def test_brief_run_in_progress_flags_gemini_failure_without_fallback(tmp_path):
+    log = tmp_path / "d.log"
+    log.write_text('{"msg":"start"}\n' + _GEMINI_EMPTY % ("naver", ""), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log), mode="am")
+    assert status == "warn"
+    assert "Gemini 호출 실패" in msg
+
+
+def test_brief_run_names_gemini_quota_instead_of_claude_session_limit(tmp_path):
+    """exit 6 은 두 공급자가 같이 쓴다 — Gemini 쿼터를 claude 세션 한도로 안내하면 안 된다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        '{"cli": "generate_brief", "status": "limit_fail", "category": "naver", '
+        '"reset_epoch": 1, "error": "Gemini 쿼터 초과(429) — Resource exhausted"}',
+        _DONE_LIMIT,
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "Gemini 쿼터 초과" in msg and "재시도" in msg
+    assert "Claude" not in msg
+
+
+# ---------------- GitHub 토큰(브리핑 카테고리 목록) ----------------
+
+class _GhResp:
+    def __init__(self, status, payload=None, text=""):
+        self.status_code = status
+        self._payload = payload
+        self.text = text or ""
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json")
+        return self._payload
+
+
+_NOW = 1_790_000_000
+
+
+def _gh(monkeypatch, resp):
+    monkeypatch.setattr(checks.requests, "get", lambda url, timeout=10: resp)
+
+
+def test_github_token_expired_401_is_fail_with_remedy(monkeypatch):
+    """2026-09-25 실제 응답 — 90일 PAT 만료로 워커가 502 + GitHub 401 본문을 돌려줬다."""
+    _gh(monkeypatch, _GhResp(502, text='github: getDir services/brief/categories 401: {"message": "Bad credentials"}'))
+    status, msg = checks.check_github_token("u", _NOW)
+    assert status == "fail"
+    assert "BRIEF_CATEGORIES_GITHUB_TOKEN" in msg
+
+
+def test_github_token_warns_before_expiry(monkeypatch):
+    _gh(monkeypatch, _GhResp(200, {"items": [], "github_token_expires_at": _NOW + 3 * 86400}))
+    status, msg = checks.check_github_token("u", _NOW)
+    assert status == "warn"
+    assert "3일 후 만료" in msg
+
+
+def test_github_token_ok_with_days_left(monkeypatch):
+    _gh(monkeypatch, _GhResp(200, {"items": [], "github_token_expires_at": _NOW + 60 * 86400}))
+    assert checks.check_github_token("u", _NOW) == ("ok", "GitHub 토큰 정상 — 60일 남음")
+
+
+def test_github_token_without_expiry_is_ok(monkeypatch):
+    """만료 없는 토큰이거나 워커가 아직 만료 시각을 싣지 않는 버전이면 ok."""
+    _gh(monkeypatch, _GhResp(200, {"items": []}))
+    assert checks.check_github_token("u", _NOW)[0] == "ok"
+
+
+def test_github_token_other_failure_is_warn(monkeypatch):
+    _gh(monkeypatch, _GhResp(502, text="github: getDir services/brief/categories 500: oops"))
+    assert checks.check_github_token("u", _NOW) == ("warn", "카테고리 목록 HTTP 502")

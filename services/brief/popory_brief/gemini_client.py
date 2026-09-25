@@ -42,21 +42,45 @@ KST = datetime.timezone(datetime.timedelta(hours=9))
 ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
+# 카테고리 매뉴얼(SKILL.md)은 claude CLI 기준이라 WebSearch·WebFetch 도구를 전제로 쓰여 있다.
+# Gemini 에는 Google Search grounding 하나뿐이어서 "모든 URL 을 WebFetch 로 열어 확인" 같은 절차는
+# 수행할 수 없다. 2026-09-25 에 그 절차를 가장 강하게 요구하는 부동산 PICK 5 두 카테고리만
+# 빈 응답(candidates 없음)으로 끝났다. 할 수 없는 절차를 무엇으로 대신할지 명시해 둔다.
+TOOL_NOTE = """
+
+## 실행 환경 안내 (자동 추가)
+
+이번 실행에는 WebSearch·WebFetch 도구가 없고 Google Search 검색만 쓸 수 있다.
+- 매뉴얼의 "WebSearch 로 검색" 은 Google Search 검색으로 수행한다.
+- 매뉴얼의 "WebFetch 로 열어 확인" 은 수행할 수 없다. 대신 검색 결과에서 그 기사의 제목·매체·발행일이 확인되는지로 판단하고, 확인되지 않는 기사는 쓰지 않는다.
+- URL 은 검색으로 확인한 주소만 쓰고 경로·기사 번호를 짐작해 만들지 않는다.
+- 확인 절차 때문에 응답을 비우지 않는다. 확인된 항목만으로 매뉴얼의 형식을 채워 마지막 응답에 두 태그를 반드시 포함한다.
+"""
+
+
+def adapt_system_prompt(system_prompt: str) -> str:
+    """claude CLI 기준 매뉴얼에 Gemini 실행 환경 안내를 덧붙인다."""
+    return system_prompt + TOOL_NOTE
+
+
 def is_gemini_model(model: str) -> bool:
     """어드민에서 고른 모델이 Gemini 인지. 공급자 분기는 이 한 곳으로만 판단한다."""
     return model.startswith("gemini-")
 
 
 class GeminiError(Exception):
-    """호출 실패. exit_code 는 README §4 규약, retryable 은 백오프 재시도 대상 여부."""
+    """호출 실패. exit_code 는 README §4 규약, retryable 은 백오프 재시도 대상 여부.
+    diag 는 빈 응답일 때 원인을 가릴 응답 메타(토큰 사용량·모델 버전 등) — 로그에 그대로 싣는다."""
 
     def __init__(self, message: str, *, exit_code: int, retryable: bool = False,
-                 is_limit: bool = False, reset_epoch: int | None = None):
+                 is_limit: bool = False, reset_epoch: int | None = None,
+                 diag: dict | None = None):
         super().__init__(message)
         self.exit_code = exit_code
         self.retryable = retryable
         self.is_limit = is_limit
         self.reset_epoch = reset_epoch
+        self.diag = diag
 
 
 def api_key() -> str:
@@ -150,21 +174,68 @@ def _raise_for_status(resp: requests.Response, now: datetime.datetime) -> None:
     raise GeminiError(f"Gemini 요청 거부({code}) — {detail}", exit_code=4)
 
 
+# 정책 차단 계열 finishReason. 같은 프롬프트를 다시 보내도 같은 판정이 나와 재시도할 가치가 없다.
+# MAX_TOKENS 도 재시도로는 안 풀린다(생각 토큰이 출력 상한을 다 먹은 것) — 상한을 올려야 한다.
+_FINAL_FINISH_REASONS = frozenset({
+    "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "LANGUAGE",
+    "IMAGE_SAFETY", "MAX_TOKENS",
+})
+_USAGE_KEYS = ("promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount",
+               "toolUsePromptTokenCount", "totalTokenCount")
+
+
+def _diag(payload: dict, first: dict | None = None) -> dict:
+    """빈 응답의 원인을 가릴 메타만 추린다. 본문·검색 결과는 싣지 않는다(로그 한 줄 크기 유지).
+
+    2026-09-25 부동산 PICK 5 두 카테고리가 "candidates 없음" 으로 빠졌는데 이 값들을 버려서
+    생각 토큰을 다 쓰고 끝났는지, 검색만 돌다 끝났는지, 차단됐는지를 가릴 수 없었다."""
+    out: dict = {}
+    usage = payload.get("usageMetadata") or {}
+    if isinstance(usage, dict):
+        picked = {k: usage[k] for k in _USAGE_KEYS if k in usage}
+        if picked:
+            out["usage"] = picked
+    for key in ("modelVersion", "responseId"):
+        if payload.get(key):
+            out[key] = str(payload[key])[:80]
+    feedback = payload.get("promptFeedback")
+    if feedback:
+        out["promptFeedback"] = str(feedback)[:200]
+    if first:
+        for key in ("finishReason", "finishMessage"):
+            if first.get(key):
+                out[key] = str(first[key])[:200]
+    return out
+
+
+def _diag_text(diag: dict) -> str:
+    return ", ".join(f"{k}={v}" for k, v in diag.items()) or "메타 없음"
+
+
 def _extract_text(payload: dict) -> str:
-    """candidates[0] 의 텍스트 파트를 이어붙인다. 비면 왜 비었는지(차단·토큰 초과)를 담아 던진다."""
+    """candidates[0] 의 텍스트 파트를 이어붙인다. 비면 왜 비었는지(차단·토큰 초과)를 담아 던진다.
+
+    빈 응답은 일시 현상일 수 있어(같은 프롬프트 재호출로 풀리는 경우) 정책 차단·토큰 상한이
+    아니면 재시도 대상으로 올린다. 재시도까지 소진되면 호출부가 대체 공급자로 넘긴다."""
     block = (payload.get("promptFeedback", {}) or {}).get("blockReason")
     if block:
-        raise GeminiError(f"Gemini 응답 차단 — blockReason={block}", exit_code=4)
+        raise GeminiError(f"Gemini 응답 차단 — blockReason={block}", exit_code=4,
+                          diag=_diag(payload))
     candidates = payload.get("candidates") or []
     if not candidates:
-        raise GeminiError("Gemini 응답에 candidates 없음", exit_code=4)
+        diag = _diag(payload)
+        raise GeminiError(f"Gemini 응답에 candidates 없음 — {_diag_text(diag)}",
+                          exit_code=5, retryable=True, diag=diag)
     first = candidates[0] or {}
     parts = ((first.get("content") or {}).get("parts") or [])
     text = "".join(str(p.get("text") or "") for p in parts if isinstance(p, dict))
     if not text.strip():
         # MAX_TOKENS 로 끊겼는지 여부가 진단의 핵심이다 — 본문이 길어 잘리면 태그 파싱이 깨진다.
-        raise GeminiError(f"Gemini 응답 본문 비어 있음 — finishReason={first.get('finishReason')}",
-                          exit_code=4)
+        diag = _diag(payload, first)
+        reason = first.get("finishReason")
+        final = reason in _FINAL_FINISH_REASONS
+        raise GeminiError(f"Gemini 응답 본문 비어 있음 — finishReason={reason}, {_diag_text(diag)}",
+                          exit_code=4 if final else 5, retryable=not final, diag=diag)
     return text
 
 

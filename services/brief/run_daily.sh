@@ -5,19 +5,35 @@ set -u  # 미정의 변수 사용 시 즉시 실패. set -e는 안 씀 — 각 �
 
 BRIEF_DIR=/Users/daegong/projects/popory/services/brief
 VENV_PY=${BRIEF_DIR}/.venv/bin/python
-DATE=$(TZ=Asia/Seoul date +%Y-%m-%d)
-LOG_FILE=${BRIEF_DIR}/logs/${DATE}.log
 
 DRY_RUN=0
 NOW=0
 ONLY_SLUG=""
+DATE_ARG=""
 for ARG in ${@+"$@"}; do
   case "${ARG}" in
     --dry-run)  DRY_RUN=1 ;;
     --now)      NOW=1 ;;
     --only=*)   ONLY_SLUG="${ARG#*=}" ;;
+    --date=*)   DATE_ARG="${ARG#*=}" ;;
   esac
 done
+
+# --date 는 retry_pending.sh 가 자정을 넘긴 재시도에 쓴다 — 한도가 다음 날 풀려도 그 항목은
+# 원래 날짜의 브리핑으로 생성·발행돼야 한다. 생략하면 오늘(KST).
+if [ -n "${DATE_ARG}" ] && ! [[ "${DATE_ARG}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  echo "usage: run_daily.sh [--date=YYYY-MM-DD] ..." >&2
+  exit 2
+fi
+DATE=${DATE_ARG:-$(TZ=Asia/Seoul date +%Y-%m-%d)}
+# generate·generic 에 날짜를 항상 고정해 넘긴다. 넘기지 않으면 각 CLI 가 실행 시각으로 날짜를
+# 다시 정해, 청크가 자정을 넘기면 /tmp 산출 파일 날짜가 이 스크립트의 DATE 와 어긋나 publish·
+# 발송이 파일을 못 찾는다. (날짜가 오늘이면 CLI 는 published_at 을 실행 시각으로 둔다.)
+DATE_OPT=(--date "${DATE}")
+# 하위 Python CLI(generate·publish·send)의 JSONL 도 이 날짜 파일에 남긴다(popory_brief.log).
+# 전날 재시도 기록이 오늘 파일로 새면 오늘 헬스체크가 오늘 브리핑이 실패한 것으로 오판한다.
+export BRIEF_LOG_DATE="${DATE}"
+LOG_FILE=${BRIEF_DIR}/logs/${DATE}.log
 
 mkdir -p "${BRIEF_DIR}/logs"
 
@@ -111,10 +127,10 @@ while [ $i -lt $CAT_TOTAL ]; do
   while [ $j -lt $CHUNK_END ]; do
     SLUG=${ALL_SLUGS[$j]}
     (
-      OUT=$("${VENV_PY}" "${BRIEF_DIR}/generate_brief.py" --category "${SLUG}" 2>&1)
+      OUT=$("${VENV_PY}" "${BRIEF_DIR}/generate_brief.py" --category "${SLUG}" "${DATE_OPT[@]}" 2>&1)
       EXIT=$?
-      printf '%s\n' "${OUT}" > "/tmp/brief_stdout_${SLUG}.tmp"
-      echo "${EXIT}"          > "/tmp/brief_exit_${SLUG}.tmp"
+      printf '%s\n' "${OUT}" > "/tmp/brief_stdout_${SLUG}_${DATE}.tmp"
+      echo "${EXIT}"          > "/tmp/brief_exit_${SLUG}_${DATE}.tmp"
     ) &
     j=$((j + 1))
   done
@@ -175,10 +191,10 @@ if [ -n "${CUSTOM_SLUGS}" ]; then
       TNAME=${CUSTOM_NAMES[$cj]}
       (
         OUT=$("${VENV_PY}" "${BRIEF_DIR}/generic_brief.py" \
-          --topic-id "${TID}" --name "${TNAME}" 2>&1)
+          --topic-id "${TID}" --name "${TNAME}" "${DATE_OPT[@]}" 2>&1)
         EXIT=$?
-        printf '%s\n' "${OUT}" > "/tmp/brief_custom_stdout_${TID}.tmp"
-        echo "${EXIT}"          > "/tmp/brief_custom_exit_${TID}.tmp"
+        printf '%s\n' "${OUT}" > "/tmp/brief_custom_stdout_${TID}_${DATE}.tmp"
+        echo "${EXIT}"          > "/tmp/brief_custom_exit_${TID}_${DATE}.tmp"
       ) &
       cj=$((cj + 1))
     done
@@ -190,8 +206,8 @@ if [ -n "${CUSTOM_SLUGS}" ]; then
   # 결과 수집 + pending_at 초기화
   SERVICE_JWT=$(${VENV_PY} -c "${SERVICE_JWT_PY}" 2>/dev/null || true)
   for TID in "${CUSTOM_IDS[@]}"; do
-    EXIT_FILE="/tmp/brief_custom_exit_${TID}.tmp"
-    OUT_FILE="/tmp/brief_custom_stdout_${TID}.tmp"
+    EXIT_FILE="/tmp/brief_custom_exit_${TID}_${DATE}.tmp"
+    OUT_FILE="/tmp/brief_custom_stdout_${TID}_${DATE}.tmp"
     [ -f "${OUT_FILE}" ] && cat "${OUT_FILE}" >> "${LOG_FILE}"
     CEXIT=1; [ -f "${EXIT_FILE}" ] && CEXIT=$(cat "${EXIT_FILE}")
     if [ "${CEXIT}" -eq 6 ] && [ -f "${OUT_FILE}" ]; then
@@ -214,8 +230,9 @@ fi
 # 3-b) 결과 수집 + publish (publish는 순차 실행)
 while IFS=' ' read -r SLUG MODE; do
   [ -z "${SLUG}" ] && continue
-  EXIT_FILE="/tmp/brief_exit_${SLUG}.tmp"
-  OUT_FILE="/tmp/brief_stdout_${SLUG}.tmp"
+  # 파일명에 날짜를 넣는다 — 전날 재시도와 오늘 정규 실행이 겹쳐도 같은 슬러그 결과가 섞이지 않게.
+  EXIT_FILE="/tmp/brief_exit_${SLUG}_${DATE}.tmp"
+  OUT_FILE="/tmp/brief_stdout_${SLUG}_${DATE}.tmp"
 
   # 각 카테고리 stdout·stderr 를 메인 로그에 합산
   [ -f "${OUT_FILE}" ] && cat "${OUT_FILE}" >> "${LOG_FILE}"

@@ -9,6 +9,7 @@ _AREA_OF = {
     "브리핑": "jobs",
     "브리핑잡": "jobs",
     "브리핑데몬": "jobs",
+    "GitHub토큰": "service",
     "워커데몬": "jobs",
     "이미지데몬": "jobs",
     "콘텐츠루틴": "jobs",
@@ -43,15 +44,13 @@ def fold_sections(results: list[tuple[str, str, str]]) -> dict:
 
     sections = {}
     for area, items in buckets.items():
-        worst = "ok"
-        worst_msg = ""
-        for _name, status, msg in items:
-            if _RANK[status] > _RANK[worst]:
-                worst = status
-                worst_msg = msg
+        worst = overall(items)
+        # 최악 상태인 항목을 전부 싣는다. 첫 항목만 쓰면 결과(브리핑 미확인)가 원인(브리핑잡의
+        # Gemini 빈 응답·인증 거부)을 가린다 — 2026-09-25 에 원인이 다이제스트에 안 보였다.
+        worst_msgs = [msg for _name, status, msg in items if status == worst]
         sections[area] = {
             "status": worst,
-            "text": worst_msg if worst != "ok" else _OK_SUMMARY[area],
+            "text": " / ".join(worst_msgs) if worst != "ok" else _OK_SUMMARY[area],
         }
 
     # popory는 배포 갭·승인 절차가 없다. 자리는 비워 두되 지우지 않는다.
