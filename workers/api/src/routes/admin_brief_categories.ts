@@ -3,9 +3,20 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { requireAdmin, type AppVars } from "../middleware/session";
 import { parseSkillMd, serializeSkillMd, validateFields, type SkillFields } from "../lib/skill_md";
-import { getDir, getFile, putFile, deleteFile, GitHubApiError } from "../lib/github_contents";
+import { getDirWithTokenExpiry, getFile, putFile, deleteFile, GitHubApiError } from "../lib/github_contents";
 
 const CATEGORIES_PATH = "services/brief/categories";
+
+// GitHub 실패를 사람이 조치할 수 있는 문구로. 401 은 거의 항상 PAT 만료·폐기다 — 그대로 두면
+// "github: getDir … 401 Bad credentials" 만 보여 무엇을 해야 하는지 알 수 없다.
+// 응답은 예전처럼 "github: " 로 시작하는 텍스트다(관리자 화면이 그대로 보여 준다).
+export function githubErrorText(e: GitHubApiError): string {
+  if (e.status === 401) {
+    return "github: 토큰 만료·무효(401) — Fine-grained PAT 를 재발급해 Worker secret "
+      + "BRIEF_CATEGORIES_GITHUB_TOKEN 을 교체하세요. " + e.message;
+  }
+  return `github: ${e.message}`;
+}
 
 function decodeBase64Utf8(b64: string): string {
   const bin = atob(b64.replace(/\n/g, ""));
@@ -19,7 +30,7 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
   app.get("/api/brief-categories", async (c) => {
     const token = c.env.BRIEF_CATEGORIES_GITHUB_TOKEN;
     try {
-      const entries = await getDir(token, CATEGORIES_PATH);
+      const { entries, tokenExpiresAt } = await getDirWithTokenExpiry(token, CATEGORIES_PATH);
       const dirs = entries.filter((e) => e.type === "dir");
       const all = await Promise.all(
         dirs.map(async (d) => {
@@ -39,9 +50,10 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
         }),
       );
       const items = all.filter((i): i is NonNullable<typeof i> => i !== null && i.enabled);
-      return c.json({ items });
+      // 헬스체크가 이 값으로 만료 전에 경고한다(unix 초, 만료 없는 토큰이면 null).
+      return c.json({ items, github_token_expires_at: tokenExpiresAt });
     } catch (e) {
-      if (e instanceof GitHubApiError) return c.text(`github: ${e.message}`, 502);
+      if (e instanceof GitHubApiError) return c.text(githubErrorText(e), 502);
       throw e;
     }
   });
@@ -51,7 +63,7 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
     const denied = requireAdmin(c); if (denied) return denied;
     const token = c.env.BRIEF_CATEGORIES_GITHUB_TOKEN;
     try {
-      const entries = await getDir(token, CATEGORIES_PATH);
+      const { entries, tokenExpiresAt } = await getDirWithTokenExpiry(token, CATEGORIES_PATH);
       const dirs = entries.filter((e) => e.type === "dir");
       const items = await Promise.all(
         dirs.map(async (d) => {
@@ -67,9 +79,9 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
           };
         }),
       );
-      return c.json({ items });
+      return c.json({ items, github_token_expires_at: tokenExpiresAt });
     } catch (e) {
-      if (e instanceof GitHubApiError) return c.text(`github: ${e.message}`, 502);
+      if (e instanceof GitHubApiError) return c.text(githubErrorText(e), 502);
       throw e;
     }
   });
@@ -86,7 +98,7 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
       if (!parsed.fields) return c.text(`parse error: ${parsed.errors.join(", ")}`, 500);
       return c.json({ fields: parsed.fields, body: parsed.body, sha: file.sha });
     } catch (e) {
-      if (e instanceof GitHubApiError) return c.text(`github: ${e.message}`, e.status === 404 ? 404 : 502);
+      if (e instanceof GitHubApiError) return c.text(githubErrorText(e), e.status === 404 ? 404 : 502);
       throw e;
     }
   });
@@ -125,7 +137,7 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
             return c.text("sha mismatch — failed to fetch latest", 409);
           }
         }
-        return c.text(`github: ${e.message}`, 502);
+        return c.text(githubErrorText(e), 502);
       }
       throw e;
     }
@@ -147,7 +159,7 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
       return c.json({ errors: ["slug already exists"] }, 422);
     } catch (e) {
       if (!(e instanceof GitHubApiError) || e.status !== 404) {
-        if (e instanceof GitHubApiError) return c.text(`github: ${e.message}`, 502);
+        if (e instanceof GitHubApiError) return c.text(githubErrorText(e), 502);
         throw e;
       }
       // 404 → 진행
@@ -162,7 +174,7 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
       });
       return c.json({ sha: result.sha });
     } catch (e) {
-      if (e instanceof GitHubApiError) return c.text(`github: ${e.message}`, 502);
+      if (e instanceof GitHubApiError) return c.text(githubErrorText(e), 502);
       throw e;
     }
   });
@@ -184,7 +196,7 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
     } catch (e) {
       if (e instanceof GitHubApiError) {
         if (e.status === 404) return c.text("not found", 404);
-        return c.text(`github: ${e.message}`, 502);
+        return c.text(githubErrorText(e), 502);
       }
       throw e;
     }

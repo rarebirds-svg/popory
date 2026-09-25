@@ -103,6 +103,34 @@ def check_briefs_published(
     return (status, f"오늘자 브리핑 {len(missing) + len(failed)}/{len(categories)} 이상 — {detail} ({today})")
 
 
+def check_github_token(url: str, now: float, warn_days: int = 7) -> tuple[str, str]:
+    """브리핑 카테고리 목록이 쓰는 GitHub Fine-grained PAT 상태.
+
+    이 토큰이 만료되면 관리자 카테고리 화면이 멈추고, 공개 브리핑 페이지·구독 설정의 카테고리
+    목록이 조용히 빈 채로 뜬다(2026-09-25 90일 PAT 만료). 워커가 GitHub 응답 헤더에서 읽은
+    만료 시각(github_token_expires_at, unix 초)을 공개 목록에 싣는다 — 만료 전에 경고한다."""
+    try:
+        resp = requests.get(url, timeout=10)
+    except requests.RequestException as e:
+        return ("warn", f"카테고리 목록 조회 실패 — {type(e).__name__}")
+    if resp.status_code != 200:
+        if "401" in resp.text[:300]:
+            return ("fail", "GitHub 토큰 만료·무효 — PAT 재발급 후 Worker secret BRIEF_CATEGORIES_GITHUB_TOKEN 교체")
+        return ("warn", f"카테고리 목록 HTTP {resp.status_code}")
+    try:
+        expires_at = resp.json().get("github_token_expires_at")
+    except ValueError:
+        return ("warn", "카테고리 목록 응답 파싱 실패")
+    if not isinstance(expires_at, (int, float)):
+        return ("ok", "GitHub 토큰 정상 — 만료일 정보 없음")
+    remain_days = (expires_at - now) / 86400
+    if remain_days <= 0:
+        return ("fail", "GitHub 토큰 만료됨 — PAT 재발급 후 Worker secret 교체")
+    if remain_days <= warn_days:
+        return ("warn", f"GitHub 토큰 {int(remain_days)}일 후 만료 — 미리 재발급 권장")
+    return ("ok", f"GitHub 토큰 정상 — {int(remain_days)}일 남음")
+
+
 def check_daemon(label: str) -> tuple[str, str]:
     try:
         uid = os.getuid()

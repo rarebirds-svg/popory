@@ -9,6 +9,7 @@ _AREA_OF = {
     "브리핑": "jobs",
     "브리핑잡": "jobs",
     "브리핑데몬": "jobs",
+    "GitHub토큰": "service",
     "워커데몬": "jobs",
     "이미지데몬": "jobs",
     "콘텐츠루틴": "jobs",

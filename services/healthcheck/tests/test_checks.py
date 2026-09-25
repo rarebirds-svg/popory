@@ -536,3 +536,55 @@ def test_brief_run_names_gemini_quota_instead_of_claude_session_limit(tmp_path):
     assert status == "warn"
     assert "Gemini 쿼터 초과" in msg and "재시도" in msg
     assert "Claude" not in msg
+
+
+# ---------------- GitHub 토큰(브리핑 카테고리 목록) ----------------
+
+class _GhResp:
+    def __init__(self, status, payload=None, text=""):
+        self.status_code = status
+        self._payload = payload
+        self.text = text or ""
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json")
+        return self._payload
+
+
+_NOW = 1_790_000_000
+
+
+def _gh(monkeypatch, resp):
+    monkeypatch.setattr(checks.requests, "get", lambda url, timeout=10: resp)
+
+
+def test_github_token_expired_401_is_fail_with_remedy(monkeypatch):
+    """2026-09-25 실제 응답 — 90일 PAT 만료로 워커가 502 + GitHub 401 본문을 돌려줬다."""
+    _gh(monkeypatch, _GhResp(502, text='github: getDir services/brief/categories 401: {"message": "Bad credentials"}'))
+    status, msg = checks.check_github_token("u", _NOW)
+    assert status == "fail"
+    assert "BRIEF_CATEGORIES_GITHUB_TOKEN" in msg
+
+
+def test_github_token_warns_before_expiry(monkeypatch):
+    _gh(monkeypatch, _GhResp(200, {"items": [], "github_token_expires_at": _NOW + 3 * 86400}))
+    status, msg = checks.check_github_token("u", _NOW)
+    assert status == "warn"
+    assert "3일 후 만료" in msg
+
+
+def test_github_token_ok_with_days_left(monkeypatch):
+    _gh(monkeypatch, _GhResp(200, {"items": [], "github_token_expires_at": _NOW + 60 * 86400}))
+    assert checks.check_github_token("u", _NOW) == ("ok", "GitHub 토큰 정상 — 60일 남음")
+
+
+def test_github_token_without_expiry_is_ok(monkeypatch):
+    """만료 없는 토큰이거나 워커가 아직 만료 시각을 싣지 않는 버전이면 ok."""
+    _gh(monkeypatch, _GhResp(200, {"items": []}))
+    assert checks.check_github_token("u", _NOW)[0] == "ok"
+
+
+def test_github_token_other_failure_is_warn(monkeypatch):
+    _gh(monkeypatch, _GhResp(502, text="github: getDir services/brief/categories 500: oops"))
+    assert checks.check_github_token("u", _NOW) == ("warn", "카테고리 목록 HTTP 502")
