@@ -505,3 +505,17 @@ def test_brief_run_in_progress_flags_gemini_failure_without_fallback(tmp_path):
     status, msg = checks.check_brief_run(str(log), mode="am")
     assert status == "warn"
     assert "Gemini 호출 실패" in msg
+
+
+def test_brief_run_names_gemini_quota_instead_of_claude_session_limit(tmp_path):
+    """exit 6 은 두 공급자가 같이 쓴다 — Gemini 쿼터를 claude 세션 한도로 안내하면 안 된다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        '{"cli": "generate_brief", "status": "limit_fail", "category": "naver", '
+        '"reset_epoch": 1, "error": "Gemini 쿼터 초과(429) — Resource exhausted"}',
+        _DONE_LIMIT,
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "Gemini 쿼터 초과" in msg and "재시도" in msg
+    assert "Claude" not in msg

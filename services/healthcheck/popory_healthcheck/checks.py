@@ -251,7 +251,13 @@ def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
                 return ("warn", f"브리핑 생성 실패 — Gemini 키·결제 거부, check_gemini.py 로 원인 확인 ({auth})")
             return ("warn", f"브리핑 생성 실패 — Claude 인증 만료, 터미널에서 claude /login 필요 ({auth})")
         if limit != "none":
-            return ("warn", f"브리핑 생성 실패 — Claude 세션 한도, 자동 재시도 대기 ({limit})")
+            # exit 6 은 claude 세션 한도와 Gemini 쿼터가 같이 쓴다. 로그 원인으로 가른다.
+            slugs = set(limit.split(","))
+            gemini_quota = any(rec.get("category") in slugs
+                               and str(rec.get("error") or "").startswith("Gemini 쿼터")
+                               for rec in records)
+            label = "Gemini 쿼터 초과" if gemini_quota else "Claude 세션 한도"
+            return ("warn", f"브리핑 생성 실패 — {label}, 자동 재시도 대기 ({limit})")
         return ("warn", f"브리핑 생성 실패 — {_causes_by_slug(records, failed.split(','))}")
     hits = [label for marker, label in _BRIEF_FAIL_MARKERS if marker in text]
     # 대체 생성이 걸린 Gemini 실패는 아직 실패가 아니다(claude 가 쓰는 중).
