@@ -51,9 +51,10 @@ done
 # 처리할 pending 없음
 [ -n "${PENDING_FILE}" ] || exit 0
 LOG_FILE=${BRIEF_DIR}/logs/${DATE}.log
-# 전날 항목만 날짜를 넘긴다 — 오늘 재시도는 예전처럼 실행 시각 기준으로 생성한다.
-DATE_OPT=()
-[ "${DATE}" != "${TODAY}" ] && DATE_OPT=(--date="${DATE}")
+# 고른 pending 의 날짜를 항상 고정해 넘긴다. 오늘 항목도 마찬가지다 — 23시대에 시작한 재시도가
+# 자정을 넘기면 run_daily·generate 가 날짜를 제각각 다시 정해 산출 파일을 못 찾거나 다음 날짜로
+# 발행된다(날짜가 오늘이면 generate 는 published_at 을 실행 시각으로 둔다).
+DATE_OPT=(--date="${DATE}")
 
 # 동시 실행 방지 — mkdir 원자적 락 (이전 재시도가 길어져 다음 폴링과 겹치는 경우)
 LOCK="${PENDING_DIR}/brief_retry.lock"
@@ -105,7 +106,25 @@ AUTH_FAILED=0   # 인증 실패로 끝난 재시도 — pending 은 유지하되
 # 1) 카테고리 재시도 — run_daily --only 정규식 1회 (bundled 보강 묶음 + standalone 자동)
 if [ "${CATS}" != "-" ]; then
   REGEX=$(echo "${CATS}" | sed 's/,/|/g')
-  OUT=$(bash "${BRIEF_DIR}/run_daily.sh" --now --only="(${REGEX})" ${DATE_OPT[@]+"${DATE_OPT[@]}"} 2>>"${LOG_FILE}")
+  OUT=$(bash "${BRIEF_DIR}/run_daily.sh" --now --only="(${REGEX})" "${DATE_OPT[@]}" 2>>"${LOG_FILE}")
+  RUN_EXIT=$?
+  # 결과 마커를 찍기 전에 끝났으면(카테고리 스캔 중단 등) 복구가 아니라 중단이다. 마커가 비었다고
+  # "all recovered" 로 pending 을 지우면 그날 항목이 조용히 사라진다. pending 은 그대로 두고
+  # (retry_count 도 태우지 않는다 — 사람이 고쳐야 풀리는 원인이 대부분) 30분 뒤로 미룬다.
+  if [ ${RUN_EXIT} -ne 0 ] && ! echo "${OUT}" | grep -q '__RUN_LIMIT_FAIL_CATS__='; then
+    KEEP_CUS="${CUS}"
+    [ "${KEEP_CUS}" = "-" ] && KEEP_CUS=""
+    "${VENV_PY}" "${BRIEF_DIR}/write_pending.py" --file "${PENDING_FILE}" \
+      --date "${DATE}" --reset-at "$(( $(date +%s) + 1800 ))" \
+      --categories "${CATS}" --custom "${KEEP_CUS}" >> "${LOG_FILE}" 2>&1
+    log "\"retry aborted — run_daily exit=${RUN_EXIT} before result, pending 유지 cats=${CATS}\""
+    if [ -f "${HC_DIR}/notify.sh" ]; then
+      bash "${HC_DIR}/notify.sh" --once-key=brief_retry_abort \
+        "[popory] 브리핑 재시도 중단 — run_daily exit=${RUN_EXIT} (${DATE} ${CATS}). logs/${DATE}.log 확인" \
+        >> "${LOG_FILE}" 2>&1 || log "\"retry abort notify failed\""
+    fi
+    exit 0
+  fi
   REMAIN_CATS=$(echo "${OUT}" | grep -o '__RUN_LIMIT_FAIL_CATS__=.*' | head -1 | cut -d= -f2-)
   # 인증 실패분도 남은 항목에 합친다. 종전엔 한도 실패만 세어서, 인증 만료 상태의
   # 재시도가 "all recovered"로 오판돼 pending 이 삭제됐다 — 그 뒤로는 /login 을 해도
@@ -143,9 +162,7 @@ for t in json.load(sys.stdin).get('topics', []):
       log "\"retry custom ${TID} not in active topics — skip\""
       continue
     fi
-    CDATE_OPT=()
-    [ "${DATE}" != "${TODAY}" ] && CDATE_OPT=(--date "${DATE}")
-    OUT=$(${VENV_PY} "${BRIEF_DIR}/generic_brief.py" --topic-id "${TID}" --name "${TNAME}" ${CDATE_OPT[@]+"${CDATE_OPT[@]}"} 2>>"${LOG_FILE}")
+    OUT=$(${VENV_PY} "${BRIEF_DIR}/generic_brief.py" --topic-id "${TID}" --name "${TNAME}" --date "${DATE}" 2>>"${LOG_FILE}")
     CEXIT=$?
     if [ ${CEXIT} -eq 0 ]; then
       log "\"retry custom ok topic=${TID}\""

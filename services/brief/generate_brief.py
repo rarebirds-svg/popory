@@ -242,15 +242,18 @@ def main() -> None:
                               "category": args.category, "error": str(e)[:200]})
         sys.exit(2)
 
-    if args.date:
+    now = datetime.datetime.now(KST)
+    # run_daily 는 날짜를 항상 --date 로 고정해 넘긴다. 그 날짜가 오늘이면 예전(인자 없음)처럼
+    # 실행 시각을 쓴다 — 0시로 두면 published_at 과 프롬프트의 "지금" 이 0시로 바뀐다.
+    if args.date and args.date != now.strftime("%Y-%m-%d"):
         date_obj = datetime.datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=KST)
     else:
-        date_obj = datetime.datetime.now(KST)
+        date_obj = now
     date_str = date_obj.strftime("%Y-%m-%d")
     now_str = date_obj.strftime("%Y-%m-%d %H:%M")
     # 지난 날짜(자정을 넘긴 한도 재시도)는 그날이 다 지난 시점으로 알린다. 0시로 알리면
     # 모델이 "오늘 기사는 아직 없다" 고 보고 전일 기사로 채운다.
-    if args.date and date_obj.date() < datetime.datetime.now(KST).date():
+    if date_obj.date() < now.date():
         now_str = f"{date_str} 23:59"
     published_at = int(date_obj.timestamp())
 

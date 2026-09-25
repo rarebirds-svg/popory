@@ -1,4 +1,5 @@
 # 각 brief CLI 의 실패 종료 경로가 append_log 로 실패 레코드를 남기는지 검증 (실제 네트워크·메일 발송 없음).
+import datetime
 import json
 import os
 import subprocess
@@ -995,3 +996,22 @@ def test_generate_untagged_gemini_output_without_fallback_exits_4(monkeypatch):
     r = rec.one(generate_brief)
     assert r["status"] == "gemini_fail"
     assert r["error"].startswith("Gemini 응답 형식 오류")
+
+
+def test_generate_todays_date_keeps_run_time(monkeypatch):
+    """run_daily 는 날짜를 항상 --date 로 고정해 넘긴다. 오늘 날짜면 예전처럼 실행 시각 기준이어야
+    한다 — 0시로 두면 published_at 과 프롬프트의 "지금" 이 0시로 바뀐다."""
+    _patch(monkeypatch, generate_brief)
+    seen, _stub = _gemini_then_claude(monkeypatch, gemini_client.GeminiError("x", exit_code=4),
+                                      _Completed(0, stdout=_TAGGED_OK))
+    now = datetime.datetime.now(generate_brief.KST)
+    monkeypatch.setenv("BRIEF_BACKOFF_SECONDS", "")
+    monkeypatch.setenv("BRIEF_FALLBACK_MODEL", "off")
+    _argv(monkeypatch, "--category", "realestate", "--date", now.strftime("%Y-%m-%d"),
+          "--model", "gemini-3.8-flash")
+
+    with pytest.raises(SystemExit):
+        generate_brief.main()
+
+    published_at = int(seen["user_msg"].split("published_at은 ")[1].split("을")[0])
+    assert abs(published_at - now.timestamp()) < 60

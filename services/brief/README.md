@@ -169,9 +169,18 @@ claude 용 원본). 2026-09-25 부동산 PICK 5 두 카테고리가 Gemini 빈 �
 - 끄기. `BRIEF_FALLBACK_MODEL=off`. claude CLI 가 없는 머신에서는 자동으로 꺼진다.
 
 **자정을 넘긴 재시도.** `retry_pending.sh`(10분마다)는 오늘과 전날 pending 중 리셋 시각이 지난
-것을 전날 것부터 하나 처리한다. 전날 항목은 `run_daily.sh --date=<전날>` 로 원래 날짜의 브리핑으로
-생성·발행하고 로그도 그날 파일에 남긴다. 예전엔 오늘 날짜 pending 만 봐서, 2026-09-14 09:27 claude
-한도(리셋 09-15 01:00)로 실패한 7개 카테고리가 재시도 없이 통째로 유실됐다. 이틀 이상 지난 pending 은 보지 않는다.
+것을 전날 것부터 하나 처리한다. 예전엔 오늘 날짜 pending 만 봐서, 2026-09-14 09:27 claude 한도(리셋
+09-15 01:00)로 실패한 7개 카테고리가 재시도 없이 통째로 유실됐다. 이틀 이상 지난 pending 은 보지 않는다.
+
+- 날짜 고정. 고른 pending 의 날짜를 `run_daily.sh --date=<날짜>` 로 넘기고, run_daily 는 그 날짜를
+  generate·generic 에도 항상 넘긴다. 23시대에 시작한 재시도가 자정을 넘겨도 산출 파일·발행·메일이 한
+  날짜로 맞는다. 날짜가 오늘이면 generate 는 published_at·프롬프트 시각을 실행 시각으로, 지난 날짜면
+  그날 0시(published_at)·23:59(프롬프트)로 둔다.
+- 로그. run_daily 가 `BRIEF_LOG_DATE` 를 넘겨 하위 CLI 의 JSONL 까지 그 날짜 파일에 남긴다. 전날 재시도
+  기록이 오늘 파일에 섞이면 오늘 헬스체크가 오늘 브리핑이 실패한 것으로 오판한다. 전날 유실 자체는
+  09:00 헬스체크의 발행 확인(직전 발행일 폴백)이 잡는다.
+- 중단. run_daily 가 결과 마커를 찍기 전에 비정상 종료하면(카테고리 스캔 중단 등) 복구로 보지 않는다.
+  pending 과 retry_count 를 그대로 두고 30분 뒤로 미루며, `notify.sh --once-key=brief_retry_abort` 로 알린다.
 
 Gemini 로 보낼 때는 카테고리 매뉴얼 끝에 실행 환경 안내를 덧붙인다
 (`gemini_client.TOOL_NOTE`). 매뉴얼은 claude CLI 기준이라 "WebFetch 로 열어 확인" 같은 절차가

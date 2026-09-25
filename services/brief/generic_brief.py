@@ -186,10 +186,12 @@ def main() -> None:
         print(f"error: claude CLI not found at {CLAUDE_BIN}", file=sys.stderr)
         sys.exit(2)
 
-    if args.date:
+    now = datetime.datetime.now(KST)
+    # run_daily·retry_pending 은 날짜를 항상 --date 로 고정해 넘긴다. 오늘이면 실행 시각을 쓴다.
+    if args.date and args.date != now.strftime("%Y-%m-%d"):
         date_obj = datetime.datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=KST)
     else:
-        date_obj = datetime.datetime.now(KST)
+        date_obj = now
     date_str = date_obj.strftime("%Y-%m-%d")
     published_at = int(date_obj.timestamp())
 

@@ -26,10 +26,13 @@ if [ -n "${DATE_ARG}" ] && ! [[ "${DATE_ARG}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
   exit 2
 fi
 DATE=${DATE_ARG:-$(TZ=Asia/Seoul date +%Y-%m-%d)}
-# generate·generic 에 넘길 날짜 인자. 오늘 실행에는 넘기지 않는다 — 넘기면 published_at 이
-# 실행 시각이 아니라 그날 0시로 바뀐다.
-DATE_OPT=()
-[ -n "${DATE_ARG}" ] && DATE_OPT=(--date "${DATE}")
+# generate·generic 에 날짜를 항상 고정해 넘긴다. 넘기지 않으면 각 CLI 가 실행 시각으로 날짜를
+# 다시 정해, 청크가 자정을 넘기면 /tmp 산출 파일 날짜가 이 스크립트의 DATE 와 어긋나 publish·
+# 발송이 파일을 못 찾는다. (날짜가 오늘이면 CLI 는 published_at 을 실행 시각으로 둔다.)
+DATE_OPT=(--date "${DATE}")
+# 하위 Python CLI(generate·publish·send)의 JSONL 도 이 날짜 파일에 남긴다(popory_brief.log).
+# 전날 재시도 기록이 오늘 파일로 새면 오늘 헬스체크가 오늘 브리핑이 실패한 것으로 오판한다.
+export BRIEF_LOG_DATE="${DATE}"
 LOG_FILE=${BRIEF_DIR}/logs/${DATE}.log
 
 mkdir -p "${BRIEF_DIR}/logs"
@@ -124,7 +127,7 @@ while [ $i -lt $CAT_TOTAL ]; do
   while [ $j -lt $CHUNK_END ]; do
     SLUG=${ALL_SLUGS[$j]}
     (
-      OUT=$("${VENV_PY}" "${BRIEF_DIR}/generate_brief.py" --category "${SLUG}" ${DATE_OPT[@]+"${DATE_OPT[@]}"} 2>&1)
+      OUT=$("${VENV_PY}" "${BRIEF_DIR}/generate_brief.py" --category "${SLUG}" "${DATE_OPT[@]}" 2>&1)
       EXIT=$?
       printf '%s\n' "${OUT}" > "/tmp/brief_stdout_${SLUG}_${DATE}.tmp"
       echo "${EXIT}"          > "/tmp/brief_exit_${SLUG}_${DATE}.tmp"
@@ -188,7 +191,7 @@ if [ -n "${CUSTOM_SLUGS}" ]; then
       TNAME=${CUSTOM_NAMES[$cj]}
       (
         OUT=$("${VENV_PY}" "${BRIEF_DIR}/generic_brief.py" \
-          --topic-id "${TID}" --name "${TNAME}" ${DATE_OPT[@]+"${DATE_OPT[@]}"} 2>&1)
+          --topic-id "${TID}" --name "${TNAME}" "${DATE_OPT[@]}" 2>&1)
         EXIT=$?
         printf '%s\n' "${OUT}" > "/tmp/brief_custom_stdout_${TID}_${DATE}.tmp"
         echo "${EXIT}"          > "/tmp/brief_custom_exit_${TID}_${DATE}.tmp"

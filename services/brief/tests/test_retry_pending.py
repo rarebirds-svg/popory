@@ -23,6 +23,16 @@ def _day(offset: int) -> str:
     return (datetime.datetime.now(KST) + datetime.timedelta(days=offset)).strftime("%Y-%m-%d")
 
 
+_RESULT_MARKERS = ("echo '__RUN_LIMIT_FAIL_CATS__='\n"
+                   "echo '__RUN_AUTH_FAIL_CATS__='\n"
+                   "echo '__RUN_LIMIT_RESET__=0'\n")
+
+
+def _stub_run_daily(brief: Path, calls: Path, body: str = _RESULT_MARKERS):
+    """run_daily 스텁 — 받은 인자를 기록하고 body 를 실행한다(기본은 전건 성공 보고)."""
+    (brief / "run_daily.sh").write_text("#!/bin/bash\n" f"echo \"$*\" >> '{calls}'\n" + body)
+
+
 @pytest.fixture
 def env(tmp_path):
     brief = tmp_path / "brief"
@@ -31,14 +41,7 @@ def env(tmp_path):
     (brief / "secrets" / "portal_endpoints.env").write_text("POPORY_PORTAL_API_BASE=http://x.invalid\n")
     shutil.copy(Path(__file__).resolve().parent.parent / "write_pending.py", brief / "write_pending.py")
     calls = tmp_path / "calls.txt"
-    # run_daily 스텁 — 받은 인자를 기록하고 전건 성공을 보고한다.
-    (brief / "run_daily.sh").write_text(
-        "#!/bin/bash\n"
-        f"echo \"$*\" >> '{calls}'\n"
-        "echo '__RUN_LIMIT_FAIL_CATS__='\n"
-        "echo '__RUN_AUTH_FAIL_CATS__='\n"
-        "echo '__RUN_LIMIT_RESET__=0'\n"
-    )
+    _stub_run_daily(brief, calls)
     pending = tmp_path / "pending"
     pending.mkdir()
     e = {
@@ -77,11 +80,36 @@ def test_retries_yesterdays_pending_for_its_own_date(env):
     assert "retry complete" in log                          # 로그도 원래 날짜 파일에
 
 
-def test_todays_pending_runs_without_date_override(env):
-    """오늘 항목은 예전처럼 실행 시각 기준 — --date 를 넘기면 published_at 이 0시로 바뀐다."""
+def test_todays_pending_is_pinned_to_its_date(env):
+    """오늘 항목도 날짜를 고정한다 — 23시대 재시도가 자정을 넘기면 파일 날짜가 갈려 발행이 빠진다.
+    (날짜가 오늘이면 generate 는 published_at 을 실행 시각으로 둔다.)"""
     _write_pending(env, _day(0), reset_at=0)
 
-    assert _run(env) == ["--now --only=(naver)"]
+    assert _run(env) == [f"--now --only=(naver) --date={_day(0)}"]
+
+
+def test_run_daily_abort_keeps_pending(env):
+    """run_daily 가 결과 마커 전에 죽으면(카테고리 스캔 중단 등) 복구가 아니다 — pending 을 지우지 않는다."""
+    _stub_run_daily(env["brief"], env["calls"], "echo 'boom' >&2\nexit 1\n")
+    path = _write_pending(env, _day(0), reset_at=0, cats=("naver", "realestate-pick5"), retry_count=2)
+
+    _run(env)
+
+    kept = json.loads(path.read_text())
+    assert kept["categories"] == ["naver", "realestate-pick5"]
+    assert kept["retry_count"] == 2                     # 사람이 고쳐야 풀리는 원인 — 횟수를 태우지 않는다
+    assert kept["reset_at"] > int(datetime.datetime.now().timestamp())   # 바로 다시 돌지 않게 미룬다
+    assert "retry aborted" in (env["brief"] / "logs" / f"{_day(0)}.log").read_text()
+
+
+def test_run_daily_clean_exit_without_markers_still_clears(env):
+    """정상 종료인데 마커가 없으면(대상 카테고리가 비활성·삭제) 예전처럼 지운다."""
+    _stub_run_daily(env["brief"], env["calls"], "exit 0\n")
+    path = _write_pending(env, _day(0), reset_at=0)
+
+    _run(env)
+
+    assert not path.exists()
 
 
 def test_not_yet_reset_yesterday_does_not_block_today(env):
@@ -90,7 +118,7 @@ def test_not_yet_reset_yesterday_does_not_block_today(env):
     yday_path = _write_pending(env, _day(-1), reset_at=far)
     _write_pending(env, _day(0), reset_at=0, cats=("legal-ai",))
 
-    assert _run(env) == ["--now --only=(legal-ai)"]
+    assert _run(env) == [f"--now --only=(legal-ai) --date={_day(0)}"]
     assert yday_path.exists()
 
 

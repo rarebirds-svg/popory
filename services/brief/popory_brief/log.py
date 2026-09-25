@@ -1,6 +1,7 @@
 # JSONL · KST · 메타만 적는 단일 로그 writer (모든 CLI 공용). 실패 레코드는 포털로도 전송한다.
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ AREA = "brief"
 SHIP_PATH = "/api/admin/job-logs"
 SHIP_TIMEOUT_SECONDS = 3
 ERROR_MAX_CHARS = 300
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # 메시지에 파일 경로가 그대로 박히는 예외 계열. OSError 는 filename 을(키 파일·token.json 위치),
 # SubprocessError 는 실행 커맨드 전체를 담는다. 자격증명 위치는 로그에 남기지 않는다 (타입 이름만).
@@ -75,7 +77,12 @@ def append_log(logs_dir: Path, record: dict) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     now = datetime.now(KST)
     record = {"ts": now.isoformat(timespec="seconds"), **record}
-    fname = logs_dir / f"{now.strftime('%Y-%m-%d')}.log"
+    # run_daily.sh 가 처리 중인 브리핑 날짜를 BRIEF_LOG_DATE 로 넘긴다. 자정을 넘긴 전날 재시도의
+    # 기록이 오늘 파일에 섞이면 오늘 헬스체크가 오늘 브리핑이 실패한 것으로 오판한다. ts 는 실제 시각.
+    day = os.environ.get("BRIEF_LOG_DATE", "")
+    if not _DATE_RE.fullmatch(day):
+        day = now.strftime("%Y-%m-%d")
+    fname = logs_dir / f"{day}.log"
     with fname.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
