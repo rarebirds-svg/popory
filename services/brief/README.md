@@ -155,14 +155,16 @@ ${BRIEF_DIR}/.venv/bin/python ${BRIEF_DIR}/publish_to_portal.py \
 | candidates 없음·본문 없음 | 5 | 백오프 재시도 후. 토큰 사용량(`thoughtsTokenCount`·`toolUsePromptTokenCount` 등)·`modelVersion`·`finishReason` 을 로그 `diag` 에 싣는다 |
 | 차단·MAX_TOKENS | 4 | `blockReason`·정책 차단 `finishReason`·토큰 상한은 재시도해도 같아서 바로 넘긴다 |
 
-**claude 대체.** Gemini 가 위 어느 이유로든 재시도까지 실패하면 그 카테고리를 claude CLI 로
-한 번 더 쓴다(기본 `claude-sonnet-4-6`, 프롬프트는 claude 용 원본). 2026-09-25 부동산 PICK 5
-두 카테고리가 Gemini 빈 응답으로 그날 유실된 뒤 넣었다.
+**claude 대체.** Gemini 가 위 어느 이유로든 재시도까지 실패하거나, 응답은 왔지만 태그가 빠졌거나
+잘려 파싱이 안 되면 그 카테고리를 claude CLI 로 한 번 더 쓴다(기본 `claude-sonnet-4-6`, 프롬프트는
+claude 용 원본). 2026-09-25 부동산 PICK 5 두 카테고리가 Gemini 빈 응답으로 그날 유실된 뒤 넣었다.
 
-- 로그. `gemini_fail` 레코드에 `"fallback": "<모델>"` 이 붙고, 이어서 claude 경로의 `ok`/`*_fail` 이 남는다.
+- 로그. `gemini_fail` 에 `"fallback": "<모델>"` 이 붙고(대체 시도), 대체로 발행까지 되면 `ok` 에도
+  같은 필드가 붙는다(대체 성공). 헬스체크는 뒤쪽으로 "Claude 대체 발행" 을 가른다.
 - 대체 성공. exit 0. 인증 마커를 남기지 않는다 — 대신 21:00 헬스체크 `브리핑잡` 이
   "Gemini 실패 N건 Claude 대체" 로 warn 을 띄운다(크레딧·키·프롬프트를 봐야 한다는 신호).
-- 대체도 실패. Gemini 가 쿼터(6)였으면 exit 6 + Gemini 리셋 epoch(retry 잡 대기),
+- 대체도 실패. 비정상 종료·형식 불량·예외 어느 쪽이든 같은 규칙으로 Gemini 쪽 복구 경로를 되살린다
+  (`fallback.restore_gemini_contract`). Gemini 가 쿼터(6)였으면 exit 6 + Gemini 리셋 epoch(retry 잡 대기),
   키·결제(3)였으면 `__BRIEF_AUTH_FAIL__=gemini` 를 남긴다. 그 밖엔 claude 경로의 exit code 그대로.
 - 끄기. `BRIEF_FALLBACK_MODEL=off`. claude CLI 가 없는 머신에서는 자동으로 꺼진다.
 

@@ -473,12 +473,29 @@ def test_brief_run_warns_when_published_only_through_claude_fallback(tmp_path):
     log = tmp_path / "d.log"
     log.write_text("\n".join([
         _GEMINI_EMPTY % ("realestate-pick5", ', "fallback": "claude-sonnet-4-6"'),
+        '{"cli": "generate_brief", "status": "ok", "category": "realestate-pick5", '
+        '"fallback": "claude-sonnet-4-6"}',
         _DONE_OK,
     ]), encoding="utf-8")
     status, msg = checks.check_brief_run(str(log))
     assert status == "warn"
     assert "7개 발행" in msg and "Claude 대체" in msg
     assert "realestate-pick5(Gemini 응답에 candidates 없음)" in msg
+
+
+def test_brief_run_does_not_call_retry_recovery_a_claude_fallback(tmp_path):
+    """대체가 실패한 뒤 재시도에서 Gemini 로 복구된 날은 Claude 대체가 아니다 — ok 로 끝난다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        _GEMINI_EMPTY % ("realestate-pick5", ', "fallback": "claude-sonnet-4-6"'),
+        '{"cli": "generate_brief", "status": "limit_fail", "category": "realestate-pick5", '
+        '"error": "claude 사용량 한도 — retry 잡 대기"}',
+        _DONE_PICK5.replace(",realestate-pick5-blog", ""),
+        '{"cli": "generate_brief", "status": "ok", "category": "realestate-pick5"}',
+        _DONE_OK,
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "ok", msg
 
 
 def test_brief_run_names_gemini_key_problem_instead_of_claude_login(tmp_path):

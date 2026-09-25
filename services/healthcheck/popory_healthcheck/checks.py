@@ -237,10 +237,13 @@ def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
     if dones:
         ok, failed, limit, auth = dones[-1]
         if failed == "none":
+            # "대체로 발행된" 카테고리만 센다 — ok 레코드의 fallback 이 기준이다. gemini_fail 의
+            # fallback 은 대체 "시도" 라서, 대체가 실패한 뒤 재시도에서 Gemini 로 복구된 날까지
+            # Claude 대체로 잘못 띄운다.
             fb_slugs = []
             for rec in records:
                 slug = rec.get("category")
-                if rec.get("status") == "gemini_fail" and rec.get("fallback") and slug not in fb_slugs:
+                if rec.get("status") == "ok" and rec.get("fallback") and slug not in fb_slugs:
                     fb_slugs.append(slug)
             if fb_slugs:
                 return ("warn", f"브리핑 {ok}개 발행 — Gemini 실패 {len(fb_slugs)}건 Claude 대체 "

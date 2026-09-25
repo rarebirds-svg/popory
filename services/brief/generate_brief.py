@@ -16,10 +16,10 @@ import argparse
 import datetime
 import json
 import os
-import re
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from popory_brief.categories import load_category
@@ -27,7 +27,8 @@ from popory_brief.log import append_log, safe_error, KST
 from popory_brief import limit_detect
 from popory_brief import gemini_client
 from popory_brief import link_check
-from popory_brief.fallback import fallback_model
+from popory_brief.fallback import fallback_model, restore_gemini_contract
+from popory_brief.response import ResponseFormatError, parse_response
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_rules import seo_rules
 from popory_brief.seo_title import normalize_title
@@ -122,25 +123,52 @@ def _gemini_fail_record(category: str, date_str: str, e: "gemini_client.GeminiEr
     if e.diag:
         record["diag"] = e.diag
     if fallback:
-        # 헬스체크가 "대체 발행" 을 이 필드로 가른다.
+        # 대체를 "시도" 했다는 표시. 대체로 발행까지 됐는지는 ok 레코드의 fallback 으로 가른다.
         record["fallback"] = fallback
     return record
 
 
+def _parse_or_exit(text: str, provider: str, category: str, date_str: str,
+                   on_fail=None) -> tuple[str, dict]:
+    """응답에서 (body, meta) 를 꺼낸다. 형식이 깨졌으면 parse_fail 을 남기고 exit 4.
+
+    on_fail 은 exit 직전에 부른다 — 대체 경로가 원래 Gemini 실패의 복구 규약을 되살리는 자리."""
+    try:
+        return parse_response(text)
+    except ResponseFormatError as e:
+        print(f"error: {provider} {e}", file=sys.stderr)
+        print("--- response tail ---\n" + e.detail, file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "parse_fail",
+                              "category": category, "date": date_str,
+                              "error": f"{provider} {e}"[:200]})
+        if on_fail:
+            on_fail()
+        sys.exit(4)
+
+
 def _run_gemini(*, model: str, system_text: str, user_msg: str,
                 category: str, date_str: str, backoff: list[int],
-                claude_prompts=None) -> str:
-    """Gemini API 로 본문 텍스트를 받아온다. 검색은 서버측 Google Search grounding 이 한다.
+                claude_prompts=None) -> tuple[str, dict, str | None]:
+    """Gemini API 로 (body, meta, 대체 모델|None) 을 받아온다. 검색은 서버측 Google Search grounding.
 
-    재시도까지 소진되면 claude CLI 로 한 번 더 쓴다(claude_prompts 는 그 경로용 (system, user)).
-    대체까지 실패하면 복구 경로가 남는 쪽 규약으로 끝낸다 — 쿼터는 exit 6(retry 잡 대기),
-    키·결제는 인증 마커(즉시 알림)."""
+    호출이 재시도까지 실패하거나 응답 형식이 깨지면 claude CLI 로 한 번 더 쓴다(claude_prompts 는
+    그 경로용 (system, user)). 대체가 어떤 식으로 실패하든(비정상 종료·형식 불량·예외) 복구 경로가
+    남는 쪽 규약으로 끝낸다 — 쿼터는 exit 6(retry 잡 대기), 키·결제는 인증 마커(즉시 알림)."""
     try:
-        return gemini_client.generate_with_retry(
+        text = gemini_client.generate_with_retry(
             system_prompt=system_text, user_msg=user_msg,
             model=model, timeout_seconds=TIMEOUT_SECONDS, backoff=backoff)
     except gemini_client.GeminiError as e:
         err = e
+    else:
+        try:
+            body, meta = parse_response(text)
+            return body, meta, None
+        except ResponseFormatError as e:
+            # 본문이 잘렸거나 태그를 빠뜨린 응답. 예전엔 parse_fail 로 그날 유실됐다.
+            print(f"error: Gemini {e}", file=sys.stderr)
+            print("--- response tail ---\n" + e.detail, file=sys.stderr)
+            err = gemini_client.GeminiError(f"Gemini 응답 형식 오류 — {e}", exit_code=4)
 
     fallback = fallback_model(CLAUDE_BIN) if claude_prompts else None
     if fallback is None:
@@ -150,17 +178,22 @@ def _run_gemini(*, model: str, system_text: str, user_msg: str,
     print(f"--- Gemini 실패(exit {err.exit_code}) — {fallback} 로 대체 생성 ---", file=sys.stderr)
     fb_system, fb_user = claude_prompts
     try:
-        return _run_claude(model=fallback, system_text=fb_system, user_msg=fb_user,
+        text = _run_claude(model=fallback, system_text=fb_system, user_msg=fb_user,
                            category=category, date_str=date_str, backoff=backoff)
     except SystemExit as fb_exit:
-        # 대체도 실패. claude 쪽 실패는 _run_claude 가 이미 기록했다.
-        if err.exit_code == 3:
-            print("__BRIEF_AUTH_FAIL__=gemini")
-        if err.is_limit and fb_exit.code != 6:
-            reset_epoch = err.reset_epoch or int(datetime.datetime.now(KST).timestamp())
-            print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
-            sys.exit(6)
+        # claude 쪽 실패는 _run_claude 가 이미 기록했다.
+        restore_gemini_contract(err, fb_exit.code if isinstance(fb_exit.code, int) else 1)
         raise
+    except Exception as ex:   # noqa: BLE001 — 예상 못 한 예외도 Gemini 복구 규약은 지킨다.
+        traceback.print_exc()
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "claude_fail",
+                              "category": category, "date": date_str,
+                              "error": f"대체 생성 예외 — {safe_error(ex)}"[:200]})
+        restore_gemini_contract(err, 5)
+        sys.exit(5)
+    body, meta = _parse_or_exit(text, "claude", category, date_str,
+                                on_fail=lambda: restore_gemini_contract(err, 4))
+    return body, meta, fallback
 
 
 def _exit_gemini(e: "gemini_client.GeminiError", category: str, date_str: str) -> None:
@@ -244,34 +277,16 @@ def main() -> None:
     backoff = [int(s) for s in os.environ.get("BRIEF_BACKOFF_SECONDS", "60,180").split(",") if s.strip()]
 
     system_text, user_msg = prompts(use_gemini)
+    fallback_used = None
     if use_gemini:
-        final_text = _run_gemini(model=model, system_text=system_text, user_msg=user_msg,
-                                 category=category.slug, date_str=date_str, backoff=backoff,
-                                 claude_prompts=prompts(False))
+        body, meta, fallback_used = _run_gemini(
+            model=model, system_text=system_text, user_msg=user_msg,
+            category=category.slug, date_str=date_str, backoff=backoff,
+            claude_prompts=prompts(False))
     else:
         final_text = _run_claude(model=model, system_text=system_text, user_msg=user_msg,
                                  category=category.slug, date_str=date_str, backoff=backoff)
-
-    body_m = re.search(r"<body_markdown>(.*?)</body_markdown>", final_text, re.DOTALL)
-    meta_m = re.search(r"<meta_json>\s*(\{.*?\})\s*</meta_json>", final_text, re.DOTALL)
-    if not body_m or not meta_m:
-        print("error: claude 응답에서 body_markdown/meta_json 태그를 찾지 못함", file=sys.stderr)
-        print("--- response last 1000 chars ---\n" + final_text[-1000:], file=sys.stderr)
-        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "parse_fail",
-                              "category": category.slug, "date": date_str,
-                              "error": "claude 응답에서 body_markdown/meta_json 태그를 찾지 못함"})
-        sys.exit(4)
-
-    body = body_m.group(1).strip()
-    try:
-        meta = json.loads(meta_m.group(1).strip())
-    except json.JSONDecodeError as e:
-        print(f"error: meta_json 파싱 실패: {e}", file=sys.stderr)
-        print(meta_m.group(1), file=sys.stderr)
-        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "parse_fail",
-                              "category": category.slug, "date": date_str,
-                              "error": f"meta_json 파싱 실패: {e}"[:200]})
-        sys.exit(4)
+        body, meta = _parse_or_exit(final_text, "claude", category.slug, date_str)
 
     # 제목 안전망. LLM 이 옛 말머리(`[부동산 주간 이슈 브리핑] 2026-09-05`)를 붙이면 검색 키워드가
     # 제목 앞단에서 밀려난다. 앞의 말머리·날짜를 걷어내고 `| 9월 1주차 부동산 브리핑` 꼬리를 붙인다.
@@ -315,11 +330,15 @@ def main() -> None:
     body_path.write_text(body, encoding="utf-8")
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    append_log(LOGS_DIR, {
+    ok_record = {
         "cli": "generate_brief", "status": "ok",
         "category": category.slug, "date": date_str,
         "body_chars": len(body), "title": meta.get("title"),
-    })
+    }
+    if fallback_used:
+        # 헬스체크가 "Claude 대체 발행" 을 이 필드로 가른다 — 대체 "시도" 가 아니라 "성공" 기준.
+        ok_record["fallback"] = fallback_used
+    append_log(LOGS_DIR, ok_record)
 
     print(json.dumps({
         "status": "ok",

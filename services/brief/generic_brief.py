@@ -12,17 +12,18 @@ import argparse
 import datetime
 import json
 import os
-import re
 import subprocess
 import sys
 import time
+import traceback
 import urllib.request
 from pathlib import Path
 
 from popory_brief import limit_detect
 from popory_brief import gemini_client
 from popory_brief import link_check
-from popory_brief.fallback import fallback_model
+from popory_brief.fallback import fallback_model, restore_gemini_contract
+from popory_brief.response import ResponseFormatError, parse_response
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_title import date_label, normalize_title, RECOMMENDED_MAX
 
@@ -120,25 +121,39 @@ def _run_claude(model: str, system_prompt: str, user_msg: str, topic_id: str, da
         sys_prompt_path.unlink(missing_ok=True)
 
 
-def _gemini_failed(e: "gemini_client.GeminiError", prompts, topic_id: str, date_str: str) -> str:
-    """Gemini 가 재시도까지 실패했을 때. claude CLI 가 있으면 대체 생성하고, 없으면 규약대로 끝낸다.
+def _parse_or_exit(text: str, provider: str, on_fail=None) -> tuple[str, dict]:
+    """응답에서 (body, meta) 를 꺼낸다. 형식이 깨졌으면 exit 4 (on_fail 은 그 직전에 부른다)."""
+    try:
+        return parse_response(text)
+    except ResponseFormatError as e:
+        print(f"error: {provider} {e}", file=sys.stderr)
+        print("--- response tail ---\n" + e.detail, file=sys.stderr)
+        if on_fail:
+            on_fail()
+        sys.exit(4)
 
-    대체까지 실패하면 복구 경로가 남는 쪽으로 끝낸다 — 쿼터는 exit 6(재시도 대기),
-    키·결제는 인증 마커(즉시 알림). generate_brief._run_gemini 와 같은 규칙이다."""
+
+def _gemini_failed(e: "gemini_client.GeminiError", prompts, topic_id: str,
+                   date_str: str) -> tuple[str, dict]:
+    """Gemini 가 재시도까지 실패했거나 형식이 깨졌을 때. claude CLI 가 있으면 대체 생성하고,
+    없으면 규약대로 끝낸다.
+
+    대체가 어떤 식으로 실패하든(비정상 종료·형식 불량·예외) 복구 경로가 남는 쪽으로 끝낸다 —
+    쿼터는 exit 6(재시도 대기), 키·결제는 인증 마커(즉시 알림). generate_brief._run_gemini 와 같은 규칙이다."""
     fallback = fallback_model(CLAUDE_BIN)
     if fallback is not None:
         print(f"--- Gemini 실패(exit {e.exit_code}) — {fallback} 로 대체 생성 ---", file=sys.stderr)
         system_prompt, user_msg = prompts(False)
         try:
-            return _run_claude(fallback, system_prompt, user_msg, topic_id, date_str)
+            text = _run_claude(fallback, system_prompt, user_msg, topic_id, date_str)
         except SystemExit as fb_exit:
-            if e.exit_code == 3:
-                print("__BRIEF_AUTH_FAIL__=gemini")
-            if e.is_limit and fb_exit.code != 6:
-                reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())
-                print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
-                sys.exit(6)
+            restore_gemini_contract(e, fb_exit.code if isinstance(fb_exit.code, int) else 1)
             raise
+        except Exception:   # noqa: BLE001 — 예상 못 한 예외도 Gemini 복구 규약은 지킨다.
+            traceback.print_exc()
+            restore_gemini_contract(e, 5)
+            sys.exit(5)
+        return _parse_or_exit(text, "claude", on_fail=lambda: restore_gemini_contract(e, 4))
     if e.is_limit:
         # 쿼터는 claude 한도와 같은 규약으로 넘긴다 — retry 잡이 그대로 복구한다.
         reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())
@@ -246,24 +261,20 @@ def main() -> None:
                 system_prompt=system_prompt, user_msg=user_msg,
                 model=model, timeout_seconds=TIMEOUT_SECONDS, backoff=BACKOFF_SECONDS)
         except gemini_client.GeminiError as e:
-            final_text = _gemini_failed(e, prompts, args.topic_id, date_str)
+            body, meta = _gemini_failed(e, prompts, args.topic_id, date_str)
+        else:
+            try:
+                body, meta = parse_response(final_text)
+            except ResponseFormatError as e:
+                # 본문이 잘렸거나 태그를 빠뜨린 응답도 대체 대상이다(예전엔 exit 4 로 유실).
+                print(f"error: Gemini {e}", file=sys.stderr)
+                print("--- response tail ---\n" + e.detail, file=sys.stderr)
+                body, meta = _gemini_failed(
+                    gemini_client.GeminiError(f"Gemini 응답 형식 오류 — {e}", exit_code=4),
+                    prompts, args.topic_id, date_str)
     else:
         final_text = _run_claude(model, system_prompt, user_msg, args.topic_id, date_str)
-
-    body_m = re.search(r"<body_markdown>(.*?)</body_markdown>", final_text, re.DOTALL)
-    meta_m = re.search(r"<meta_json>\s*(\{.*?\})\s*</meta_json>", final_text, re.DOTALL)
-    if not body_m or not meta_m:
-        print("error: claude 응답에서 body_markdown/meta_json 태그를 찾지 못함", file=sys.stderr)
-        print("--- response last 1000 chars ---\n" + final_text[-1000:], file=sys.stderr)
-        sys.exit(4)
-
-    body = body_m.group(1).strip()
-    try:
-        meta = json.loads(meta_m.group(1).strip())
-    except json.JSONDecodeError as e:
-        print(f"error: meta_json 파싱 실패: {e}", file=sys.stderr)
-        print(meta_m.group(1), file=sys.stderr)
-        sys.exit(4)
+        body, meta = _parse_or_exit(final_text, "claude")
 
     # 제목 안전망 — 옛 말머리·날짜를 걷어내고 발행 꼬리를 뒤에 붙인다 (generate_brief.py 와 동일).
     meta["title"] = normalize_title(str(meta.get("title") or ""), suffix=title_suffix,

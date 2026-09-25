@@ -824,6 +824,8 @@ def test_generate_gemini_empty_response_falls_back_to_claude(monkeypatch, capsys
 
     assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["status"] == "ok"
     assert _statuses(rec) == ["gemini_fail", "ok"]
+    # 헬스체크는 "대체 시도" 가 아니라 ok 레코드의 fallback 으로 "대체 발행" 을 가른다.
+    assert rec.calls[-1][1]["fallback"] == "claude-sonnet-4-6"
     fail = rec.calls[0][1]
     assert fail["fallback"] == "claude-sonnet-4-6"
     assert fail["exit_code"] == 5
@@ -927,3 +929,69 @@ def test_generate_past_date_tells_model_the_day_is_over(monkeypatch):
         generate_brief.main()
 
     assert "지금은 2026-09-15 23:59 (KST)" in seen["user_msg"]
+
+
+@pytest.mark.parametrize("err,code,marker", [
+    (gemini_client.GeminiError("쿼터 초과(429)", exit_code=6, retryable=True, is_limit=True,
+                               reset_epoch=1789000000), 6, "__BRIEF_LIMIT_RESET__=1789000000"),
+    (gemini_client.GeminiError("인증 실패(403)", exit_code=3), 4, "__BRIEF_AUTH_FAIL__=gemini"),
+])
+def test_generate_fallback_untagged_output_keeps_gemini_contract(monkeypatch, capsys, err, code, marker):
+    """대체 claude 가 exit 0 이지만 태그 없는 응답을 내도 Gemini 쪽 복구 규약(쿼터 6·인증 마커)은 남는다."""
+    rec = _patch(monkeypatch, generate_brief)
+    _gemini_then_claude(monkeypatch, err, _Completed(0, stdout="태그 없는 응답"))
+    _gemini_argv(monkeypatch, fallback="claude-sonnet-4-6")
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == code
+    assert marker in capsys.readouterr().out
+    assert _statuses(rec) == ["gemini_fail", "parse_fail"]
+
+
+def test_generate_fallback_exception_keeps_gemini_quota_contract(monkeypatch, capsys):
+    """대체 실행이 예외(예: CLI 실행 권한)로 죽어도 쿼터 실패는 exit 6 으로 retry 잡에 실린다."""
+    rec = _patch(monkeypatch, generate_brief)
+    _gemini_then_claude(monkeypatch, gemini_client.GeminiError(
+        "쿼터 초과(429)", exit_code=6, retryable=True, is_limit=True, reset_epoch=1789000000))
+    monkeypatch.setattr(generate_brief.subprocess, "run", _raise(PermissionError("denied")))
+    _gemini_argv(monkeypatch, fallback="claude-sonnet-4-6")
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 6
+    assert "__BRIEF_LIMIT_RESET__=1789000000" in capsys.readouterr().out
+    assert _statuses(rec) == ["gemini_fail", "claude_fail"]
+
+
+def test_generate_untagged_gemini_output_falls_back_to_claude(monkeypatch, capsys):
+    """Gemini 가 답은 했지만 태그를 빠뜨렸거나 잘린 경우도 대체 대상이다(예전엔 parse_fail 로 유실)."""
+    rec = _patch(monkeypatch, generate_brief)
+    monkeypatch.setattr(generate_brief, "CLAUDE_BIN", sys.executable)
+    monkeypatch.setattr(generate_brief.gemini_client, "generate_with_retry",
+                        lambda **k: "<body_markdown>잘린 본문")
+    monkeypatch.setattr(generate_brief.subprocess, "run", _ClaudeStub(_Completed(0, stdout=_TAGGED_OK)))
+    _dead(monkeypatch, [])
+    _gemini_argv(monkeypatch, fallback="claude-sonnet-4-6")
+
+    generate_brief.main()
+
+    assert _statuses(rec) == ["gemini_fail", "ok"]
+    assert rec.calls[0][1]["error"].startswith("Gemini 응답 형식 오류")
+    assert rec.calls[-1][1]["fallback"] == "claude-sonnet-4-6"
+
+
+def test_generate_untagged_gemini_output_without_fallback_exits_4(monkeypatch):
+    rec = _patch(monkeypatch, generate_brief)
+    monkeypatch.setattr(generate_brief.gemini_client, "generate_with_retry", lambda **k: "태그 없음")
+    _gemini_argv(monkeypatch)   # 대체 끔
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 4
+    r = rec.one(generate_brief)
+    assert r["status"] == "gemini_fail"
+    assert r["error"].startswith("Gemini 응답 형식 오류")

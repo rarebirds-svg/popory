@@ -12,12 +12,15 @@
 """
 from __future__ import annotations
 
+import datetime
 import os
+import sys
 from pathlib import Path
 
 from popory_brief import gemini_client
 
 DEFAULT_FALLBACK_MODEL = "claude-sonnet-4-6"
+KST = datetime.timezone(datetime.timedelta(hours=9))
 _OFF = frozenset({"", "off", "none", "0", "false"})
 
 
@@ -34,3 +37,19 @@ def fallback_model(claude_bin: str) -> str | None:
     if not Path(claude_bin).exists():
         return None
     return model
+
+
+def restore_gemini_contract(err: "gemini_client.GeminiError", fallback_code: int) -> None:
+    """대체까지 실패했을 때 원래 Gemini 실패의 복구 경로를 되살린다.
+
+    대체가 어떤 식으로 실패하든(비정상 종료·형식 불량·예외) 같은 규칙이어야 한다 — 하나라도
+    빠지면 Gemini 쿼터 실패가 exit 6 대신 exit 4 로 끝나 retry 잡 대상에서 빠진다.
+    - 키·결제(exit 3): 인증 마커를 남긴다 → run_daily 즉시 알림·pending.
+    - 쿼터(is_limit): 대체 쪽이 한도(6)가 아니면 Gemini 리셋 epoch 로 exit 6 → retry 잡.
+    exit 6 이 필요하면 여기서 끝낸다. 아니면 돌아와서 호출부가 대체 쪽 exit code 로 끝낸다."""
+    if err.exit_code == 3:
+        print("__BRIEF_AUTH_FAIL__=gemini")
+    if err.is_limit and fallback_code != 6:
+        reset_epoch = err.reset_epoch or int(datetime.datetime.now(KST).timestamp())
+        print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+        sys.exit(6)
