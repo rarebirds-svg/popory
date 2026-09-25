@@ -1023,3 +1023,28 @@ def test_publish_requires_area(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as e:
         publish_to_portal.main()
     assert e.value.code == 2
+
+
+@pytest.mark.parametrize("area,ok", [
+    ("brief-realestate-pick5-blog", True),
+    ("custom-abc123", True),
+    ("brief", True),                                  # 단일 브리핑 시절 영역(하위호환)
+    ("realestate-pick5-blog", False),                 # 2026-09-25 실제 오발행 — brief- 누락
+    ("brief-no-such-category", False),
+    ("custom-", False),
+])
+def test_publish_area_must_be_a_feed_area(area, ok):
+    assert (publish_to_portal.check_area(area) is None) is ok
+
+
+def test_publish_rejects_bad_area_before_calling_portal(monkeypatch, tmp_path):
+    rec = _patch(monkeypatch, publish_to_portal)
+    monkeypatch.setattr(publish_to_portal, "publish", _raise(AssertionError("포털을 부르면 안 된다")))
+    _argv(monkeypatch, "--area", "realestate-pick5-blog",
+          "--meta-file", str(tmp_path / "m.json"), "--body-file", str(tmp_path / "b.md"))
+
+    with pytest.raises(SystemExit) as e:
+        publish_to_portal.main()
+
+    assert e.value.code == 2
+    assert rec.one(publish_to_portal)["status"] == "init_fail"
