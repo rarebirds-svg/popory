@@ -1,7 +1,7 @@
 ---
 slug: realestate-pick5
 name: 부동산 데일리 뉴스 PICK 5
-delivery_mode: standalone
+delivery_mode: portal_only
 subject_template: "[{date}] {name}"
 sender_name: "{name}"
 enabled: true

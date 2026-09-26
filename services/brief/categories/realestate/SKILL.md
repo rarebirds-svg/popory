@@ -1,7 +1,7 @@
 ---
 slug: realestate
 name: 부동산
-delivery_mode: standalone
+delivery_mode: portal_only
 subject_template: "[{name} 주간 이슈 브리핑] {date}"
 sender_name: "{name} 주간 이슈 브리핑"
 enabled: true
