@@ -422,6 +422,37 @@ def test_brief_run_catches_scan_abort(tmp_path):
     assert "스캔 중단" in msg
 
 
+# run_daily.sh 4단계가 커스텀 주제 조회에 실패했을 때 남기는 줄.
+_CUSTOM_LOOKUP_FAIL = '{"ts":"2026-09-04T08:31:40+09:00","cli":"run_daily","msg":"custom_topics lookup failed exit=3"}'
+
+
+def test_brief_run_warns_on_custom_lookup_failure_even_when_done(tmp_path):
+    """조회는 done 몇 초 전에 일어나고 재시도 대상도 아니다 — done 이 정상이어도 그날 커스텀
+    주제는 빠진 것이다. done 전에만 보는 실패 마커로는 점검 시각에 이미 안 보인다."""
+    log = tmp_path / "d.log"
+    log.write_text(_CUSTOM_LOOKUP_FAIL + "\n" + _DONE_OK, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "7개" in msg and "커스텀 주제 조회 실패" in msg
+
+
+def test_brief_run_keeps_category_cause_alongside_custom_lookup_failure(tmp_path):
+    log = tmp_path / "d.log"
+    log.write_text(_CUSTOM_LOOKUP_FAIL + "\n" + _DONE_LIMIT, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "세션 한도" in msg and "커스텀 주제 조회 실패" in msg
+
+
+def test_brief_run_am_warns_on_custom_lookup_failure_while_generating(tmp_path):
+    """생성 창 안이라도 조회 실패는 그날 확정이다 — 오전 점검에서 바로 띄운다."""
+    log = tmp_path / "d.log"
+    log.write_text('{"msg":"generate all done"}\n' + _CUSTOM_LOOKUP_FAIL, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log), mode="am")
+    assert status == "warn"
+    assert "커스텀 주제 조회 실패" in msg
+
+
 def test_brief_run_am_does_not_warn_while_generating(tmp_path):
     """오전 점검은 생성 창(08:00~10:00)과 겹치므로 미완료를 경보하지 않는다."""
     log = tmp_path / "d.log"
