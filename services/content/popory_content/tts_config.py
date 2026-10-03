@@ -4,7 +4,7 @@
 import os
 import datetime
 
-from popory_content import names, options, tts, video
+from popory_content import names, options, pronunciation, runtime_info, tts, video
 
 # 규칙 설명 + 그 규칙이 드러나는 입력 예시. 결과는 보고 시점에 실제 함수로 계산한다.
 # (라벨, 입력) — 한 입력이 여러 규칙을 건드려도 된다. 새 규칙을 tts.py 에 넣으면 여기에도 한 줄 추가.
@@ -15,13 +15,25 @@ _EXAMPLES: list[tuple[str, str]] = [
     ("숫자 범위 틸드 → '에서'", "3~5명이 참석했다."),
     ("가운뎃점 나열 → 쉼표", "정치·경제·사회를 다룬다."),
     ("콜론·세미콜론 → 쉼표", "결론: 습관이 전부다."),
-    ("앰퍼샌드 → '앤'", "S&P 500 과 R&D 비중"),
+    ("발음 사전(약어·고유명사)", "S&P 500 과 R&D 비중, CEO가 SAT 를 봤다. A vs. B"),
+    ("'&' 는 앤 (사전에 없는 경우)", "AT&T 와 Q&A"),
     ("퍼센트 기호 → '퍼센트'", "수익률이 12% 올랐다."),
     ("한글 없는 괄호 주석 제거", "구방심(求放心)을 말한다."),
     ("한글 있는 괄호는 괄호만 벗김", "복리(이자에 붙는 이자)의 힘"),
     ("천 단위 콤마 제거 + 한자어 수사", "1,700명이 모였다."),
     ("소수 → 붙인 한글", "비율은 29.2 였다."),
-    ("정수 → 한자어 수사", "제1차 세계대전은 1914년에 시작됐다."),
+    ("정수 → 한자어 수사(년·월·일·분·퍼센트 등)", "제1차 세계대전은 1914년 9월에 시작됐다."),
+    ("고유어 수사(가지·개·명…)", "3가지, 37개, 20명"),
+    ("권은 권차라 한자어", "1권의 부제는, 2권은"),
+    ("고유어 수사(시각·시간)", "오전 7시에 24시간 일했다."),
+    ("고유어 수사(번·살·달)", "3번 말했다. 83살, 2달 전."),
+    ("6월·10월은 유월·시월", "6월과 10월"),
+    ("번은 횟수일 때만 고유어", "3번 말했다. 5번째, 2번이나."),
+    ("번호 매김은 한자어(법칙·원칙·단계…)", "1번 법칙, 2번 원칙, 3번 단계"),
+    ("범위는 단위를 양쪽에", "3~5명이 참석했다."),
+    ("소수가 낀 범위", "연 6.5~7%, 3.5~4개"),
+    ("100 이상은 한자어 + 띄어쓰기", "100개와 1,700명"),
+    ("한자어로 남기는 단위(개월·대·달러·번호)", "3개월, 3대 기업, 3달러, 1번 항목"),
     ("문장 앞 간투사 제거", "음, 그렇다면 어떻게 해야 할까요?"),
     ("마크다운 기호 잔여물 제거", "**핵심**은 > 꾸준함 이다."),
 ]
@@ -33,21 +45,16 @@ def _env_info(name: str, default: str, current) -> dict:
     return {"env": name, "default": default, "current": current, "overridden": raw is not None and raw != default}
 
 
-def _voice_family(voice_name: str) -> str:
-    for fam in ("Chirp3-HD", "Neural2", "Wavenet", "Standard", "Studio", "Journey"):
-        if fam in voice_name:
-            return fam
-    return "기타"
-
-
 def build_tts_config() -> dict:
     """어드민 TTS 화면이 그대로 그리는 JSON. 키는 화면과의 계약이라 함부로 바꾸지 않는다."""
     voices = [
-        {"key": k, "name": v, "family": _voice_family(v)}
+        {"key": k, "name": v, "family": tts.voice_family(v)}
         for k, v in options.VOICE.items()
     ]
     return {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        # 설정 스냅샷과 같은 보고에 실어 보낸다(마이그레이션 없이). 워커가 어떤 코드로 도는지 — runtime_info.py 참고.
+        "runtime": runtime_info.runtime_snapshot(),
         "engine": {
             "provider": "Google Cloud Text-to-Speech",
             "language": tts.LANGUAGE,
@@ -84,6 +91,11 @@ def build_tts_config() -> dict:
             for label, text in _EXAMPLES
         ],
         "name_fixes": [{"wrong": w, "right": r} for w, r in names._NAME_FIXES.items()],
-        # 단어별 발음 사전(SSML phoneme/sub)은 없다. 없다는 사실도 화면이 정직하게 보여야 한다.
-        "pronunciation_dictionary": {"exists": False},
+        # 발음 사전 — 텍스트 치환(SSML sub 아님). 자막엔 원문이 남고 음성만 독음으로 바뀐다.
+        "pronunciation_dictionary": {
+            "exists": True,
+            "entries": [{"term": t, "reading": r, "ignore_case": t in pronunciation.IGNORE_CASE,
+                         "note": pronunciation.NOTES.get(t, "")}
+                        for t, r in pronunciation.PRONUNCIATIONS.items()],
+        },
     }

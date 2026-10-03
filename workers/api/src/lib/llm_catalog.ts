@@ -63,7 +63,8 @@ export function defaultModelOf(feature: string): string {
 // id 는 공급자에 그대로 넘어간다 — claude 는 claude CLI 의 --model, gemini 는 API 경로의 모델명.
 // 그래서 오탈자 하나가 그날 잡을 죽인다. 새 모델을 넣을 때 공급자 문서의 정확한 id 를 확인한다.
 export const MODELS: { id: string; label: string; note: string; provider: Provider }[] = [
-  { id: "claude-opus-5", label: "Opus 5", note: "가장 강한 추론. 호출당 비용·시간이 가장 크다", provider: "claude" },
+  { id: "claude-opus-5-5", label: "Opus 5.5", note: "Opus 최신. 가장 강한 추론 — 호출당 비용·시간이 가장 크다", provider: "claude" },
+  { id: "claude-opus-5", label: "Opus 5", note: "Opus 직전 세대. 추론 강함", provider: "claude" },
   { id: "claude-opus-4-8", label: "Opus 4.8", note: "Opus 계열 직전 세대", provider: "claude" },
   { id: "claude-opus-4-7", label: "Opus 4.7", note: "Opus 계열", provider: "claude" },
   { id: "claude-opus-4-6", label: "Opus 4.6", note: "Opus 계열 구세대", provider: "claude" },
@@ -78,15 +79,34 @@ export const MODELS: { id: string; label: string; note: string; provider: Provid
 export const MODEL_IDS = new Set(MODELS.map((m) => m.id));
 export const FEATURE_KEYS = new Set(FEATURES.map((f) => f.key));
 
+// 목록에 없는 모델도 어드민에서 id 를 직접 적어 쓸 수 있다. 새 모델이 나올 때마다 이 파일을
+// 고치고 배포해야 쓸 수 있으면 실제로는 며칠씩 못 쓴다 — 목록은 "추천"이고, 입력칸이 탈출구다.
+//
+// 대신 형식만은 좁게 잡는다. id 는 공급자에 그대로 넘어가므로(claude CLI 의 --model,
+// Gemini API 경로의 모델명) 아무 문자열이나 통과시키면 오탈자가 그날 잡을 죽인다. 형식이
+// 맞아도 실재하지 않는 id 면 생성 단계에서 실패하니, 어드민 화면에서 그 점을 같이 안내한다.
+export const MODEL_ID_PATTERN = "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$";
+export const MODEL_ID_MAX = 64;
+const MODEL_ID_RE = new RegExp(MODEL_ID_PATTERN);
+
+// 공급자는 id 접두사로 가른다. 호출 경로가 아예 다르므로(claude CLI vs Gemini API 키)
+// 접두사를 모르는 id 는 공급자를 못 정해 거절된다 — 예: gpt-4.
+export const PROVIDER_PREFIX: Record<Provider, string> = { claude: "claude-", gemini: "gemini-" };
+
 export function providerOf(modelId: string): Provider | undefined {
-  return MODELS.find((m) => m.id === modelId)?.provider;
+  const known = MODELS.find((m) => m.id === modelId);
+  if (known) return known.provider;
+  if (modelId.length > MODEL_ID_MAX || !MODEL_ID_RE.test(modelId)) return undefined;
+  const hit = (Object.entries(PROVIDER_PREFIX) as [Provider, string][]).find(([, p]) => modelId.startsWith(p));
+  return hit?.[0];
 }
 
 export function providersOf(service: ServiceKey): Provider[] {
   return SERVICES.find((s) => s.key === service)?.providers ?? [];
 }
 
-// 그 기능에 이 모델을 붙일 수 있는가. 카탈로그에 있는 id 여도 서비스가 못 부르는 공급자면 거절한다.
+// 그 기능에 이 모델을 붙일 수 있는가. 카탈로그에 있든 직접 입력이든, 서비스가 못 부르는
+// 공급자면 거절한다(예: 컨텐츠에 gemini-*).
 export function isModelAllowed(feature: string, modelId: string): boolean {
   const f = FEATURES.find((x) => x.key === feature);
   const provider = providerOf(modelId);

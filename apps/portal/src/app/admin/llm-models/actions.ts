@@ -15,6 +15,7 @@ export async function saveModels(form: FormData) {
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ settings }),
   });
-  if (!res.ok) throw new Error(`llm-models ${res.status}`);
+  // 400 은 대개 직접 입력한 모델 id 형식·공급자 문제다. 본문을 붙여야 화면에서 뭐가 틀렸는지 보인다.
+  if (!res.ok) throw new Error(`llm-models ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
   revalidatePath("/admin/llm-models");
 }

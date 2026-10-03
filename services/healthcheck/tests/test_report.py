@@ -60,8 +60,23 @@ def test_fold_sections_accepts_every_gather_check_name():
     """gather() 가 내는 모든 점검명이 _AREA_OF 에 등록돼 있어야 한다 — 누락은 실행 시 예외."""
     from popory_healthcheck import report
     names = ["포털", "API", "Claude인증", "브리핑", "브리핑잡", "브리핑데몬",
-             "워커데몬", "이미지데몬", "워커로그", "자원한도", "콘텐츠루틴"]
+             "워커데몬", "이미지데몬", "워커로그", "자원한도", "콘텐츠루틴", "GitHub토큰"]
     sections = report.fold_sections([(n, "ok", "x") for n in names])  # 미등록이면 ValueError
     assert {"service", "jobs", "anomaly"} <= set(sections)
     # 브리핑 관련 점검은 전부 자동화(jobs) 영역 — 하나라도 다른 영역으로 새면 다이제스트 행이 갈린다
     assert sections["jobs"]["status"] == "ok"
+
+
+def test_every_worst_item_message_surfaces_so_cause_is_not_hidden():
+    """결과(브리핑 미확인)와 원인(브리핑잡)이 같은 영역에서 둘 다 warn 이면 둘 다 보여야 한다.
+
+    2026-09-25: 첫 항목 메시지만 실려 "PICK 5 미확인" 만 뜨고 Gemini 빈 응답이라는 원인은
+    다이제스트에 안 보였다."""
+    s = report.fold_sections(_results(브리핑="warn", 브리핑잡="warn"))
+    assert "브리핑 메시지" in s["jobs"]["text"]
+    assert "브리핑잡 메시지" in s["jobs"]["text"]
+
+
+def test_lower_severity_messages_stay_out_of_text():
+    s = report.fold_sections(_results(Claude인증="fail", 브리핑="warn"))
+    assert s["jobs"]["text"] == "Claude인증 메시지"

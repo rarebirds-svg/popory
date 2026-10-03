@@ -3,7 +3,21 @@ import json
 
 import pytest
 
-from popory_content import names, options, tts, tts_config, video
+from popory_content import names, options, pronunciation, tts, tts_config, video
+
+
+@pytest.fixture(autouse=True)
+def _no_git_network(monkeypatch):
+    """build_tts_config 는 runtime_snapshot 으로 git ls-remote(네트워크)를 부른다 — 단위 테스트가 원격에 기대면 느리고 불안정하다."""
+    monkeypatch.setattr(tts_config.runtime_info, "runtime_snapshot",
+                        lambda: {"loaded_commit": "abc1234", "head_commit": "abc1234", "branch": "main", "started_at": 1,
+                                 "loaded_subject": "x", "pulled_not_restarted": False,
+                                 "behind": {"state": "up_to_date", "count": 0}})
+
+
+def test_snapshot_carries_the_worker_runtime_version():
+    c = tts_config.build_tts_config()
+    assert c["runtime"]["loaded_commit"] == "abc1234" and c["runtime"]["behind"]["state"] == "up_to_date"
 
 
 def test_snapshot_reflects_live_module_values(monkeypatch):
@@ -43,11 +57,13 @@ def test_normalization_examples_are_computed_not_hand_written():
     assert "퍼센트" in by["퍼센트 기호 → '퍼센트'"]
 
 
-def test_name_fixes_mirror_names_module_and_no_pronunciation_dictionary():
+def test_name_fixes_mirror_names_module_and_dictionary_mirrors_pronunciation_module():
     c = tts_config.build_tts_config()
     assert {f["wrong"]: f["right"] for f in c["name_fixes"]} == names._NAME_FIXES
-    # 단어별 발음 사전은 없다. 있는 척하지 않고 없다고 보고한다 — 생기면 이 단언과 화면을 함께 고친다.
-    assert c["pronunciation_dictionary"] == {"exists": False}
+    d = c["pronunciation_dictionary"]
+    assert d["exists"] is True
+    assert {e["term"]: e["reading"] for e in d["entries"]} == pronunciation.PRONUNCIATIONS
+    assert {e["term"] for e in d["entries"] if e["ignore_case"]} == pronunciation.IGNORE_CASE
 
 
 def test_api_key_is_never_included(monkeypatch):

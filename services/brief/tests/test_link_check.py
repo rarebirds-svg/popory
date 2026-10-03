@@ -192,3 +192,14 @@ def test_strip_dead_links_noop_when_nothing_dead():
 def test_degrade_is_a_valid_mode(monkeypatch):
     monkeypatch.setenv("BRIEF_LINK_CHECK", "degrade")
     assert lc.mode() == "degrade"
+
+
+def test_unexpected_parse_error_is_undecidable_not_fatal(monkeypatch):
+    """urllib3 버전에 따라 깨진 호스트('news..naver.com')가 LocationParseError(ValueError)를
+    requests 로 감싸지 않고 던진다. 링크 점검 하나로 생성 전체가 exit 1 로 죽으면 안 된다."""
+    def _head(url, **kwargs):
+        raise ValueError("Failed to parse: news..naver.com")
+    monkeypatch.setattr(lc.requests, "head", _head)
+
+    assert lc.check_url("https://news..naver.com/x") is None
+    assert lc.dead_links("[a](https://news..naver.com/x)") == []
