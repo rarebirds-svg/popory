@@ -60,3 +60,36 @@ def test_every_entry_is_actually_applied_and_longer_keys_win():
     for term, reading in pronunciation.PRONUNCIATIONS.items():
         assert pronunciation.apply_pronunciations(f"x {term} y") == f"x {reading} y"
     assert pronunciation.apply_pronunciations("") == ""
+
+
+# --- SAVERS·AA: 실제 대본(scripts_34.json)의 문장으로 확인 -------------------------------------------------------
+@pytest.mark.parametrize("text,want", [
+    ("투병 중에도 그는 할 수 있는 만큼 SAVERS 루틴을 이어갔습니다.", "투병 중에도 그는 할 수 있는 만큼 세이버스 루틴을 이어갔습니다."),
+    ("핵심은 SAVERS, 침묵과 확언, 시각화와 운동, 독서와 쓰기 여섯 가지인데요.",
+     "핵심은 세이버스, 침묵과 확언, 시각화와 운동, 독서와 쓰기 여섯 가지인데요."),
+    ("두히그는 익명의 알코올중독자들 모임, 이른바 AA의 사례로 이 믿음의 힘을 설명합니다.",
+     "두히그는 익명의 알코올중독자들 모임, 이른바 에이에이의 사례로 이 믿음의 힘을 설명합니다."),
+    ("AA의 프로그램 자체는 과학적으로 완벽하지 않습니다.", "에이에이의 프로그램 자체는 과학적으로 완벽하지 않습니다."),
+])
+def test_savers_and_aa_from_real_scripts(text, want):
+    assert spoken_text(text) == want
+
+
+def test_savers_intro_sentence_is_redundant_but_not_wrong():
+    """대본이 스스로 "세이버스, 곧 SAVERS" 라고 소개하는 문장 — 사전 적용 뒤 "세이버스, 곧 세이버스" 가 된다.
+    어색하지만 틀린 소리는 아니다(읽는 법은 이미 같다). 대본 생성 쪽에서 줄일 문제라 여기선 동작만 고정한다."""
+    assert spoken_text("각 단어의 앞 글자를 따서 세이버스, 곧 SAVERS라는 이름을 붙였습니다.") \
+        == "각 단어의 앞 글자를 따서 세이버스, 곧 세이버스라는 이름을 붙였습니다."
+
+
+@pytest.mark.parametrize("text", [
+    "AA 등급 회사채", "AA등급 채권", "AA급 신용", "신용등급은 AA+ 입니다", "AA- 로 강등", "AAA 등급",
+])
+def test_aa_credit_ratings_are_not_read_as_the_organization(text):
+    """채권 신용등급 AA 는 "더블에이" 라 단체명 독음(에이에이)을 붙이면 틀린다 — 이 채널은 투자 책도 다룬다."""
+    assert "에이에이" not in spoken_text(text)
+
+
+def test_aa_group_is_read_even_next_to_a_particle_or_comma():
+    assert spoken_text("AA, 즉 모임") == "에이에이, 즉 모임"
+    assert spoken_text("AA가 시작됐다") == "에이에이가 시작됐다"

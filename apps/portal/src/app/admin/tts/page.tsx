@@ -22,7 +22,7 @@ interface TtsConfig {
   voice_fx: { deepen_semitones: Tunable; enabled: boolean };
   normalization: { label: string; input: string; spoken: string }[];
   name_fixes: { wrong: string; right: string }[];
-  pronunciation_dictionary: { exists: boolean; entries?: { term: string; reading: string; ignore_case: boolean }[] };
+  pronunciation_dictionary: { exists: boolean; entries?: { term: string; reading: string; ignore_case: boolean; note?: string }[] };
 }
 interface Res { config: TtsConfig | null; tts_reported_at: number | null; tts_age_sec: number | null; worker_reported_at: number | null }
 
@@ -176,7 +176,7 @@ export default async function TtsPage() {
                     <tr key={e.term} className="border-b border-popory-border">
                       <td className="py-2 pr-4"><code className={CODE}>{e.term}</code></td>
                       <td className="py-2 pr-4">{e.reading}</td>
-                      <td className="py-2 pr-4 text-xs text-popory-muted">{e.ignore_case ? "대소문자 무시 · vs. 의 마침표 포함" : ""}</td>
+                      <td className="py-2 pr-4 text-xs text-popory-muted">{e.note ?? ""}</td>
                     </tr>
                   ))}
                 </Table>
