@@ -1,4 +1,4 @@
-# 고유어 수사 — 단위에 따라 "한 권·세 가지·서른일곱 개" 로 읽는다. 대본 34건 스캔(2026-10)에서 나온 실사례와,
+# 고유어 수사 — 단위에 따라 "세 가지·서른일곱 개·스무 명" 으로 읽는다. 대본 34건 스캔(2026-10)에서 나온 실사례와,
 # 규칙을 그대로 적용하면 새로 틀리는 경우(개월·대·달러·제N권…)를 함께 고정한다.
 import pytest
 
@@ -16,7 +16,6 @@ def test_native_korean_forms(n, want):
 
 @pytest.mark.parametrize("text,want", [
     # 스캔에서 확인된 실사례
-    ("1권, 2권을 읽었다.", "한 권, 두 권을 읽었다."),
     ("3가지 원칙", "세 가지 원칙"),
     ("6가지와 7가지", "여섯 가지와 일곱 가지"),
     ("37개의 사례", "서른일곱 개의 사례"),
@@ -75,7 +74,7 @@ def test_zero_stays_sino():
 
 def test_ssml_path_uses_the_same_rule_as_subtitle_timing():
     """자막 타이밍(spoken_text)과 실제 합성(_to_ssml)이 같은 변환을 써야 길이 계산이 어긋나지 않는다."""
-    for text in ("1권과 3가지", "3~5명", "6월 7시에 37개"):
+    for text in ("3가지와 20명", "3~5명", "6월 7시에 37개"):
         assert _to_ssml(_prep_text(text)) == f"<speak>{spoken_text(text)}</speak>"
 
 
@@ -143,3 +142,22 @@ def test_decimal_range_does_not_split_a_decimal_into_integers():
     from popory_content.tts import _prep_text
     assert _prep_text("3.5~4개") == "3.5에서 4개"
     assert "삼점오개" not in spoken_text("3.5~4개")
+
+
+# --- 권(卷): 권차라서 한자어 ---------------------------------------------------------------------------------
+# 권은 권수("책 3권")와 권차("1권·2권" = 시리즈의 몇 번째 권)가 같은 글자다. 실제 대본(채사장 『지적 대화를 위한 넓고
+# 얕은 지식』)에 나오는 "1권, 2권" 은 전부 권차라서 "일 권·이 권" 으로 읽혀야 한다 — 고유어("한 권")는 오독이다.
+@pytest.mark.parametrize("text,want", [
+    ("1권의 부제는 지식입니다", "일권의 부제는 지식입니다"),
+    ("1권과 달리 2권은 더 어렵다", "일권과 달리 이권은 더 어렵다"),
+    ("이 2권까지 읽으면 된다", "이 이권까지 읽으면 된다"),
+    ("1권, 2권을 읽었다.", "일권, 이권을 읽었다."),
+    ("제1권과 제3장", "제일권과 제삼장"),
+    ("10권짜리 전집", "십권짜리 전집"),          # 권수처럼 보여도 권은 가르지 않는다(권차와 같은 글자)
+])
+def test_gwon_stays_sino_because_it_is_a_volume_number(text, want):
+    assert spoken_text(text) == want
+
+
+def test_gwon_does_not_affect_other_native_units_in_the_same_sentence():
+    assert spoken_text("1권의 3가지 원칙") == "일권의 세 가지 원칙"

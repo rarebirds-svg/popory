@@ -35,8 +35,10 @@ def load_tts_at(rev: str) -> types.ModuleType:
     return mod
 
 
-def read_texts(paths: list[str]) -> list[tuple[str, str]]:
-    """(출처, 본문) 목록."""
+def read_texts(paths: list[str], exclude: "set[Path] | None" = None) -> list[tuple[str, str]]:
+    """(출처, 본문) 목록. exclude 는 읽지 않을 파일(이 도구가 쓴 결과 파일 — 대본 폴더 안에 저장하면
+    다음 실행 때 입력으로 다시 읽혀 건수가 부풀기 때문이다)."""
+    exclude = {e.resolve() for e in (exclude or set())}
     out: list[tuple[str, str]] = []
     for p in paths:
         if p == "-":
@@ -47,16 +49,29 @@ def read_texts(paths: list[str]) -> list[tuple[str, str]]:
             raise FileNotFoundError(f"경로가 없다: {p}")
         files = sorted(f for f in path.rglob("*") if f.suffix in (".txt", ".md", ".json")) if path.is_dir() else [path]
         for f in files:
+            if f.resolve() in exclude:
+                continue
+            name = str(f.relative_to(path)) if path.is_dir() else f.name      # 하위 폴더 파일도 구분되게
             raw = f.read_text(encoding="utf-8")
             if f.suffix == ".json":
                 data = json.loads(raw)
                 items = data if isinstance(data, list) else [data]
                 for i, it in enumerate(items):
-                    text = it if isinstance(it, str) else (it.get("draft") or it.get("script") or "")
-                    out.append((f"{f.name}#{i + 1}", str(text)))
-            else:
-                out.append((f.name, raw))
+                    text = it if isinstance(it, str) else next(
+                        (str(it[k]) for k in ("draft", "script", "narration", "text") if isinstance(it, dict) and it.get(k)), "")
+                    if text.strip():                    # 대본이 아닌 JSON 객체(메타데이터 등)는 건수에 넣지 않는다
+                        out.append((f"{name}#{i + 1}", text))
+            elif raw.strip():
+                out.append((name, raw))
     return out
+
+
+def count_by_file(texts: list[tuple[str, str]]) -> dict[str, int]:
+    """파일별 읽은 대본 수 — '34건을 줬는데 77건이라고 나온다' 같은 불일치의 원인을 눈으로 찾게 한다."""
+    counts: dict[str, int] = {}
+    for source, _ in texts:
+        counts[source.split("#")[0]] = counts.get(source.split("#")[0], 0) + 1
+    return counts
 
 
 def narration_lines(text: str) -> list[str]:
@@ -86,6 +101,7 @@ def changed_sentences(texts: list[tuple[str, str]], split, before, after) -> tup
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", help="대본 파일/폴더, 또는 - (표준입력)")
+    ap.add_argument("-o", "--out", help="결과 전체를 이 파일에 저장한다(터미널엔 요약만) — 긴 출력이 잘리는 것을 막는다")
     ap.add_argument("--before-rev", default=DEFAULT_BEFORE_REV, help=f"'전' 으로 쓸 git 리비전 (기본 {DEFAULT_BEFORE_REV})")
     args = ap.parse_args(argv)
 
@@ -100,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        texts = read_texts(args.paths)
+        texts = read_texts(args.paths, exclude={Path(args.out).expanduser()} if args.out else None)
     except FileNotFoundError as e:
         print(f"{e}\n(예시 경로가 아니라 대본이 실제로 들어 있는 폴더·파일 경로를 넣는다. 확인: ls <경로>)", file=sys.stderr)
         return 2
@@ -108,12 +124,19 @@ def main(argv: list[str] | None = None) -> int:
         print("읽을 대본이 없다 — 폴더 안에 .txt / .md / .json 파일이 있어야 한다.", file=sys.stderr)
         return 2
     total, changed = changed_sentences(texts, _split_sentences, tts_old.spoken_text, tts_now.spoken_text)
-    print(f"대본 {len(texts)}건 · 문장 {total}개 중 읽기가 바뀐 문장 {len(changed)}개 (전: {args.before_rev})\n")
+    counts = count_by_file(texts)
+    lines = [f"읽은 파일 {len(counts)}개 · 대본 {len(texts)}건 (JSON 배열은 원소마다 1건)"]
+    lines += [f"  {n:>3}건  {name}" for name, n in counts.items()]
+    lines.append(f"\n문장 {total}개 중 읽기가 바뀐 문장 {len(changed)}개 (전: {args.before_rev})\n")
     for c in changed:
-        print(f"[{c['source']}]")
-        print(f"  원문: {c['text']}")
-        print(f"  전:   {c['before']}")
-        print(f"  후:   {c['after']}\n")
+        lines += [f"[{c['source']}]", f"  원문: {c['text']}", f"  전:   {c['before']}", f"  후:   {c['after']}", ""]
+    report = "\n".join(lines)
+    if args.out:
+        Path(args.out).expanduser().write_text(report + "\n", encoding="utf-8")
+        print("\n".join(lines[:len(counts) + 2]))
+        print(f"\n전체 결과 → {args.out} ({len(changed)}개 문장)")
+    else:
+        print(report)
     return 0
 
 

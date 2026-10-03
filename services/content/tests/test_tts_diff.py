@@ -21,12 +21,12 @@ def test_narration_lines_skip_scene_titles_and_blanks():
 
 
 def test_only_changed_sentences_are_reported():
-    old = lambda s: s.replace("권", "일권")        # 가짜 '전': 모든 숫자를 한자어로 읽던 때를 흉내
-    texts = [("a.txt", "[장면]\n책 1권을 읽었다. 바뀌지 않는 문장이다.")]
+    old = lambda s: s.replace("3명", "삼명")        # 가짜 '전': 모든 숫자를 한자어로 읽던 때를 흉내
+    texts = [("a.txt", "[장면]\n3명이 왔다. 바뀌지 않는 문장이다.")]
     total, changed = tts_diff.changed_sentences(texts, _split_sentences, old, spoken_text)
     assert total == 2
-    assert [c["text"] for c in changed] == ["책 1권을 읽었다."]
-    assert changed[0]["after"] == "책 한 권을 읽었다."
+    assert [c["text"] for c in changed] == ["3명이 왔다."]
+    assert changed[0]["after"] == "세 명이 왔다."
 
 
 def test_load_tts_at_returns_an_isolated_module_from_git():
@@ -49,7 +49,7 @@ def test_default_before_rev_reads_digits_as_sino():
     """'전' 은 기억이 아니라 git 이력의 옛 tts.py 를 그대로 돌린 결과여야 한다."""
     old = tts_diff.load_tts_at(tts_diff.DEFAULT_BEFORE_REV)
     assert old.spoken_text("1권, 3가지") == "일권, 삼가지"
-    assert spoken_text("1권, 3가지") == "한 권, 세 가지"
+    assert spoken_text("1권, 3가지") == "일권, 세 가지"      # 권은 권차라 한자어 유지, 가지는 고유어
 
 
 def test_reads_dirs_files_and_json(tmp_path):
@@ -67,3 +67,38 @@ def test_missing_path_and_empty_folder_exit_with_a_one_line_hint_not_a_traceback
     empty.mkdir()
     assert tts_diff.main([str(empty)]) == 2
     assert "읽을 대본이 없다" in capsys.readouterr().err
+
+
+def test_counts_per_file_and_ignores_non_script_json_objects(tmp_path):
+    """'34건을 줬는데 77건' 같은 불일치: 파일별 건수를 보여 주고, 대본이 아닌 JSON 객체·빈 파일은 세지 않는다."""
+    (tmp_path / "scripts.json").write_text(json.dumps([{"draft": f"대본 {i}"} for i in range(3)], ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "meta.json").write_text(json.dumps([{"title": "대본 아님", "id": 1}, {"id": 2}]), encoding="utf-8")   # 메타데이터
+    (tmp_path / "empty.txt").write_text("  \n", encoding="utf-8")
+    sub = tmp_path / "old"
+    sub.mkdir()
+    (sub / "notes.md").write_text("옛 메모", encoding="utf-8")
+    texts = tts_diff.read_texts([str(tmp_path)])
+    counts = tts_diff.count_by_file(texts)
+    assert counts == {"scripts.json": 3, "old/notes.md": 1}       # meta.json·empty.txt 는 0건, 하위 폴더는 경로로 구분
+
+
+def test_out_option_writes_full_report_and_prints_summary_only(tmp_path, capsys):
+    (tmp_path / "a.txt").write_text("3가지 원칙을 말합니다.", encoding="utf-8")
+    out = tmp_path / "result.txt"
+    assert tts_diff.main([str(tmp_path / "a.txt"), "-o", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "전체 결과 →" in printed and "원문:" not in printed          # 터미널엔 요약만
+    assert "[a.txt]" not in printed                                      # 바뀐 문장의 머리글이 요약에 새지 않는다
+    body = out.read_text(encoding="utf-8")
+    assert "원문: 3가지 원칙을 말합니다." in body and "후:   세 가지 원칙을 말합니다." in body
+
+
+def test_result_file_inside_the_scanned_folder_is_not_read_back_as_input(tmp_path):
+    """회귀: -o 로 결과를 대본 폴더 안에 저장하면 다음 실행이 그 결과를 대본으로 다시 읽어 건수가 부풀었다."""
+    (tmp_path / "a.txt").write_text("3가지 원칙을 말합니다.", encoding="utf-8")
+    out = tmp_path / "result.txt"
+    assert tts_diff.main([str(tmp_path), "-o", str(out)]) == 0
+    assert tts_diff.main([str(tmp_path), "-o", str(out)]) == 0          # 두 번째 실행이 첫 결과를 읽으면 안 된다
+    texts = tts_diff.read_texts([str(tmp_path)], exclude={out})
+    assert tts_diff.count_by_file(texts) == {"a.txt": 1}
+    assert "읽은 파일 1개 · 대본 1건" in out.read_text(encoding="utf-8")
