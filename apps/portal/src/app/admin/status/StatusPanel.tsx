@@ -7,11 +7,23 @@ import { formatKstIso } from "../_lib/format";
 interface UsageItem { percent: number; resets_at: string; severity: string }
 interface ClaudeUsage { session?: UsageItem; weekly_all?: UsageItem; weekly_fable?: UsageItem }
 
+interface TtsVoice { voice: string; family: string }
+
+// 워커가 실제로 쓰는 음성을 보여 준다. 예전엔 "Google Chirp3-HD (ko-KR)" 로 고정돼 있어 실제 기본값(Neural2-C)과 달랐다.
+function ttsLine(t: Status["tts"]): string {
+  if (!t) return "미보고 — 워커 재시작 후 표시";
+  const v = (x: TtsVoice | null) => (x ? `${x.voice} (${x.family})` : "알 수 없음");
+  const same = t.longform && t.shorts && t.longform.voice === t.shorts.voice;
+  const voices = same ? v(t.longform) : `동영상 ${v(t.longform)} · 쇼츠 ${v(t.shorts)}`;
+  return `Google TTS · ${voices}${t.speaking_rate != null ? ` · 말속도 ${t.speaking_rate}×` : ""}`;
+}
+
 interface Status {
   worker: { online: boolean; reported_at: number | null; age_sec: number | null };
   image_free: { exhausted: boolean; reset_date: string | null };
   imagegen_ok: boolean;
   claude_usage: ClaudeUsage | null;
+  tts: { longform: TtsVoice | null; shorts: TtsVoice | null; speaking_rate: number | null } | null;
   can_generate: boolean;
   traffic: { platform: string; status: string; count: number }[];
 }
@@ -108,7 +120,7 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
           </li>
           <li className="flex justify-between pb-2">
             <span className="text-popory-muted">음성(TTS)</span>
-            <span className="text-popory-fg">Google Chirp3-HD (ko-KR)</span>
+            <span className={s.tts ? "text-popory-fg" : "text-popory-muted"}>{ttsLine(s.tts)}</span>
           </li>
         </ul>
       </section>

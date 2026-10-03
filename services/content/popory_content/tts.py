@@ -260,6 +260,14 @@ def _comma_break(m: "re.Match[str]") -> str:
     return f'{prev},<break time="{COMMA_BREAK_MS}ms"/> '
 
 
+def voice_family(voice_name: str) -> str:
+    """음성 이름에서 계열(Neural2 / Chirp3-HD …). 말속도는 계열과 짝이 맞아야 해서 화면·기록에 같이 쓴다."""
+    for fam in ("Chirp3-HD", "Neural2", "Wavenet", "Standard", "Studio", "Journey"):
+        if fam in voice_name:
+            return fam
+    return "기타"
+
+
 def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
     key = os.environ.get("GOOGLE_TTS_API_KEY")
     if not key:
