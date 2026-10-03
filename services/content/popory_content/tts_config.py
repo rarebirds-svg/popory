@@ -92,7 +92,8 @@ def build_tts_config() -> dict:
         # 발음 사전 — 텍스트 치환(SSML sub 아님). 자막엔 원문이 남고 음성만 독음으로 바뀐다.
         "pronunciation_dictionary": {
             "exists": True,
-            "entries": [{"term": t, "reading": r, "ignore_case": t in pronunciation.IGNORE_CASE}
+            "entries": [{"term": t, "reading": r, "ignore_case": t in pronunciation.IGNORE_CASE,
+                         "note": pronunciation.NOTES.get(t, "")}
                         for t, r in pronunciation.PRONUNCIATIONS.items()],
         },
     }
