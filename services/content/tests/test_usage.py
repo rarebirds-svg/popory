@@ -86,3 +86,77 @@ def test_fetch_with_status_reports_error_on_500(monkeypatch):
 
     monkeypatch.setattr(usage.requests, "get", lambda *a, **k: Resp())
     assert usage._fetch_with_status() == ("error", None)
+
+
+# ───────── 장기 토큰(환경변수) 모드 ─────────
+
+class _Resp:
+    def __init__(self, status, body=None):
+        self.status_code = status
+        self._body = body or {}
+
+    def json(self):
+        return self._body
+
+
+_LIMITS_OK = {"limits": [{"kind": "session", "percent": 12, "resets_at": "x", "severity": "ok"}]}
+
+
+def test_candidates_env_token_first_then_keychain(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "env-tok")
+    monkeypatch.setattr(usage, "_keychain_access_token", lambda: "kc-tok")
+    assert usage._candidate_tokens() == ["env-tok", "kc-tok"]
+
+
+def test_candidates_dedupes_identical_tokens(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "same")
+    monkeypatch.setattr(usage, "_keychain_access_token", lambda: "same")
+    assert usage._candidate_tokens() == ["same"]
+
+
+def test_fetch_falls_back_to_keychain_when_env_token_lacks_scope(monkeypatch):
+    """장기 토큰이 사용량 조회 권한을 갖는지 미확인 — 거절돼도 keychain 으로 폴백해 표시를 유지한다."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "env-tok")
+    monkeypatch.setattr(usage, "_keychain_access_token", lambda: "kc-tok")
+    seen = []
+
+    def fake_get(url, headers=None, timeout=None):
+        seen.append(headers["Authorization"])
+        return _Resp(403) if headers["Authorization"].endswith("env-tok") else _Resp(200, _LIMITS_OK)
+
+    monkeypatch.setattr(usage.requests, "get", fake_get)
+    status, val = usage._fetch_with_status()
+    assert status == "ok" and val["session"]["percent"] == 12
+    assert seen == ["Bearer env-tok", "Bearer kc-tok"]
+
+
+def test_fetch_stops_at_first_success(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "env-tok")
+    monkeypatch.setattr(usage, "_keychain_access_token", lambda: "kc-tok")
+    calls = []
+    monkeypatch.setattr(usage.requests, "get",
+                        lambda url, headers=None, timeout=None: calls.append(1) or _Resp(200, _LIMITS_OK))
+    assert usage._fetch_with_status()[0] == "ok"
+    assert len(calls) == 1  # 성공했으면 폴백 호출을 하지 않는다
+
+
+def test_fetch_unauthorized_only_when_every_token_is_401(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "env-tok")
+    monkeypatch.setattr(usage, "_keychain_access_token", lambda: "kc-tok")
+    monkeypatch.setattr(usage.requests, "get", lambda url, headers=None, timeout=None: _Resp(401))
+    assert usage._fetch_with_status() == ("unauthorized", None)
+
+
+def test_fetch_mixed_401_and_error_keeps_prior_cache(monkeypatch):
+    """한쪽만 401 이면 만료로 단정하지 않는다 — 캐시를 비우면 정상 값이 사라진다."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "env-tok")
+    monkeypatch.setattr(usage, "_keychain_access_token", lambda: "kc-tok")
+    monkeypatch.setattr(usage.requests, "get",
+                        lambda url, headers=None, timeout=None:
+                        _Resp(401) if headers["Authorization"].endswith("env-tok") else _Resp(500))
+    assert usage._fetch_with_status() == ("error", None)
+
+
+def test_fetch_no_tokens_is_error(monkeypatch):
+    monkeypatch.setattr(usage, "_keychain_access_token", lambda: None)
+    assert usage._fetch_with_status() == ("error", None)

@@ -430,6 +430,52 @@ def test_brief_run_am_does_not_warn_while_generating(tmp_path):
     assert checks.check_brief_run(str(log), mode="pm")[0] == "warn"
 
 
+# ───────── 장기 토큰 모드 점검 ─────────
+
+_TOKEN_NOW = 1_800_000_000.0
+
+
+def _token_age(days: float) -> float:
+    return _TOKEN_NOW - days * 86400
+
+
+def test_claude_token_ok_when_fresh():
+    status, msg = checks.check_claude_token(_token_age(10), _TOKEN_NOW)
+    assert status == "ok"
+    assert "355일 남음" in msg
+
+
+def test_claude_token_warns_before_expiry():
+    status, msg = checks.check_claude_token(_token_age(345), _TOKEN_NOW)  # 20일 남음
+    assert status == "warn"
+    assert "setup-token" in msg
+
+
+def test_claude_token_fails_after_lifetime():
+    status, msg = checks.check_claude_token(_token_age(366), _TOKEN_NOW)
+    assert status == "fail"
+    assert "setup-token" in msg
+
+
+def test_claude_token_warns_when_file_missing():
+    """토큰 모드인데 발급일을 알 수 없으면 조용히 ok 로 두지 않는다."""
+    assert checks.check_claude_token(None, _TOKEN_NOW)[0] == "warn"
+
+
+def test_claude_token_respects_custom_lifetime():
+    assert checks.check_claude_token(_token_age(80), _TOKEN_NOW, lifetime_days=90)[0] == "warn"
+    assert checks.check_claude_token(_token_age(91), _TOKEN_NOW, lifetime_days=90)[0] == "fail"
+
+
+def test_brief_run_token_mode_does_not_prescribe_login(tmp_path):
+    """토큰 모드에서 /login 은 소용없다(환경변수 토큰이 우선) — 틀린 처방을 내면 헛수고가 된다."""
+    log = tmp_path / "d.log"
+    log.write_text(_DONE_AUTH, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log), token_mode=True)
+    assert status == "warn"
+    assert "setup-token" in msg and "/login" not in msg
+
+
 # 2026-09-25 실제 로그 형태 — Gemini 빈 응답으로 PICK 5 두 카테고리 유실.
 _GEMINI_EMPTY = ('{"ts": "2026-09-25T09:47:07+09:00", "cli": "generate_brief", "status": "gemini_fail", '
                  '"category": "%s", "date": "2026-09-25", "exit_code": 5, '

@@ -970,3 +970,20 @@ def test_blog_title_prefix_is_stripped_before_review(monkeypatch):
     assert worker.run_once(client) is True
     _, body = client.patched[0]
     assert body["meta"]["title"] == "모건 하우절 돈의 심리학 핵심 요약 및 서평: 부는 보이지 않는다"
+
+
+def test_auth_notify_uses_mode_specific_hint(monkeypatch):
+    """장기 토큰 모드에선 /login 이 소용없다 — 알림이 틀린 처방을 내면 안 된다."""
+    sent = []
+    monkeypatch.setattr(worker.subprocess, "run", lambda cmd, **kw: sent.append(cmd))
+    monkeypatch.setenv("POPORY_CLAUDE_AUTH_HINT", "claude setup-token 으로 토큰 재발급 (claude /login 은 소용없음)")
+    worker._notify_auth_failure()
+    assert "setup-token" in sent[0][-1]
+    assert sent[0][2] == "--once-key=worker_auth"
+
+
+def test_auth_notify_defaults_to_login_hint(monkeypatch):
+    sent = []
+    monkeypatch.setattr(worker.subprocess, "run", lambda cmd, **kw: sent.append(cmd))
+    worker._notify_auth_failure()
+    assert "claude /login" in sent[0][-1]

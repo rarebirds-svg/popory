@@ -1,5 +1,6 @@
 # Claude Code(Claude Max) 플랜 사용량을 oauth/usage 에서 취득·파싱·캐시하는 모듈.
 import json
+import os
 import subprocess
 import time
 from typing import Any
@@ -29,6 +30,21 @@ def _keychain_access_token() -> str | None:
         return None
 
 
+def _candidate_tokens() -> list[str]:
+    """사용량 조회에 시도할 토큰들 — 장기 토큰(환경변수)을 먼저, keychain 로그인 토큰을 폴백으로.
+
+    장기 OAuth 토큰이 이 엔드포인트의 권한 범위(scope)를 갖는지는 미확인이라 둘 다 시도한다.
+    keychain 만 보면 장기 토큰 모드에서 로그인 refresh 가 만료된 뒤 사용량 표시가 영구히 죽는다."""
+    out: list[str] = []
+    env_tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if env_tok:
+        out.append(env_tok)
+    kc = _keychain_access_token()
+    if kc and kc not in out:
+        out.append(kc)
+    return out
+
+
 def _parse_limits(data: dict[str, Any]) -> dict[str, Any] | None:
     """oauth/usage 응답의 limits 배열에서 session·weekly_all·weekly_fable 3항목을 추출한다."""
     limits = data.get("limits")
@@ -52,12 +68,8 @@ def _parse_limits(data: dict[str, Any]) -> dict[str, Any] | None:
     return out or None
 
 
-def _fetch_with_status() -> tuple[str, dict[str, Any] | None]:
-    """('ok'|'unauthorized'|'error', 값). 401(OAuth 만료)만 따로 구분한다 —
-    만료는 캐시를 버려야 하고, 네트워크·서버 오류는 직전 값을 유지해야 하기 때문이다."""
-    tok = _keychain_access_token()
-    if not tok:
-        return ("error", None)
+def _fetch_one(tok: str) -> tuple[str, dict[str, Any] | None]:
+    """토큰 하나로 oauth/usage 를 조회한다. ('ok'|'unauthorized'|'error', 값)."""
     try:
         resp = requests.get(
             USAGE_URL,
@@ -76,6 +88,24 @@ def _fetch_with_status() -> tuple[str, dict[str, Any] | None]:
         return ("ok", _parse_limits(resp.json()))
     except Exception:  # noqa: BLE001 — 네트워크·파싱 실패는 사용량 미표시로 흡수
         return ("error", None)
+
+
+def _fetch_with_status() -> tuple[str, dict[str, Any] | None]:
+    """('ok'|'unauthorized'|'error', 값). 401(OAuth 만료)만 따로 구분한다 —
+    만료는 캐시를 버려야 하고, 네트워크·서버 오류는 직전 값을 유지해야 하기 때문이다.
+
+    후보 토큰을 차례로 시도해 처음 성공한 값을 쓴다. 'unauthorized' 는 시도한 토큰이 전부 401 일
+    때만이다 — 장기 토큰이 권한 범위 때문에 401 을 받는 것을 만료로 오인해 캐시를 비우면 안 된다."""
+    tokens = _candidate_tokens()
+    if not tokens:
+        return ("error", None)
+    statuses: list[str] = []
+    for tok in tokens:
+        status, val = _fetch_one(tok)
+        if status == "ok":
+            return ("ok", val)
+        statuses.append(status)
+    return ("unauthorized", None) if all(s == "unauthorized" for s in statuses) else ("error", None)
 
 
 def fetch_claude_usage() -> dict[str, Any] | None:
