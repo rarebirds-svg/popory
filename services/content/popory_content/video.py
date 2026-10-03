@@ -351,6 +351,13 @@ CHAPTER_GAP = 2 * SENTENCE_GAP
 # 시청자가 생각할 틈이 없어 톤이 단조롭게 들린다(2026-09 대표 영상 검토). 0.8~1초 무음을 둔다.
 QUESTION_GAP = float(os.environ.get("POPORY_QUESTION_GAP", "1.0"))
 XFADE_TD = 0.4  # 장면 크로스페이드 전이 길이(초). _xfade_graph·자막 오프셋이 공유.
+def _env_float(name: str, default: float, lo: float, hi: float) -> float:
+    try:
+        v = float(os.environ.get(name, default))
+    except ValueError:
+        return default
+    return min(hi, max(lo, v))
+
 
 
 def _gaps_for(sentences: list[str], gap: float = SENTENCE_GAP,
@@ -498,6 +505,14 @@ PAN_MIN_PX = 40  # 이보다 짧으면 캔버스만 키우고 체감은 없어 �
 # 되돌아가는 글리치로 보였다(2026-09-06 피드백). 지금은 하나의 연속 삼각파라 배율이 끊기지 않고
 # 방향만 이 주기마다 부드럽게 바뀐다.
 ZOOM_HALF_CYCLE_SECONDS = float(os.environ.get("POPORY_ZOOM_HALF_CYCLE", "8"))
+# 이미지 모션(줌+패닝) 켜고 끄기. **기본은 켜짐** — 2026-08/09 에 정지 화면처럼 보인다는 피드백으로 넣은
+# 기능이라 끄면 운영 영상이 달라진다. 끄면 줌·패닝 없이 커버 크롭한 정지 화면이 나오고 장면 클립 인코딩이
+# 훨씬 빨라 파일도 작아진다(AB 비교·렌더 시간 점검용). 롱폼과 쇼츠를 따로 둔다.
+MOTION_LONGFORM = os.environ.get("POPORY_MOTION_LONGFORM", "1") != "0"
+MOTION_SHORTS = os.environ.get("POPORY_MOTION_SHORTS", "1") != "0"
+# 쇼츠 줌 폭 상한. 장면이 짧아 같은 폭이 초당 1.7% 로 롱폼(0.7%)보다 빠르다 — 폭을 키우면 과해 보인다.
+# 기본 0.08 은 지금 폭(0.06)보다 위라 동작이 안 바뀌고, 누군가 반주기를 늘렸을 때만 이 선에서 멈춘다.
+SHORTS_ZOOM_SPAN_MAX = _env_float("POPORY_SHORTS_ZOOM_MAX", 0.08, 0.02, 0.18)
 # 장면별 무빙 변주 (확대로 시작하는지 여부, 가로 줌 기준점 0~1, 패닝 정방향 여부).
 # 전 장면이 같은 무빙이면 단조로우므로 인접 항목은 줌 방향이 서로 다르게 배열한다(순환 지점 포함).
 _MOTIONS: tuple[tuple[bool, float, bool], ...] = (
@@ -510,17 +525,19 @@ _MOTIONS: tuple[tuple[bool, float, bool], ...] = (
 )
 
 
-def _zoom_amplitude(dur: float) -> float:
-    """장면 길이에 맞는 줌 폭. 왕복이라 절반 만에 피크를 찍으므로 목표 속도 × (길이/2)."""
-    return min(ZOOM_SPAN_MAX, max(ZOOM_SPAN_MIN, ZOOM_RATE_PER_SEC * dur / 2))
+def _zoom_amplitude(dur: float, portrait: bool = False) -> float:
+    """장면 길이에 맞는 줌 폭. 왕복이라 절반 만에 피크를 찍으므로 목표 속도 × (길이/2).
+    쇼츠는 SHORTS_ZOOM_SPAN_MAX 에서 멈춘다(하한 ZOOM_SPAN_MIN 보다 낮게 잡혀도 하한이 이긴다)."""
+    cap = max(ZOOM_SPAN_MIN, min(ZOOM_SPAN_MAX, SHORTS_ZOOM_SPAN_MAX)) if portrait else ZOOM_SPAN_MAX
+    return min(cap, max(ZOOM_SPAN_MIN, ZOOM_RATE_PER_SEC * dur / 2))
 
 
-def _zoom_cycle(dur: float) -> tuple[float, int]:
+def _zoom_cycle(dur: float, portrait: bool = False) -> tuple[float, int]:
     """이 장면의 (줌 폭, 왕복 주기 프레임 수). 주기는 방향을 한 번 바꾸는 시간의 2배다.
     긴 장면은 ZOOM_HALF_CYCLE_SECONDS 마다 되돌리고, 그보다 짧은 장면은 장면 절반에서 한 번만
     되돌린다 — 쇼츠(7초 장면)는 예전과 똑같은 폭·속도로 남는다."""
     half = min(ZOOM_HALF_CYCLE_SECONDS, max(0.1, dur / 2))
-    return _zoom_amplitude(2 * half), max(1, round(2 * half * 30))
+    return _zoom_amplitude(2 * half, portrait), max(1, round(2 * half * 30))
 
 
 def _pan_headroom(size: tuple[int, int] | None, portrait: bool = False) -> int:
@@ -546,7 +563,7 @@ def _pan_amplitude(dur: float, headroom: int) -> int:
 
 
 def _zoompan_filter(dur: float, portrait: bool = False, variant: int = 0,
-                    pan_px: int = 0) -> str:
+                    pan_px: int = 0, motion: bool = True) -> str:
     """정지 이미지에 왕복(삼각파) 줌 + 편도 패닝을 건다.
     줌은 ZOOM_HALF_CYCLE_SECONDS 마다 방향을 바꾸며 **끊김 없이** 이어진다 — 한 방향으로만 밀면
     인지 가능한 속도에서 총 확대율이 커져 1024px 원본이 무너지는데, 왕복은 최대 확대율을 묶은 채
@@ -561,6 +578,9 @@ def _zoompan_filter(dur: float, portrait: bool = False, variant: int = 0,
     패닝이 얼어붙는다(2026-08 ffmpeg로 확인).
     2배 수퍼샘플 후 다운스케일해 정수 크롭 떨림을 서브픽셀로 묻는다."""
     w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
+    if not motion:
+        # 모션 끔: 줌·패닝 없이 정지. 호출부가 pan_px=0 으로 캔버스를 프레임 크기로 만들었으므로 스케일만 맞춘다.
+        return f"scale={w}:{h}:flags=bicubic,format=yuv420p"
     frames = max(1, round(dur * 30))
     bw, bh = w * 2, h * 2  # 수퍼샘플 프레임(떨림 제거의 핵심)
     slack = max(0, pan_px) * 2  # 수퍼샘플 기준 여유
@@ -569,7 +589,7 @@ def _zoompan_filter(dur: float, portrait: bool = False, variant: int = 0,
     # 하나의 연속 삼각파. period 프레임마다 0→1→0 을 그리며 어디서도 끊기지 않는다(mod 가 0 으로
     # 감기는 지점에서 tri 도 0 이라 값이 이어진다). 초당 배율 변화는 폭/반주기로 항상 일정하다.
     # 기준점(x·y)도 장면 내내 고정한다 — 도중에 옮기면 그 자체가 화면이 튀는 것으로 보인다.
-    amp, period = _zoom_cycle(dur)
+    amp, period = _zoom_cycle(dur, portrait)
     tri = f"(1-abs(1-2*mod(on,{period})/{period}))"
     z = (f"1.0+{amp:.4f}*{tri}" if zoom_in_first
          else f"{1 + amp:.4f}-{amp:.4f}*{tri}")
@@ -736,6 +756,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     work.mkdir(parents=True, exist_ok=True)
     clips: list[Path] = []
     scene_local_cues: list[list[Cue]] = []
+    motion = MOTION_SHORTS if portrait else MOTION_LONGFORM
     images_missing = 0
     images_total = 0
     # 줌 무빙 시작점을 job_id로 정해 같은 작업은 항상 같은 결과가 나오게 한다(_pick_bgm과 같은 방식).
@@ -798,7 +819,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             audio = padded
         dur = _duration(audio)
         # 커버 크롭이 버리던 여유만큼 캔버스를 키워 그 안에서 패닝한다(확대율은 그대로 → 화질 손실 없음).
-        pan_px = _pan_amplitude(dur, _pan_headroom(_image_size(bg_bytes), portrait))
+        pan_px = _pan_amplitude(dur, _pan_headroom(_image_size(bg_bytes), portrait)) if motion else 0
         fw, fh = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
         canvas = (fw + pan_px, fh) if portrait else (fw, fh + pan_px)
         base_png = work / f"{i}.png"
@@ -812,7 +833,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         # 입력: 0=배경, 1=오디오, 2=헤드라인, 3=스크림, 4+=자막 조각.
         inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio),
                   "-loop", "1", "-i", str(head_png), "-loop", "1", "-i", str(scrim_png)]
-        graph = f"[0:v]{_zoompan_filter(dur, portrait, variant=motion_base + i, pan_px=pan_px)}[v0]"
+        graph = f"[0:v]{_zoompan_filter(dur, portrait, variant=motion_base + i, pan_px=pan_px, motion=motion)}[v0]"
         # 스크림·헤드라인은 화면에 고정(줌·패닝에 끌려다니지 않음). 스크림이 먼저 깔린다.
         graph += ";[v0][3:v]overlay=0:0[vs];[vs][2:v]overlay=0:0[vh]"
         prev = "vh"

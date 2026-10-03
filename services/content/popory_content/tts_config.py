@@ -45,6 +45,35 @@ def _env_info(name: str, default: str, current) -> dict:
     return {"env": name, "default": default, "current": current, "overridden": raw is not None and raw != default}
 
 
+def _on_off(b: bool) -> str:
+    return "켜짐" if b else "꺼짐"
+
+
+def _motion_rows() -> list[dict]:
+    """영상 모션·전환 값 표. 화면이 그대로 그리는 문자열 행이라 포털이 형식(불리언·초·퍼센트)을 따로
+    알 필요가 없다. 값은 import 시점에 읽은 모듈 상수 — 워커가 실제로 쓰는 유효값이다."""
+    def row(label, value, default, env, note):
+        raw = os.environ.get(env) if env else None
+        return {"label": label, "value": value, "default": default, "env": env,
+                "overridden": raw is not None and value != default, "note": note}
+
+    pct = lambda x: f"{x * 100:.1f}%"  # noqa: E731
+    return [
+        row("이미지 모션 · 동영상(롱폼)", _on_off(video.MOTION_LONGFORM), "켜짐", "POPORY_MOTION_LONGFORM",
+            "줌인·줌아웃을 번갈아 걸고 한 방향 패닝을 더한다. 0 이면 정지 화면 — 장면 렌더가 훨씬 빠르고 파일도 작다."),
+        row("이미지 모션 · 쇼츠", _on_off(video.MOTION_SHORTS), "켜짐", "POPORY_MOTION_SHORTS",
+            "롱폼과 따로 켜고 끈다."),
+        row("줌 방향 전환 주기", f"{video.ZOOM_HALF_CYCLE_SECONDS:g}초", "8초", "POPORY_ZOOM_HALF_CYCLE",
+            "이 시간마다 줌 방향이 부드럽게 바뀐다. 짧은 장면(쇼츠)은 장면 절반에서 한 번만 바뀐다."),
+        row("줌 폭 (하한~롱폼 상한)", f"{pct(video.ZOOM_SPAN_MIN)}~{pct(video.ZOOM_SPAN_MAX)}",
+            "6.0%~18.0%", None, "목표 속도(초당 0.7%)에 맞춰 장면 길이로 정해진다. 코드 상수."),
+        row("줌 폭 상한 · 쇼츠", pct(video.SHORTS_ZOOM_SPAN_MAX), "8.0%", "POPORY_SHORTS_ZOOM_MAX",
+            "쇼츠는 장면이 짧아 같은 폭이 더 빠르게 느껴져 상한을 따로 둔다. 하한(6%)보다 낮게 잡아도 하한이 우선."),
+        row("패닝 속도", f"초당 {video.PAN_RATE_PX_PER_SEC:g}px", "초당 7px", None,
+            "원본에서 커버 크롭에 잘려 나가는 여유 안에서만 움직여 화질 손실이 없다. 코드 상수."),
+    ]
+
+
 def build_tts_config() -> dict:
     """어드민 TTS 화면이 그대로 그리는 JSON. 키는 화면과의 계약이라 함부로 바꾸지 않는다."""
     voices = [
@@ -62,6 +91,7 @@ def build_tts_config() -> dict:
             # 키 값은 절대 싣지 않는다. 설정 여부만.
             "api_key_set": bool(os.environ.get("GOOGLE_TTS_API_KEY")),
         },
+        "video_motion": {"rows": _motion_rows()},
         "voices": voices,
         "defaults": {
             "longform": dict(options.DEFAULTS),
