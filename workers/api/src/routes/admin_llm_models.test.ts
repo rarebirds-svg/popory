@@ -141,10 +141,11 @@ describe("admin llm-models", () => {
     expect(kept?.model).toBe(DEFAULT_MODEL);
   });
 
-  it("카탈로그에서 사라진 모델이 남아 있으면 무시한다", async () => {
-    // 카탈로그를 줄인 뒤 옛 행이 워커로 새면 그 기능이 조용히 실패한다.
+  it("형식이 깨진 모델 행이 남아 있으면 무시한다", async () => {
+    // 공급자를 못 정하는 id 가 워커로 새면 그 기능이 조용히 실패한다. (목록에 없어도 형식이
+    // 맞는 claude-*/gemini-* 는 직접 입력으로 저장된 값일 수 있어 그대로 둔다 — 아래 테스트.)
     const c = await cookie("admin");
-    await env.DB.prepare("INSERT INTO llm_model_settings (feature, model, updated_at) VALUES ('blog', 'claude-retired-9', 1)").run();
+    await env.DB.prepare("INSERT INTO llm_model_settings (feature, model, updated_at) VALUES ('blog', 'gpt-4-turbo', 1)").run();
     const body = await (await SELF.fetch("https://example.com/api/admin/llm-models", { headers: { cookie: c } })).json() as
       { features: { key: string; model: string }[] };
     expect(body.features.find((f) => f.key === "blog")!.model).toBe(DEFAULT_MODEL);
@@ -187,5 +188,48 @@ describe("admin llm-models", () => {
     const res = await SELF.fetch("https://example.com/api/content/llm-models", { headers: { authorization: `Bearer ${token}` } });
     const body = await res.json() as { models: Record<string, string> };
     expect(body.models.blog).toBe(DEFAULT_MODEL);
+  });
+
+  it("Opus 5.5 를 고를 수 있다", async () => {
+    const c = await cookie("admin");
+    const body = await (await SELF.fetch("https://example.com/api/admin/llm-models", { headers: { cookie: c } })).json() as
+      { models: { id: string; provider: string }[] };
+    expect(body.models.find((m) => m.id === "claude-opus-5-5")!.provider).toBe("claude");
+    expect((await save({ blog: "claude-opus-5-5" }, c)).status).toBe(204);
+  });
+
+  it("목록에 없는 모델 id 도 직접 입력으로 저장된다", async () => {
+    // 새 모델이 나올 때마다 카탈로그를 고치고 배포해야 하면 며칠씩 못 쓴다.
+    const c = await cookie("admin");
+    expect((await save({ blog: "claude-opus-9-1" }, c)).status).toBe(204);
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/llm-models", { headers: { authorization: `Bearer ${token}` } });
+    const body = await res.json() as { models: Record<string, string> };
+    // 워커에 그대로 넘어가야 한다 — 여기서 걸러지면 어드민 화면과 실제 호출이 갈라진다.
+    expect(body.models.blog).toBe("claude-opus-9-1");
+  });
+
+  it("직접 입력도 형식·공급자 규칙을 지켜야 한다", async () => {
+    const c = await cookie("admin");
+    expect((await save({ blog: "Claude-Opus-9" }, c)).status).toBe(400);      // 대문자
+    expect((await save({ blog: "claude opus 9" }, c)).status).toBe(400);      // 공백
+    expect((await save({ blog: "claude-" }, c)).status).toBe(400);            // 접두사만
+    expect((await save({ blog: "opus-9" }, c)).status).toBe(400);             // 공급자 접두사 없음
+    expect((await save({ blog: `claude-${"x".repeat(80)}` }, c)).status).toBe(400); // 길이 초과
+    // 컨텐츠는 claude CLI 전용이라 직접 입력이어도 gemini-* 는 막는다.
+    expect((await save({ blog: "gemini-9-pro" }, c)).status).toBe(400);
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM llm_model_settings").first<{ n: number }>();
+    expect(rows?.n).toBe(0);
+  });
+
+  it("직접 입력 규칙을 어드민에 내려준다", async () => {
+    // 화면이 규칙을 따로 적어 두면 서버와 갈라진다 — 통과할 값을 막거나, 막을 값을 통과시킨다.
+    const c = await cookie("admin");
+    const body = await (await SELF.fetch("https://example.com/api/admin/llm-models", { headers: { cookie: c } })).json() as
+      { custom_model: { pattern: string; max_length: number; prefixes: Record<string, string> } };
+    expect(new RegExp(body.custom_model.pattern).test("claude-opus-5-5")).toBe(true);
+    expect(new RegExp(body.custom_model.pattern).test("gpt 4")).toBe(false);
+    expect(body.custom_model.prefixes).toEqual({ claude: "claude-", gemini: "gemini-" });
+    expect(body.custom_model.max_length).toBeGreaterThan(0);
   });
 });
