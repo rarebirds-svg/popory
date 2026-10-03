@@ -41,6 +41,51 @@ export function summarizeTts(json: string | null): TtsSummary | null {
   } catch { return null; }
 }
 
+// 워커가 어떤 코드로 돌고 있는지 판정한다. 워커는 시작할 때 읽은 커밋(loaded)과 지금 디스크의 HEAD, origin/main 과의 거리를
+// 보고하고, 여기서 사람이 읽을 경고로 바꾼다 — 판정을 서버에 둬야 테스트할 수 있고 화면은 문구만 그리면 된다.
+// (2026-09-10 에 고친 발행 수정이 10-03 까지 한 번도 실행되지 않았다. 워커가 옛 코드로 도는 걸 아무도 몰랐다.)
+export type WorkerRuntime = {
+  available: boolean;             // false = 스냅샷은 왔는데 버전 정보가 없다(이 기능이 들어가기 전 코드)
+  commit: string | null;          // 프로세스가 실제로 실행 중인 커밋
+  subject: string | null;
+  branch: string | null;
+  started_at: number | null;
+  warnings: string[];             // 비어 있으면 정상
+  report_age_sec: number | null;
+};
+const REPORT_STALE_SEC = 2.5 * 3600;   // 워커는 약 1시간마다 보고한다
+export function summarizeRuntime(json: string | null, reportedAt: number | null, now: number): WorkerRuntime | null {
+  if (!json) return null;
+  let c: { runtime?: Record<string, unknown> };
+  try { c = JSON.parse(json); } catch { return null; }
+  const age = reportedAt ? now - reportedAt : null;
+  const r = c.runtime;
+  if (!r || typeof r !== "object") {
+    return { available: false, commit: null, subject: null, branch: null, started_at: null, report_age_sec: age,
+      warnings: ["버전 정보가 없습니다 — 이 기능이 들어가기 전 코드로 도는 중이거나, 이 코드로 재시작하기 전입니다. 워커를 재시작하세요."] };
+  }
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const loaded = str(r.loaded_commit), head = str(r.head_commit), branch = str(r.branch);
+  const behind = (r.behind ?? {}) as { state?: unknown; count?: unknown };
+  const warnings: string[] = [];
+  if (r.pulled_not_restarted === true) {
+    warnings.push(`pull 은 됐지만 워커가 재시작되지 않았습니다 (실행 중 ${loaded ?? "?"} → 디스크 ${head ?? "?"}). 재시작하세요.`);
+  }
+  if (behind.state === "behind") {
+    warnings.push(typeof behind.count === "number" && behind.count > 0
+      ? `origin/main 보다 ${behind.count}커밋 뒤처졌습니다. git pull 후 재시작하세요.`
+      : "origin/main 의 새 커밋을 아직 받지 못했습니다. git pull 후 재시작하세요.");
+  }
+  if (branch && branch !== "main") warnings.push(`main 이 아닌 브랜치(${branch})에서 실행 중입니다.`);
+  if (age !== null && age > REPORT_STALE_SEC) {
+    warnings.push(`버전 정보가 ${Math.floor(age / 3600)}시간째 갱신되지 않았습니다 (보통 1시간마다 보고).`);
+  }
+  return {
+    available: true, commit: loaded, subject: str(r.loaded_subject), branch,
+    started_at: typeof r.started_at === "number" ? r.started_at : null, warnings, report_age_sec: age,
+  };
+}
+
 export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>) {
   // 워커 → 포털 하트비트 보고(워커 전용).
   app.post("/api/content/worker-heartbeat", requireService, async (c) => {
@@ -77,10 +122,10 @@ export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>
     if (unauth) return unauth;
     const now = Math.floor(Date.now() / 1000);
     const hb = await c.env.DB.prepare(
-      "SELECT reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok, usage_json, tts_json FROM worker_heartbeat WHERE id=?",
+      "SELECT reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok, usage_json, tts_json, tts_reported_at FROM worker_heartbeat WHERE id=?",
     ).bind(WORKER_ID).first<{
       reported_at: number; cf_image_exhausted: number; cf_reset_date: string | null; imagegen_ok: number;
-      usage_json: string | null; tts_json: string | null;
+      usage_json: string | null; tts_json: string | null; tts_reported_at: number | null;
     }>();
     const online = !!hb && now - hb.reported_at < STALE_SEC;
     let claudeUsage: unknown = null;
@@ -94,7 +139,8 @@ export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>
       image_free: { exhausted: !!hb && hb.cf_image_exhausted === 1, reset_date: hb?.cf_reset_date ?? null },
       imagegen_ok: !!hb && hb.imagegen_ok === 1,
       claude_usage: claudeUsage,
-      tts: summarizeTts(hb?.tts_json ?? null),     // null = 워커가 아직 보고 안 함(구버전이거나 재시작 전)
+      tts: summarizeTts(hb?.tts_json ?? null),
+      worker_runtime: summarizeRuntime(hb?.tts_json ?? null, hb?.tts_reported_at ?? null, now),   // null = 스냅샷 자체가 아직 없음     // null = 워커가 아직 보고 안 함(구버전이거나 재시작 전)
       can_generate: online,
       traffic: results,
     });

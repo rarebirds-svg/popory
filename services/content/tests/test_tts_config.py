@@ -6,6 +6,20 @@ import pytest
 from popory_content import names, options, pronunciation, tts, tts_config, video
 
 
+@pytest.fixture(autouse=True)
+def _no_git_network(monkeypatch):
+    """build_tts_config 는 runtime_snapshot 으로 git ls-remote(네트워크)를 부른다 — 단위 테스트가 원격에 기대면 느리고 불안정하다."""
+    monkeypatch.setattr(tts_config.runtime_info, "runtime_snapshot",
+                        lambda: {"loaded_commit": "abc1234", "head_commit": "abc1234", "branch": "main", "started_at": 1,
+                                 "loaded_subject": "x", "pulled_not_restarted": False,
+                                 "behind": {"state": "up_to_date", "count": 0}})
+
+
+def test_snapshot_carries_the_worker_runtime_version():
+    c = tts_config.build_tts_config()
+    assert c["runtime"]["loaded_commit"] == "abc1234" and c["runtime"]["behind"]["state"] == "up_to_date"
+
+
 def test_snapshot_reflects_live_module_values(monkeypatch):
     monkeypatch.setattr(tts, "SPEAKING_RATE", 1.06)
     monkeypatch.setattr(tts, "COMMA_BREAK_MS", 250)
