@@ -58,3 +58,12 @@ def test_reads_dirs_files_and_json(tmp_path):
     got = dict(tts_diff.read_texts([str(tmp_path)]))
     assert set(got) == {"a.txt", "b.json#1", "b.json#2"}
     assert got["b.json#2"] == "초안 2권"
+
+
+def test_missing_path_and_empty_folder_exit_with_a_one_line_hint_not_a_traceback(tmp_path, capsys):
+    assert tts_diff.main([str(tmp_path / "없는폴더")]) == 2
+    assert "경로가 없다" in capsys.readouterr().err
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert tts_diff.main([str(empty)]) == 2
+    assert "읽을 대본이 없다" in capsys.readouterr().err

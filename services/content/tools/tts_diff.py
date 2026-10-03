@@ -42,7 +42,9 @@ def read_texts(paths: list[str]) -> list[tuple[str, str]]:
         if p == "-":
             out.append(("stdin", sys.stdin.read()))
             continue
-        path = Path(p)
+        path = Path(p).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"경로가 없다: {p}")
         files = sorted(f for f in path.rglob("*") if f.suffix in (".txt", ".md", ".json")) if path.is_dir() else [path]
         for f in files:
             raw = f.read_text(encoding="utf-8")
@@ -97,7 +99,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"'전' 리비전을 읽지 못했다: {args.before_rev} ({(e.stderr or '').strip()[:120]}) — git fetch 후 다시", file=sys.stderr)
         return 2
 
-    texts = read_texts(args.paths)
+    try:
+        texts = read_texts(args.paths)
+    except FileNotFoundError as e:
+        print(f"{e}\n(예시 경로가 아니라 대본이 실제로 들어 있는 폴더·파일 경로를 넣는다. 확인: ls <경로>)", file=sys.stderr)
+        return 2
+    if not texts:
+        print("읽을 대본이 없다 — 폴더 안에 .txt / .md / .json 파일이 있어야 한다.", file=sys.stderr)
+        return 2
     total, changed = changed_sentences(texts, _split_sentences, tts_old.spoken_text, tts_now.spoken_text)
     print(f"대본 {len(texts)}건 · 문장 {total}개 중 읽기가 바뀐 문장 {len(changed)}개 (전: {args.before_rev})\n")
     for c in changed:
