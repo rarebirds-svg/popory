@@ -22,7 +22,7 @@ interface TtsConfig {
   voice_fx: { deepen_semitones: Tunable; enabled: boolean };
   normalization: { label: string; input: string; spoken: string }[];
   name_fixes: { wrong: string; right: string }[];
-  pronunciation_dictionary: { exists: boolean };
+  pronunciation_dictionary: { exists: boolean; entries?: { term: string; reading: string; ignore_case: boolean }[] };
 }
 interface Res { config: TtsConfig | null; tts_reported_at: number | null; tts_age_sec: number | null; worker_reported_at: number | null }
 
@@ -164,12 +164,30 @@ export default async function TtsPage() {
 
           <section className="mt-8">
             <h2 className="text-base font-semibold">발음 사전</h2>
-            {c.pronunciation_dictionary.exists ? null : (
+            {c.pronunciation_dictionary.exists && c.pronunciation_dictionary.entries ? (
+              <>
+                <p className="mt-1 text-sm text-popory-muted">
+                  합성 직전에 영문 약어·고유명사를 한글 독음으로 바꿉니다. <strong>자막에는 원문이 그대로</strong> 남고 음성만 바뀝니다.
+                  영문자에 붙은 경우(<code className={CODE}>ACEO</code>)는 건드리지 않고, 한글 조사가 붙은 경우(<code className={CODE}>CEO가</code>)는 바꿉니다.
+                  대소문자를 구분하지만 표시된 항목은 구분하지 않습니다. 대본에서 실제 뜻을 확인한 항목만 넣습니다.
+                </p>
+                <Table head={["표기", "읽는 소리", "비고"]}>
+                  {c.pronunciation_dictionary.entries.map((e) => (
+                    <tr key={e.term} className="border-b border-popory-border">
+                      <td className="py-2 pr-4"><code className={CODE}>{e.term}</code></td>
+                      <td className="py-2 pr-4">{e.reading}</td>
+                      <td className="py-2 pr-4 text-xs text-popory-muted">{e.ignore_case ? "대소문자 무시 · vs. 의 마침표 포함" : ""}</td>
+                    </tr>
+                  ))}
+                </Table>
+                <p className="mt-2 text-xs text-popory-muted">
+                  사전에 없는 영문 약어는 그대로 TTS 에 넘어갑니다. 잘못 읽는 단어를 발견하면 알려 주세요 — 뜻을 확인한 뒤 추가합니다.
+                </p>
+              </>
+            ) : (
               <p className="mt-1 text-sm text-popory-muted">
                 <Badge intent="warn">없음</Badge>{" "}
-                단어별로 발음을 지정하는 사전(SSML <code className={CODE}>phoneme</code>/<code className={CODE}>sub</code>)은 아직 없습니다.
-                위 규칙 표와 아래 인명 교정이 현재 발음을 다루는 전부입니다.
-                잘못 읽는 단어가 있다면 사전 기능을 추가할 수 있습니다.
+                단어별 발음 사전이 아직 없습니다. 위 규칙 표와 아래 인명 교정이 현재 발음을 다루는 전부입니다.
               </p>
             )}
           </section>

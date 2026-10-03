@@ -4,7 +4,7 @@
 import os
 import datetime
 
-from popory_content import names, options, tts, video
+from popory_content import names, options, pronunciation, tts, video
 
 # 규칙 설명 + 그 규칙이 드러나는 입력 예시. 결과는 보고 시점에 실제 함수로 계산한다.
 # (라벨, 입력) — 한 입력이 여러 규칙을 건드려도 된다. 새 규칙을 tts.py 에 넣으면 여기에도 한 줄 추가.
@@ -15,7 +15,8 @@ _EXAMPLES: list[tuple[str, str]] = [
     ("숫자 범위 틸드 → '에서'", "3~5명이 참석했다."),
     ("가운뎃점 나열 → 쉼표", "정치·경제·사회를 다룬다."),
     ("콜론·세미콜론 → 쉼표", "결론: 습관이 전부다."),
-    ("앰퍼샌드 → '앤'", "S&P 500 과 R&D 비중"),
+    ("발음 사전(약어·고유명사)", "S&P 500 과 R&D 비중, CEO가 SAT 를 봤다. A vs. B"),
+    ("'&' 는 앤 (사전에 없는 경우)", "AT&T 와 Q&A"),
     ("퍼센트 기호 → '퍼센트'", "수익률이 12% 올랐다."),
     ("한글 없는 괄호 주석 제거", "구방심(求放心)을 말한다."),
     ("한글 있는 괄호는 괄호만 벗김", "복리(이자에 붙는 이자)의 힘"),
@@ -88,6 +89,10 @@ def build_tts_config() -> dict:
             for label, text in _EXAMPLES
         ],
         "name_fixes": [{"wrong": w, "right": r} for w, r in names._NAME_FIXES.items()],
-        # 단어별 발음 사전(SSML phoneme/sub)은 없다. 없다는 사실도 화면이 정직하게 보여야 한다.
-        "pronunciation_dictionary": {"exists": False},
+        # 발음 사전 — 텍스트 치환(SSML sub 아님). 자막엔 원문이 남고 음성만 독음으로 바뀐다.
+        "pronunciation_dictionary": {
+            "exists": True,
+            "entries": [{"term": t, "reading": r, "ignore_case": t in pronunciation.IGNORE_CASE}
+                        for t, r in pronunciation.PRONUNCIATIONS.items()],
+        },
     }
