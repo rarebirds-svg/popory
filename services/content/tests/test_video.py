@@ -801,3 +801,65 @@ def test_make_video_puts_tts_record_in_meta(monkeypatch, tmp_path):
     _, _, meta, *_ = video.make_video(topic="t", sources=[], style_samples=[], voice="ko-KR-Neural2-C")
     assert meta["tts"]["voice"] == "ko-KR-Neural2-C" and meta["tts"]["fallback_sentences"] == 2
     assert meta["title"] == "t"                  # 기존 meta 는 그대로
+
+
+# ---- 이미지 모션 스위치 ----
+
+def test_zoompan_filter_motion_off_is_static_scale():
+    from popory_content.video import _zoompan_filter
+    f = _zoompan_filter(10.0, portrait=False, motion=False)
+    assert "zoompan" not in f and "crop=" not in f
+    assert f.startswith("scale=1920:1080")
+    assert _zoompan_filter(10.0, portrait=True, motion=False).startswith("scale=1080:1920")
+
+
+def test_zoompan_filter_motion_default_unchanged():
+    # 기본(motion=True)은 예전과 같은 줌 필터다 — 켜짐이 기본값이라 운영 영상이 달라지면 안 된다.
+    from popory_content.video import _zoompan_filter
+    assert "zoompan" in _zoompan_filter(10.0)
+
+
+def test_shorts_zoom_cap_applies_only_to_portrait(monkeypatch):
+    from popory_content import video
+    # 기본 상한(0.08)은 지금 폭(0.06)보다 위라 쇼츠 동작이 그대로다.
+    assert video._zoom_amplitude(7.0, portrait=True) == video._zoom_amplitude(7.0, portrait=False)
+    # 반주기를 늘려 폭이 커지는 상황을 만들어도 쇼츠는 상한에서 멈추고 롱폼은 안 멈춘다.
+    monkeypatch.setattr(video, "ZOOM_RATE_PER_SEC", 0.05)
+    assert video._zoom_amplitude(10.0, portrait=False) == video.ZOOM_SPAN_MAX
+    assert video._zoom_amplitude(10.0, portrait=True) == video.SHORTS_ZOOM_SPAN_MAX
+    # 상한이 하한(0.06)보다 낮게 잡혀도 하한이 이긴다 — 폭이 0 에 수렴하지 않게.
+    monkeypatch.setattr(video, "SHORTS_ZOOM_SPAN_MAX", 0.02)
+    assert video._zoom_amplitude(10.0, portrait=True) == video.ZOOM_SPAN_MIN
+
+
+def test_zoom_cycle_passes_portrait_to_amplitude():
+    from popory_content.video import _zoom_cycle
+    amp_l, period_l = _zoom_cycle(30.0, portrait=False)
+    amp_p, period_p = _zoom_cycle(30.0, portrait=True)
+    assert amp_p <= amp_l and period_p == period_l
+
+
+
+
+
+
+
+
+def test_render_video_motion_off_skips_zoom_and_pan(monkeypatch, tmp_path):
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "TMP", tmp_path)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    monkeypatch.setattr(video, "_xfade_graph", lambda d, td=0.4: ("", "v", "a"))
+    seen = []
+    monkeypatch.setattr(video, "_zoompan_filter",
+                        lambda dur, portrait=False, variant=0, pan_px=0, motion=True: seen.append((pan_px, motion)) or "null")
+    monkeypatch.setattr(video, "MOTION_LONGFORM", False)
+    monkeypatch.setattr(video, "MOTION_SHORTS", True)
+    scenes = [{"caption": "a", "narration": "n1."}, {"caption": "b", "narration": "n2."}]
+    video.render_video(scenes, job_id="off", portrait=False)
+    assert seen and all(p == 0 and m is False for p, m in seen)
+    seen.clear()
+    video.render_video(scenes, job_id="on", portrait=True)   # 쇼츠는 따로 켜져 있다
+    assert seen and all(m is True for _, m in seen)

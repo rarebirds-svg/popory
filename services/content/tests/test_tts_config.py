@@ -76,3 +76,33 @@ def test_api_key_is_never_included(monkeypatch):
 def test_snapshot_is_small_json_serialisable():
     raw = json.dumps(tts_config.build_tts_config(), ensure_ascii=False)
     assert len(raw.encode()) < 16 * 1024     # API 의 수용 한도(20KB) 안쪽
+
+
+def _motion(c):
+    return {r["label"]: r for r in c["video_motion"]["rows"]}
+
+
+def test_motion_rows_show_live_values_and_defaults():
+    rows = _motion(tts_config.build_tts_config())
+    lf, sh = rows["이미지 모션 · 동영상(롱폼)"], rows["이미지 모션 · 쇼츠"]
+    assert lf["value"] == "켜짐" and lf["default"] == "켜짐" and lf["env"] == "POPORY_MOTION_LONGFORM"
+    assert sh["env"] == "POPORY_MOTION_SHORTS"
+    assert all(set(r) == {"label", "value", "default", "env", "overridden", "note"} for r in rows.values())
+
+
+def test_motion_rows_flag_overrides(monkeypatch):
+    monkeypatch.setattr(video, "MOTION_SHORTS", False)
+    monkeypatch.setenv("POPORY_MOTION_SHORTS", "0")
+    monkeypatch.setattr(video, "SHORTS_ZOOM_SPAN_MAX", 0.07)
+    monkeypatch.setenv("POPORY_SHORTS_ZOOM_MAX", "0.07")
+    rows = _motion(tts_config.build_tts_config())
+    assert rows["이미지 모션 · 쇼츠"]["value"] == "꺼짐" and rows["이미지 모션 · 쇼츠"]["overridden"] is True
+    assert rows["이미지 모션 · 동영상(롱폼)"]["overridden"] is False   # 롱폼은 그대로
+    assert rows["줌 폭 상한 · 쇼츠"]["value"] == "7.0%" and rows["줌 폭 상한 · 쇼츠"]["overridden"] is True
+    # env 가 없으면(코드 상수) 바뀐 것으로 치지 않는다
+    assert rows["패닝 속도"]["overridden"] is False and rows["패닝 속도"]["env"] is None
+
+
+def test_snapshot_stays_json_serializable_and_small():
+    blob = json.dumps(tts_config.build_tts_config(), ensure_ascii=False)
+    assert len(blob.encode()) < 20_000   # API 가 20KB 를 넘기면 스냅샷을 버린다

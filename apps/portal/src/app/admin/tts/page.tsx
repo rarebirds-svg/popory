@@ -1,4 +1,4 @@
-// admin · TTS 설정 조회(읽기 전용). 유튜브 동영상·쇼츠 내레이션의 속도·쉼·발음 처리를 한눈에 본다.
+// admin · TTS 설정 조회(읽기 전용). 유튜브 동영상·쇼츠 내레이션의 속도·쉼·발음 처리와 영상 모션·전환을 한눈에 본다.
 // 값은 포털 상수가 아니라 **워커가 보고한 유효값**이다 — 맥미니 env 로 덮어쓴 값까지 맞아야 해서 복제하지 않는다.
 import { headers } from "next/headers";
 import { API_BASE } from "@/lib/env";
@@ -20,10 +20,13 @@ interface TtsConfig {
   speed: { speaking_rate: Tunable; note: string };
   pauses: { comma_break_ms: Tunable; sentence_gap_s: Tunable; chapter_gap_s: Tunable; question_gap_s: Tunable; crossfade_s: Tunable };
   voice_fx: { deepen_semitones: Tunable; enabled: boolean };
+  // 구버전 워커는 이 키를 보내지 않는다 — 없으면 섹션을 안내문으로 대신한다.
+  video_motion?: { rows: MotionRow[] };
   normalization: { label: string; input: string; spoken: string }[];
   name_fixes: { wrong: string; right: string }[];
   pronunciation_dictionary: { exists: boolean; entries?: { term: string; reading: string; ignore_case: boolean; note?: string }[] };
 }
+interface MotionRow { label: string; value: string; default: string; env: string | null; overridden: boolean; note: string }
 interface Res { config: TtsConfig | null; tts_reported_at: number | null; tts_age_sec: number | null; worker_reported_at: number | null }
 
 async function fetchTts(): Promise<Res> {
@@ -113,6 +116,35 @@ export default async function TtsPage() {
               <TunableRow label="저음화(피치다운)" t={c.voice_fx.deepen_semitones} unit="반음"
                 note={c.voice_fx.enabled ? "켜짐 — 머드 컷 + 프레즌스 부스트로 명료도 복원." : "꺼짐(0)."} />
             </Table>
+          </section>
+
+          <section className="mt-8">
+            <h2 className="text-base font-semibold">영상 모션</h2>
+            {c.video_motion ? (
+              <>
+                <p className="mt-1 text-xs text-popory-muted">
+                  장면 이미지의 줌·패닝입니다. 동영상과 쇼츠는 같은 렌더 경로를 쓰고 모션 스위치만 따로입니다.
+                  <Badge intent="warn">변경됨</Badge> 은 환경변수로 기본값에서 바꾼 항목입니다.
+                </p>
+                <Table head={["항목", "현재값", "기본값", "조정", "설명"]}>
+                  {c.video_motion.rows.map((r) => (
+                    <tr key={r.label} className="border-b border-popory-border align-top">
+                      <td className="py-2 pr-4 whitespace-nowrap">{r.label}</td>
+                      <td className="py-2 pr-4 whitespace-nowrap"><strong>{r.value}</strong>{" "}{r.overridden && <Badge intent="warn">변경됨</Badge>}</td>
+                      <td className="py-2 pr-4 whitespace-nowrap text-popory-muted">{r.default}</td>
+                      <td className="py-2 pr-4">
+                        {r.env ? <code className={CODE}>{r.env}</code> : <span className="text-xs text-popory-muted">코드 상수</span>}
+                      </td>
+                      <td className="py-2 pr-4 text-popory-muted">{r.note}</td>
+                    </tr>
+                  ))}
+                </Table>
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-popory-muted">
+                워커가 모션 설정을 아직 보고하지 않았습니다 — 새 코드로 재시작되면 표시됩니다.
+              </p>
+            )}
           </section>
 
           <section className="mt-8">
