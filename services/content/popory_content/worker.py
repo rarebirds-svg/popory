@@ -298,6 +298,8 @@ IMAGEGEN_HEALTH_URL = IMAGEGEN_URL.replace("/generate", "/health")
 # 3KB 를 D1 에 쓸 이유가 없어 첫 보고와 이후 이 횟수마다만 싣는다(기본 120회 ≈ 1시간).
 # 첫 보고가 실패해도 다음 주기에 다시 싣도록 report_heartbeat 가 성공 여부로 카운터를 관리한다.
 TTS_REPORT_EVERY = int(os.environ.get("POPORY_TTS_REPORT_EVERY", "120"))
+# 스냅샷을 실은 보고가 거부되면 이 박자 뒤에 다시 시도한다(매 박자 재시도하면 같은 요청이 30초마다 실패한다).
+TTS_RETRY_BEATS = int(os.environ.get("POPORY_TTS_RETRY_BEATS", "10"))
 
 
 def _verify_image(data: bytes) -> None:
@@ -378,8 +380,13 @@ def heartbeat_loop(client, stop: threading.Event) -> None:
     while not stop.is_set():
         with_tts = since_tts >= TTS_REPORT_EVERY
         ok = report_heartbeat(client, with_tts=with_tts)
-        # 스냅샷을 실은 보고가 실패하면 카운터를 되돌리지 않고 다음 박자에 다시 싣는다.
-        since_tts = 1 if (with_tts and ok) else since_tts + 1
+        if with_tts and not ok:
+            # 스냅샷이 실린 요청이 거부돼도 생존 신호는 끊기면 안 된다 — 안 보내면 포털이 워커를
+            # 오프라인(120초 무보고)으로 보고 생성 가능 판정이 꺼진다. 부가 정보가 본 기능을 죽이면 안 된다.
+            report_heartbeat(client)
+            since_tts = max(0, TTS_REPORT_EVERY - TTS_RETRY_BEATS)   # 잠시 뒤 다시 싣는다
+        else:
+            since_tts = 1 if with_tts else since_tts + 1
         stop.wait(HEARTBEAT_INTERVAL_SECONDS)
 
 

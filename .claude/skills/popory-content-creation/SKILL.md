@@ -182,6 +182,9 @@ popory `services/content`가 한 주제로 4개 채널(블로그·유튜브 동�
 
 - **어드민 TTS 설정 화면(`/admin/tts`, 읽기 전용)** — 속도·쉼·목소리·발음 처리를 보여 준다. 값은 포털 상수가 아니라 **워커가 하트비트로 보고한 유효값**이다(`tts_config.build_tts_config` → `worker_heartbeat.tts_json`, 마이그레이션 0024). 맥미니 env 로 덮어쓴 값까지 맞아야 해서 복제하지 않는다. 스냅샷은 프로세스 수명 동안 안 변하므로 첫 박자와 `POPORY_TTS_REPORT_EVERY`(기본 120박자≈1시간)마다만 싣고, 안 실린 박자는 API 가 `COALESCE` 로 기존 값을 유지한다. **규칙 표의 '결과' 는 손으로 쓴 값이 아니라 `tts.spoken_text` 를 실제로 돌린 출력**이라 규칙을 고치면 화면이 같이 바뀐다 — `tts.py` 에 정규화 규칙을 추가하면 `tts_config._EXAMPLES` 에 예시 한 줄도 넣을 것. 새 TTS 설정(env)을 만들면 `build_tts_config` 에 `_env_info` 로 한 줄 추가해야 화면에 보인다. **단어별 발음 사전(SSML `phoneme`/`sub`)은 없다** — 발음은 정규화 규칙·숫자→한글 변환·`names.py` 인명 교정이 전부이고, 화면도 '없음' 이라고 정직하게 표시한다(`pronunciation_dictionary.exists`). 사전을 만들면 그 값과 화면을 함께 고친다.
 
+- **워커 재시작 대상은 `com.popory.content-worker` 다**(`KeepAlive`, `run_worker.sh`). `com.popory.content-daily` 는 매일 주제를 자동 생성하는 작업(`run_auto_create.sh`, 18:00)이라 `kickstart -k` 하면 워커가 아니라 **자동 생성이 한 번 더 돈다.** 2026-10-03 이 둘을 헷갈려 잘못된 재시작 명령을 안내했다 — 서비스 라벨은 기억에 기대지 말고 `services/content/*.plist` 의 `Label` 로 확인할 것. 워커 코드가 바뀐 PR 은 배포 워크플로(포털·API)로는 반영되지 않으므로 맥미니에서 `git pull` + 위 라벨 재시작이 따로 필요하다.
+- **부가 정보 보고가 생존 신호를 막으면 안 된다** — 하트비트에 스냅샷(TTS 설정)을 실을 때, 그 요청이 거부되면 스냅샷 없는 하트비트를 바로 따로 보내고 스냅샷은 `POPORY_TTS_RETRY_BEATS` 뒤에 다시 싣는다. 포털은 120초간 하트비트가 없으면 워커를 오프라인으로 보고 생성 가능 판정을 끈다.
+
 ## 흔한 실수
 - 쇼츠에 구독·좋아요 CTA를 넣거나, 롱폼 **본문** 장면에 CTA 를 넣음(롱폼은 마지막 엔딩 CTA 장면에만).
 - 롱폼 첫 장면을 서정적 배경 묘사로 시작함(프리후크 규칙 위반 — 첫 문장은 결론·대비).

@@ -102,10 +102,12 @@ def test_tts_snapshot_rides_first_heartbeat_then_every_n(monkeypatch):
     assert _loop_payloads(monkeypatch, every=3, beats=7) == [True, False, False, True, False, False, True]
 
 
-def test_tts_snapshot_is_retried_next_beat_when_the_report_failed(monkeypatch):
-    """스냅샷을 실은 보고가 실패하면 N 박자를 기다리지 않고 다음 박자에 다시 싣는다."""
-    seen = _loop_payloads(monkeypatch, every=100, beats=4, fail_first=2)
-    assert seen == [True, True, True, False]      # 두 번 실패 → 세 번째에 성공 → 그 뒤는 안 싣는다
+def test_rejected_tts_beat_still_sends_liveness_and_retries_later(monkeypatch):
+    """스냅샷이 실린 요청이 거부돼도 생존 신호(스냅샷 없는 하트비트)는 바로 나가야 한다 — 안 그러면 포털이
+    워커를 오프라인으로 본다. 스냅샷은 TTS_RETRY_BEATS 박자 뒤에 다시 싣는다."""
+    monkeypatch.setattr(worker, "TTS_RETRY_BEATS", 2)
+    seen = _loop_payloads(monkeypatch, every=5, beats=5, fail_first=1)
+    assert seen == [True, False, False, False, True]   # 거부 → 곧바로 생존 신호 → 두 박자 건너뛰고 재시도
 
 
 def test_heartbeat_payload_omits_tts_by_default_and_survives_snapshot_failure(monkeypatch):

@@ -41,6 +41,27 @@ function ago(sec: number | null): string {
 }
 
 const CODE = "font-mono text-xs";
+// 포털이 워커를 온라인으로 보는 기준(content_status.ts 의 STALE_SEC)과 같다.
+const WORKER_STALE_SEC = 120;
+
+// 하트비트가 한 번이라도 온 적 있다고 "살아 있다" 고 단정하면 안 된다 — 신선도로 가른다.
+function emptyReason(workerReportedAt: number | null) {
+  if (workerReportedAt == null) {
+    return "워커가 한 번도 하트비트를 보내지 않았습니다 — 맥미니 워커가 떠 있는지 확인하세요.";
+  }
+  const age = Math.floor(Date.now() / 1000) - workerReportedAt;
+  if (age >= WORKER_STALE_SEC) {
+    return `워커 하트비트가 ${ago(age)}부터 끊겼습니다 — 워커가 멈췄거나 재시작 중입니다.`;
+  }
+  return (
+    <>
+      워커는 살아 있지만 설정을 아직 보내지 않았습니다. 맥미니에서 <strong>새 코드로 재시작되지 않았을</strong> 가능성이 가장 큽니다.
+      <code className={`${CODE} block mt-2`}>cd ~/projects/popory &amp;&amp; git pull &amp;&amp; launchctl kickstart -k gui/$(id -u)/com.popory.content-worker</code>
+      재시작 뒤에도 비어 있으면 <code className={CODE}>services/content/logs/</code> 의 <code className={CODE}>heartbeat_failed</code> /{" "}
+      <code className={CODE}>tts_config_failed</code> 줄을 확인하세요.
+    </>
+  );
+}
 
 export default async function TtsPage() {
   const { config: c, tts_reported_at, tts_age_sec, worker_reported_at } = await fetchTts();
@@ -55,10 +76,7 @@ export default async function TtsPage() {
 
       {!c ? (
         <EmptyState>
-          워커가 아직 TTS 설정을 보고하지 않았습니다.
-          {worker_reported_at
-            ? " 워커는 살아 있지만 이 기능이 들어가기 전 버전입니다 — 맥미니에서 git pull 후 워커를 재시작하면 30초 안에 채워집니다."
-            : " 워커가 한 번도 하트비트를 보내지 않았습니다 — 맥미니 워커가 떠 있는지 확인하세요."}
+          워커가 아직 TTS 설정을 보고하지 않았습니다. {emptyReason(worker_reported_at)}
         </EmptyState>
       ) : (
         <>
