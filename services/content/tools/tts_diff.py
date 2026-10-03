@@ -35,6 +35,24 @@ def load_tts_at(rev: str) -> types.ModuleType:
     return mod
 
 
+SCRIPT_KEYS = ("draft", "script", "narration", "text", "body", "content")
+# 키 이름을 모르는 객체에서 대본으로 보는 문자열의 최소 길이. 색인·제목 백업 같은 짧은 필드는 대본이 아니다.
+MIN_UNKNOWN_KEY_CHARS = 150
+
+
+def _script_text(item) -> str:
+    """JSON 항목에서 대본 본문. 문자열이면 그대로, 객체면 알려진 키 → 없으면 가장 긴 문자열 필드(충분히 길 때만)."""
+    if isinstance(item, str):
+        return item
+    if not isinstance(item, dict):
+        return ""
+    for k in SCRIPT_KEYS:
+        if isinstance(item.get(k), str) and item[k].strip():
+            return item[k]
+    longest = max((v for v in item.values() if isinstance(v, str)), key=len, default="")
+    return longest if len(longest) >= MIN_UNKNOWN_KEY_CHARS else ""
+
+
 def read_texts(paths: list[str], exclude: "set[Path] | None" = None) -> list[tuple[str, str]]:
     """(출처, 본문) 목록. exclude 는 읽지 않을 파일(이 도구가 쓴 결과 파일 — 대본 폴더 안에 저장하면
     다음 실행 때 입력으로 다시 읽혀 건수가 부풀기 때문이다)."""
@@ -55,11 +73,13 @@ def read_texts(paths: list[str], exclude: "set[Path] | None" = None) -> list[tup
             raw = f.read_text(encoding="utf-8")
             if f.suffix == ".json":
                 data = json.loads(raw)
+                if isinstance(data, dict) and not _script_text(data):
+                    # {"id": 대본, ...} 꼴이면 값들을 항목으로. 짧은 문자열 값(제목 백업 등)은 대본이 아니다.
+                    data = [v for v in data.values() if not isinstance(v, str) or len(v) >= MIN_UNKNOWN_KEY_CHARS]
                 items = data if isinstance(data, list) else [data]
                 for i, it in enumerate(items):
-                    text = it if isinstance(it, str) else next(
-                        (str(it[k]) for k in ("draft", "script", "narration", "text") if isinstance(it, dict) and it.get(k)), "")
-                    if text.strip():                    # 대본이 아닌 JSON 객체(메타데이터 등)는 건수에 넣지 않는다
+                    text = _script_text(it)
+                    if text.strip():                    # 대본이 아닌 JSON 객체(메타데이터·색인 등)는 건수에 넣지 않는다
                         out.append((f"{name}#{i + 1}", text))
             elif raw.strip():
                 out.append((name, raw))

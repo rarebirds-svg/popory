@@ -102,3 +102,20 @@ def test_result_file_inside_the_scanned_folder_is_not_read_back_as_input(tmp_pat
     texts = tts_diff.read_texts([str(tmp_path)], exclude={out})
     assert tts_diff.count_by_file(texts) == {"a.txt": 1}
     assert "읽은 파일 1개 · 대본 1건" in out.read_text(encoding="utf-8")
+
+
+def test_unknown_key_objects_use_the_longest_long_field_but_short_index_rows_are_ignored(tmp_path):
+    """scripts_34.json 의 키 이름을 모를 때도 대본을 읽고, 같은 폴더의 색인·제목 백업(짧은 필드)은 세지 않는다."""
+    long_script = "긴 대본 문장입니다. " * 30
+    (tmp_path / "scripts_34.json").write_text(json.dumps(
+        [{"id": i, "title": f"제목 {i}", "full_script": long_script} for i in range(3)], ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "scripts_34_index.json").write_text(json.dumps(
+        [{"id": i, "title": f"제목 {i}", "chars": 1000} for i in range(3)], ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "shorts_title_backup.json").write_text(json.dumps({"1": "짧은 제목", "2": "또 짧은 제목"}, ensure_ascii=False), encoding="utf-8")
+    counts = tts_diff.count_by_file(tts_diff.read_texts([str(tmp_path)]))
+    assert counts == {"scripts_34.json": 3}
+
+
+def test_json_mapping_of_scripts_is_read_by_values(tmp_path):
+    (tmp_path / "m.json").write_text(json.dumps({"a": {"draft": "첫 대본 3가지"}, "b": {"draft": "둘째 대본"}}, ensure_ascii=False), encoding="utf-8")
+    assert tts_diff.count_by_file(tts_diff.read_texts([str(tmp_path / "m.json")])) == {"m.json": 2}
