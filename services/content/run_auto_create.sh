@@ -7,4 +7,10 @@ VENV_PY="${CONTENT_DIR}/.venv/bin/python"
 # shellcheck disable=SC1091
 source "${CONTENT_DIR}/secrets/env.sh"
 
+# 장기 OAuth 토큰(설치돼 있으면) 주입 — claude CLI 가 keychain 로그인보다 우선해 쓴다.
+if [ -f "${CONTENT_DIR}/../healthcheck/claude_token.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${CONTENT_DIR}/../healthcheck/claude_token.sh"
+fi
+
 exec "${VENV_PY}" -m popory_content.auto_create

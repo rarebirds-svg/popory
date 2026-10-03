@@ -20,3 +20,10 @@ def _isolate_logs_dir(tmp_path, monkeypatch):
     for name in _LOG_MODULES:
         module = importlib.import_module(name)
         monkeypatch.setattr(module, "LOGS_DIR", tmp_path / "logs", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _clean_claude_token_env(monkeypatch):
+    """장기 토큰 환경변수가 usage·worker 테스트에 새지 않게 비운다(실행 환경 비의존)."""
+    for name in ("CLAUDE_CODE_OAUTH_TOKEN", "POPORY_CLAUDE_AUTH_HINT"):
+        monkeypatch.delenv(name, raising=False)

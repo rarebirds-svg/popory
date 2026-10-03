@@ -52,6 +52,12 @@ set -a
 source "${BRIEF_DIR}/secrets/portal_endpoints.env"
 set +a
 
+# 장기 OAuth 토큰(설치돼 있으면)을 주입한다 — claude CLI 가 keychain 로그인보다 우선해 쓴다.
+if [ -f "${BRIEF_DIR}/../healthcheck/claude_token.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${BRIEF_DIR}/../healthcheck/claude_token.sh"
+fi
+
 # 2) 활성 카테고리 목록 ("slug mode" 한 줄씩)
 #    정규 실행은 frontmatter days 요일 게이트 적용 (없으면 매일).
 #    --only(재시도·수동 실행)는 게이트 없이 지정 카테고리를 그대로 실행한다
@@ -370,7 +376,7 @@ if [ -n "${AUTH_CAT_CSV}" ] && [ ${DRY_RUN} -eq 0 ]; then
   if [ "${AUTH_FAIL_PROVIDER}" = "gemini" ]; then
     AUTH_REMEDY="Gemini API 호출 거부. 키 값 또는 키 프로젝트의 결제(쿼터) 설정을 확인하세요 — check_gemini.py 로 원인이 나옵니다."
   else
-    AUTH_REMEDY="Claude 인증 만료. 터미널에서 claude /login 하면 10분 내 자동 재생성됩니다."
+    AUTH_REMEDY="Claude 인증 만료. 조치: ${POPORY_CLAUDE_AUTH_HINT:-터미널에서 claude /login} — 끝나면 10분 내 자동 재생성됩니다."
   fi
   bash /Users/daegong/projects/popory/services/healthcheck/notify.sh --once-key=brief_auth \
     "[popory] 브리핑 생성 실패 — ${AUTH_REMEDY} (실패: ${AUTH_CAT_CSV})" \

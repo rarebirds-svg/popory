@@ -8,6 +8,12 @@ VENV_PY="${CONTENT_DIR}/.venv/bin/python"
 # shellcheck disable=SC1091
 source "${CONTENT_DIR}/secrets/env.sh"
 
+# 장기 OAuth 토큰(설치돼 있으면) 주입 — claude CLI 가 keychain 로그인보다 우선해 쓴다.
+if [ -f "${CONTENT_DIR}/../healthcheck/claude_token.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${CONTENT_DIR}/../healthcheck/claude_token.sh"
+fi
+
 # launchd 는 최소 PATH(/usr/bin:/bin:/usr/sbin:/sbin)로 프로세스를 띄운다. 그래서 homebrew·npm 전역
 # 바이너리(aside, ffmpeg, claude)가 안 보이고, 워커가 띄우는 claude 서브프로세스도 이 PATH 를 물려받아
 # 스킬 안의 셸 호출이 command not found 로 죽는다(2026-09-05 발행 실패). 여기서 한 번 넓혀 둔다 —

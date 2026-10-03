@@ -117,7 +117,13 @@ def gather(mode: str = "pm") -> list[tuple[str, str, str]]:
     out.append(("포털", *checks.check_http("포털", PORTAL)))
     out.append(("API", *checks.check_http("API", API)))
     # 브리핑보다 앞에 둔다 — 인증이 죽으면 브리핑 실패는 결과일 뿐이라 원인이 먼저 보여야 한다.
-    out.append(("Claude인증", *checks.check_claude_auth(*claude_auth.current_state(), time.time())))
+    token = claude_auth.token_mode()
+    if token:
+        # 장기 토큰 모드 — keychain 은 인증 상태가 아니다(환경변수 토큰이 우선). 발급일로 만료를 예고한다.
+        out.append(("Claude인증", *checks.check_claude_token(
+            claude_auth.token_issued_at(), time.time(), claude_auth.TOKEN_LIFETIME_DAYS)))
+    else:
+        out.append(("Claude인증", *checks.check_claude_auth(*claude_auth.current_state(), time.time())))
     # 오전(09:00) 점검은 브리핑 생성 창(08:00 + 0~120분 지터 + 생성 시간)과 겹친다.
     # 오늘자가 아직 없어도 직전 발행 예정일자가 확인되면 정상으로 본다 — 확정 판정은 21:00 pm이 한다.
     # 요일제 카테고리는 발행 요일에만 점검하고, 오늘 발행 예정이 하나도 없는 날은 ok로 넘어간다.
@@ -130,7 +136,7 @@ def gather(mode: str = "pm") -> list[tuple[str, str, str]]:
     # 발행 결과 바로 뒤에 원인 점검을 둔다 — 미확인이 "안 떴다"인지 "돌았지만 실패"인지
     # 다이제스트에서 바로 갈린다.
     out.append(("브리핑잡", *checks.check_brief_run(
-        str(Path(BRIEF_LOG_DIR) / f"{_today()}.log"), mode)))
+        str(Path(BRIEF_LOG_DIR) / f"{_today()}.log"), mode, token_mode=token)))
     # 브리핑 데일리 잡은 KeepAlive 데몬이 아니라 캘린더 잡이지만, launchd 에 로드돼 있어야
     # 08:00 에 뜬다. 로그 부재(브리핑잡 점검)와 조합하면 "plist 언로드"와 "맥 꺼짐"이 갈린다.
     out.append(("브리핑데몬", *checks.check_daemon("com.popory.brief")))

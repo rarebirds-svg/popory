@@ -428,3 +428,49 @@ def test_brief_run_am_does_not_warn_while_generating(tmp_path):
     log.write_text('{"msg":"jitter_sleep=5400s"}', encoding="utf-8")
     assert checks.check_brief_run(str(log), mode="am")[0] == "ok"
     assert checks.check_brief_run(str(log), mode="pm")[0] == "warn"
+
+
+# ───────── 장기 토큰 모드 점검 ─────────
+
+_NOW = 1_800_000_000.0
+
+
+def _age(days: float) -> float:
+    return _NOW - days * 86400
+
+
+def test_claude_token_ok_when_fresh():
+    status, msg = checks.check_claude_token(_age(10), _NOW)
+    assert status == "ok"
+    assert "355일 남음" in msg
+
+
+def test_claude_token_warns_before_expiry():
+    status, msg = checks.check_claude_token(_age(345), _NOW)  # 20일 남음
+    assert status == "warn"
+    assert "setup-token" in msg
+
+
+def test_claude_token_fails_after_lifetime():
+    status, msg = checks.check_claude_token(_age(366), _NOW)
+    assert status == "fail"
+    assert "setup-token" in msg
+
+
+def test_claude_token_warns_when_file_missing():
+    """토큰 모드인데 발급일을 알 수 없으면 조용히 ok 로 두지 않는다."""
+    assert checks.check_claude_token(None, _NOW)[0] == "warn"
+
+
+def test_claude_token_respects_custom_lifetime():
+    assert checks.check_claude_token(_age(80), _NOW, lifetime_days=90)[0] == "warn"
+    assert checks.check_claude_token(_age(91), _NOW, lifetime_days=90)[0] == "fail"
+
+
+def test_brief_run_token_mode_does_not_prescribe_login(tmp_path):
+    """토큰 모드에서 /login 은 소용없다(환경변수 토큰이 우선) — 틀린 처방을 내면 헛수고가 된다."""
+    log = tmp_path / "d.log"
+    log.write_text(_DONE_AUTH, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log), token_mode=True)
+    assert status == "warn"
+    assert "setup-token" in msg and "/login" not in msg

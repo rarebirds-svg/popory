@@ -79,13 +79,19 @@ def _is_claude_auth_failure(err: str) -> bool:
 NOTIFY_SH = "/Users/daegong/projects/popory/services/healthcheck/notify.sh"
 
 
+def _auth_hint() -> str:
+    """인증이 깨졌을 때 사람이 할 조치. 장기 토큰 모드에선 /login 이 소용없다(환경변수 토큰이 우선) —
+    틀린 처방을 내면 헛수고가 되므로 claude_token.sh 가 내보낸 모드별 문구를 쓴다."""
+    return os.environ.get("POPORY_CLAUDE_AUTH_HINT") or "터미널에서 claude /login"
+
+
 def _notify_auth_failure() -> None:
-    """인증 만료를 즉시 텔레그램으로 알린다. 사람이 /login 해야만 풀리기 때문이다.
+    """인증 만료를 즉시 텔레그램으로 알린다. 사람이 고쳐야만 풀리기 때문이다.
     KeepAlive 재기동 루프에서 알림이 폭주하지 않게 발송측이 하루 1회로 억제한다."""
     try:
         subprocess.run(
             ["bash", NOTIFY_SH, "--once-key=worker_auth",
-             "[popory] 콘텐츠 워커 중단 — Claude 인증 만료. 터미널에서 claude /login 후 잡을 재시도하세요."],
+             f"[popory] 콘텐츠 워커 중단 — Claude 인증 만료. 조치: {_auth_hint()} 후 잡을 재시도하세요."],
             capture_output=True, timeout=20,
         )
     except Exception:  # noqa: BLE001 — 알림 실패가 종료 경로를 막으면 안 된다.

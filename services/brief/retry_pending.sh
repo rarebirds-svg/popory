@@ -43,13 +43,20 @@ NOW=$(date +%s)
 # 리셋 전이면 claude 미호출하고 종료 (사용량 윈도우 무소모)
 [ "${NOW}" -lt "${RESET_AT}" ] && exit 0
 
+# 장기 OAuth 토큰(설치돼 있으면) 주입 — 아래 인증 프로브(claude_auth)가 토큰 모드를 알아야 한다.
+# 이 줄이 프로브보다 뒤에 있으면 토큰이 멀쩡해도 keychain(만료)만 보고 재시도를 영구 보류한다.
+if [ -f "${BRIEF_DIR}/../healthcheck/claude_token.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${BRIEF_DIR}/../healthcheck/claude_token.sh"
+fi
+
 # 인증이 끊겨 있으면 재시도해봐야 전건 실패한다. claude 미호출로 종료해
 # retry_count 를 태우지 않는다 — 사람이 /login 하면 다음 폴링에서 자동 재개된다.
 HC_DIR=/Users/daegong/projects/popory/services/healthcheck
 if [ -x "${HC_DIR}/.venv/bin/python" ]; then
   "${HC_DIR}/.venv/bin/python" -m popory_healthcheck.claude_auth > /dev/null 2>&1
   if [ $? -eq 1 ]; then
-    log "\"claude 인증 만료 — 재시도 보류 (login 대기)\""
+    log "\"claude 인증 만료 — 재시도 보류 (조치: ${POPORY_CLAUDE_AUTH_HINT:-터미널에서 claude /login})\""
     exit 0
   fi
 fi
@@ -147,7 +154,7 @@ if [ -n "${REMAIN_CATS}" ] || [ -n "${REMAIN_CUS}" ]; then
     --date "${DATE}" --reset-at "${NEW_RESET}" \
     --categories "${REMAIN_CATS}" --custom "${REMAIN_CUS}" ${INC} >> "${LOG_FILE}" 2>&1
   if [ "${AUTH_FAILED}" -eq 1 ]; then
-    log "\"retry blocked — claude 인증 만료, /login 대기 (cats=${REMAIN_CATS:-none})\""
+    log "\"retry blocked — claude 인증 만료, 조치 대기: ${POPORY_CLAUDE_AUTH_HINT:-터미널에서 claude /login} (cats=${REMAIN_CATS:-none})\""
   else
     log "\"retry incomplete — remain cats=${REMAIN_CATS:-none} custom=${REMAIN_CUS:-none} next_reset=${NEW_RESET}\""
   fi

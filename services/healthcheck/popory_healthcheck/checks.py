@@ -164,7 +164,7 @@ _BRIEF_DONE = re.compile(
 )
 
 
-def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
+def check_brief_run(log_path: str, mode: str = "pm", token_mode: bool = False) -> tuple[str, str]:
     """오늘 브리핑 데일리 잡의 기동·완료·실패를 로그로 판정한다.
 
     run_daily.sh 는 08:00 기동 직후 jitter_sleep 을 먼저 기록하므로, 오늘자 로그가
@@ -187,6 +187,9 @@ def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
         if failed == "none":
             return ("ok", f"브리핑 데일리 잡 완료 — {ok}개 발행")
         if auth != "none":
+            if token_mode:
+                # 토큰 모드에서 /login 은 소용없다(환경변수 토큰이 우선) — 틀린 처방을 내면 헛수고가 된다.
+                return ("warn", f"브리핑 생성 실패 — Claude 장기 토큰 만료·폐기, claude setup-token 재발급 필요 ({auth})")
             return ("warn", f"브리핑 생성 실패 — Claude 인증 만료, 터미널에서 claude /login 필요 ({auth})")
         if limit != "none":
             return ("warn", f"브리핑 생성 실패 — Claude 세션 한도, 자동 재시도 대기 ({limit})")
@@ -219,6 +222,29 @@ def check_claude_auth(
     if remain_days <= warn_days:
         return ("warn", f"Claude 인증 {int(remain_days)}일 후 만료 — 미리 claude /login 권장")
     return ("ok", f"Claude 인증 정상 — {int(remain_days)}일 남음")
+
+
+def check_claude_token(
+    issued_at: float | None,
+    now: float,
+    lifetime_days: int = 365,
+    warn_days: int = 30,
+) -> tuple[str, str]:
+    """장기 OAuth 토큰(claude setup-token) 모드의 인증 점검.
+
+    토큰은 불투명해 만료 시각을 읽을 수 없고, 사용량 조회 엔드포인트가 이 토큰을 받아주는지도
+    미확인(권한 범위)이라 라이브 프로브를 쓰지 않는다 — 오판하면 멀쩡한 토큰에 상시 ❌ 가 뜬다.
+    대신 발급일(토큰 파일 mtime) + 수명으로 만료를 예고하고, 폐기·조기 만료는 런타임 인증 실패
+    감지(브리핑잡·워커 알림)가 맡는다."""
+    if issued_at is None:
+        return ("warn", "Claude 장기 토큰 발급일 확인 불가 — 토큰 파일 없음(설치 스크립트로 재설치)")
+    age_days = (now - issued_at) / 86400
+    remain = lifetime_days - age_days
+    if remain <= 0:
+        return ("fail", f"Claude 장기 토큰 만료 추정({int(age_days)}일 경과) — claude setup-token 재발급 필요")
+    if remain <= warn_days:
+        return ("warn", f"Claude 장기 토큰 {int(remain)}일 후 만료 — 미리 claude setup-token 재발급 권장")
+    return ("ok", f"Claude 장기 토큰 정상 — {int(remain)}일 남음")
 
 
 def check_content_routine(log_text: str) -> tuple[str, str]:
