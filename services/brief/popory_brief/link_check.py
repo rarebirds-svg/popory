@@ -78,6 +78,11 @@ def check_url(url: str, *, timeout: float = TIMEOUT_SECONDS) -> int | None:
         return resp.status_code
     except requests.RequestException:
         return None
+    except Exception:   # noqa: BLE001
+        # 모델이 쓴 URL 은 호스트가 깨져 있을 수 있다('news..naver.com', 63자 넘는 레이블).
+        # urllib3 버전에 따라 LocationParseError(ValueError) 가 requests 로 감싸지지 않고 새어 나와
+        # pool.map 에서 generate 전체를 exit 1 로 죽였다 — 점검 하나로 발행을 막지 않는다(판정 불가).
+        return None
 
 
 def dead_links(markdown: str, *, timeout: float = TIMEOUT_SECONDS,

@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/env";
 import { EditForm } from "./EditForm";
+import { LoadError } from "../../_components/LoadError";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -23,10 +24,11 @@ interface CategoryDetail {
   sha: string;
 }
 
-async function fetchDetail(slug: string, cookie: string): Promise<CategoryDetail | null> {
+async function fetchDetail(slug: string, cookie: string): Promise<CategoryDetail | { error: string; status: number } | null> {
   const res = await fetch(`${API_BASE}/api/admin/brief-categories/${slug}`, { headers: { cookie }, cache: "no-store" });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`load failed ${res.status}`);
+  // 던지면 운영 빌드 오류 화면이 사유를 숨긴다 — 워커 본문을 그대로 보여 준다.
+  if (!res.ok) return { error: (await res.text()).slice(0, 600), status: res.status };
   return (await res.json()) as CategoryDetail;
 }
 
@@ -35,6 +37,14 @@ export default async function EditCategoryPage({ params }: { params: Promise<{ s
   const cookie = (await headers()).get("cookie") ?? "";
   const data = await fetchDetail(slug, cookie);
   if (!data) notFound();
+  if ("error" in data) {
+    return (
+      <main>
+        <h1 className="text-xl font-semibold">{slug}</h1>
+        <LoadError title={`카테고리를 불러오지 못했습니다 (HTTP ${data.status})`} detail={data.error} />
+      </main>
+    );
+  }
 
   return (
     <main>

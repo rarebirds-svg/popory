@@ -29,11 +29,36 @@ export class GitHubApiError extends Error {
   }
 }
 
-export async function getDir(token: string, path: string): Promise<DirEntry[]> {
+// Fine-grained PAT 는 만료일이 있고, 만료되면 모든 호출이 401 "Bad credentials" 가 된다
+// (2026-09-25: 90일 PAT 만료로 관리자 카테고리 화면·공개 브리핑 카테고리 목록이 멈췄다).
+// GitHub 는 응답마다 이 헤더로 만료 시각을 알려 준다 — 미리 경고하는 데 쓴다.
+// 형식: "2026-12-24 00:00:00 UTC" 또는 "2026-12-24 09:00:00 +0900". 만료 없는 토큰은 헤더가 없다.
+export function parseTokenExpiration(raw: string | null): number | null {
+  if (!raw) return null;
+  const m = raw.trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*(UTC|Z|[+-]\d{2}:?\d{2})?$/);
+  if (!m) return null;
+  let tz = m[3] ?? "Z";
+  if (tz === "UTC") tz = "Z";
+  else if (/^[+-]\d{4}$/.test(tz)) tz = `${tz.slice(0, 3)}:${tz.slice(3)}`;
+  const ms = Date.parse(`${m[1]}T${m[2]}${tz}`);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
+export async function getDirWithTokenExpiry(
+  token: string,
+  path: string,
+): Promise<{ entries: DirEntry[]; tokenExpiresAt: number | null }> {
   const url = `${API}/repos/${REPO}/contents/${encodeURIComponent(path).replace(/%2F/g, "/")}?ref=${BRANCH}`;
   const res = await fetch(url, { headers: COMMON_HEADERS(token) });
   if (!res.ok) throw new GitHubApiError(res.status, `getDir ${path} ${res.status}: ${await res.text()}`);
-  return (await res.json()) as DirEntry[];
+  return {
+    entries: (await res.json()) as DirEntry[],
+    tokenExpiresAt: parseTokenExpiration(res.headers.get("github-authentication-token-expiration")),
+  };
+}
+
+export async function getDir(token: string, path: string): Promise<DirEntry[]> {
+  return (await getDirWithTokenExpiry(token, path)).entries;
 }
 
 export async function getFile(token: string, path: string): Promise<FileResponse> {

@@ -277,6 +277,41 @@ describe("admin_brief_categories", () => {
     expect(res.status).toBe(502);
   });
 
+  it("public GET — 토큰 만료 시각(GitHub 헤더)을 싣는다 — 헬스체크가 미리 경고한다", async () => {
+    mockGithub({
+      "contents/services/brief/categories?ref=main": () =>
+        new Response("[]", {
+          status: 200,
+          headers: { "Content-Type": "application/json", "github-authentication-token-expiration": "2026-12-24 00:00:00 UTC" },
+        }),
+    });
+    const res = await SELF.fetch("https://example.com/api/brief-categories");
+    expect(res.status).toBe(200);
+    const body = await res.json<{ github_token_expires_at: number | null }>();
+    expect(body.github_token_expires_at).toBe(Date.UTC(2026, 11, 24) / 1000);
+  });
+
+  it("public GET — 만료 없는 토큰이면 github_token_expires_at=null", async () => {
+    mockGithub({ "contents/services/brief/categories?ref=main": () => Response.json([]) });
+    const res = await SELF.fetch("https://example.com/api/brief-categories");
+    const body = await res.json<{ github_token_expires_at: number | null }>();
+    expect(body.github_token_expires_at).toBeNull();
+  });
+
+  it("GitHub 401(토큰 만료) → 502 + 조치 문구(재발급·secret 이름)", async () => {
+    mockGithub({
+      "contents/services/brief/categories?ref=main": () =>
+        new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 }),
+    });
+    const res = await SELF.fetch("https://example.com/api/admin/brief-categories", {
+      headers: { cookie: await makeAdminCookie() },
+    });
+    expect(res.status).toBe(502);
+    const text = await res.text();
+    expect(text).toMatch(/^github: 토큰 만료/);
+    expect(text).toContain("BRIEF_CATEGORIES_GITHUB_TOKEN");
+  });
+
   it("public GET — 빈 디렉토리 시 빈 items", async () => {
     mockGithub({
       "contents/services/brief/categories?ref=main": () => Response.json([]),
