@@ -12,16 +12,18 @@ import argparse
 import datetime
 import json
 import os
-import re
 import subprocess
 import sys
 import time
+import traceback
 import urllib.request
 from pathlib import Path
 
 from popory_brief import limit_detect
 from popory_brief import gemini_client
 from popory_brief import link_check
+from popory_brief.fallback import fallback_model, restore_gemini_contract
+from popory_brief.response import ResponseFormatError, parse_response
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_title import date_label, normalize_title, RECOMMENDED_MAX
 
@@ -62,6 +64,107 @@ def already_published_today(portal_base, topic_id, target_date, *, opener=urllib
     return last_day == target_date
 
 
+def _run_claude(model: str, system_prompt: str, user_msg: str, topic_id: str, date_str: str) -> str:
+    """claude CLI(비대화형)로 본문 텍스트를 받아온다. 실패는 규약 exit code 로 끝낸다."""
+    sys_prompt_path = Path(f"/tmp/brief_system_custom_{topic_id}_{date_str}.txt")
+    sys_prompt_path.write_text(system_prompt, encoding="utf-8")
+
+    cmd = [
+        CLAUDE_BIN,
+        "--print",
+        "--model", model,
+        "--allowed-tools", "WebSearch", "WebFetch",
+        "--system-prompt-file", str(sys_prompt_path),
+        "--output-format", "text",
+    ]
+
+    attempt = 0
+    try:
+        while True:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    input=user_msg,
+                    capture_output=True,
+                    text=True,
+                    timeout=TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
+                sys.exit(5)
+
+            if result.returncode == 0:
+                return result.stdout
+
+            combined = result.stdout + result.stderr
+            is_limit = limit_detect.is_limit_message(combined)
+            is_overload = limit_detect.is_overload_message(combined)
+            print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit}, overload={is_overload})", file=sys.stderr)
+            print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
+            print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
+
+            # 한도와 일시 과부하(529) 모두 백오프 재시도로 흡수한다.
+            if (is_limit or is_overload) and attempt < len(BACKOFF_SECONDS):
+                wait = BACKOFF_SECONDS[attempt]
+                reason = "usage limit" if is_limit else "API 과부하(529)"
+                print(f"--- {reason} 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
+                time.sleep(wait)
+                attempt += 1
+                continue
+            if is_limit:
+                # 백오프로 못 흡수한 장시간 한도. reset epoch를 stdout에 알리고 exit 6.
+                reset_epoch = limit_detect.reset_epoch_or_fallback(combined, datetime.datetime.now(KST))
+                print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+                sys.exit(6)
+            sys.exit(5)
+    finally:
+        sys_prompt_path.unlink(missing_ok=True)
+
+
+def _parse_or_exit(text: str, provider: str, on_fail=None) -> tuple[str, dict]:
+    """응답에서 (body, meta) 를 꺼낸다. 형식이 깨졌으면 exit 4 (on_fail 은 그 직전에 부른다)."""
+    try:
+        return parse_response(text)
+    except ResponseFormatError as e:
+        print(f"error: {provider} {e}", file=sys.stderr)
+        print("--- response tail ---\n" + e.detail, file=sys.stderr)
+        if on_fail:
+            on_fail()
+        sys.exit(4)
+
+
+def _gemini_failed(e: "gemini_client.GeminiError", prompts, topic_id: str,
+                   date_str: str) -> tuple[str, dict]:
+    """Gemini 가 재시도까지 실패했거나 형식이 깨졌을 때. claude CLI 가 있으면 대체 생성하고,
+    없으면 규약대로 끝낸다.
+
+    대체가 어떤 식으로 실패하든(비정상 종료·형식 불량·예외) 복구 경로가 남는 쪽으로 끝낸다 —
+    쿼터는 exit 6(재시도 대기), 키·결제는 인증 마커(즉시 알림). generate_brief._run_gemini 와 같은 규칙이다."""
+    fallback = fallback_model(CLAUDE_BIN)
+    if fallback is not None:
+        print(f"--- Gemini 실패(exit {e.exit_code}) — {fallback} 로 대체 생성 ---", file=sys.stderr)
+        system_prompt, user_msg = prompts(False)
+        try:
+            text = _run_claude(fallback, system_prompt, user_msg, topic_id, date_str)
+        except SystemExit as fb_exit:
+            restore_gemini_contract(e, fb_exit.code if isinstance(fb_exit.code, int) else 1)
+            raise
+        except Exception:   # noqa: BLE001 — 예상 못 한 예외도 Gemini 복구 규약은 지킨다.
+            traceback.print_exc()
+            restore_gemini_contract(e, 5)
+            sys.exit(5)
+        return _parse_or_exit(text, "claude", on_fail=lambda: restore_gemini_contract(e, 4))
+    if e.is_limit:
+        # 쿼터는 claude 한도와 같은 규약으로 넘긴다 — retry 잡이 그대로 복구한다.
+        reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())
+        print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
+        sys.exit(6)
+    # 인증 실패는 사람이 키를 고쳐야 풀린다 — run_daily.sh 가 즉시 알림을 걸도록 마커를 남긴다.
+    if e.exit_code == 3:
+        print("__BRIEF_AUTH_FAIL__=gemini")
+    sys.exit(e.exit_code)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--topic-id", required=True)
@@ -83,10 +186,12 @@ def main() -> None:
         print(f"error: claude CLI not found at {CLAUDE_BIN}", file=sys.stderr)
         sys.exit(2)
 
-    if args.date:
+    now = datetime.datetime.now(KST)
+    # run_daily·retry_pending 은 날짜를 항상 --date 로 고정해 넘긴다. 오늘이면 실행 시각을 쓴다.
+    if args.date and args.date != now.strftime("%Y-%m-%d"):
         date_obj = datetime.datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=KST)
     else:
-        date_obj = datetime.datetime.now(KST)
+        date_obj = now
     date_str = date_obj.strftime("%Y-%m-%d")
     published_at = int(date_obj.timestamp())
 
@@ -105,13 +210,15 @@ def main() -> None:
     # 제목 꼬리. 검색 키워드가 앞, 발행 정보가 뒤 (popory_brief.seo_title 참조).
     title_suffix = f"{date_label(date_obj.date(), weekly=False)} {args.name} 브리핑"
 
-    # 검색 지시는 공급자마다 다르게 적는다. claude 는 WebSearch·WebFetch 도구를 실제로 들고 있고,
-    # Gemini 는 도구 이름 대신 서버측 Google Search grounding 이 붙는다.
-    search_hint = "웹 검색(Google Search)으로" if use_gemini else "WebSearch 도구로"
-    collect_hint = ("웹 검색(Google Search)으로" if use_gemini
-                    else "WebSearch와 WebFetch 도구로")
+    def prompts(gemini: bool) -> tuple[str, str]:
+        # 검색 지시는 공급자마다 다르게 적는다. claude 는 WebSearch·WebFetch 도구를 실제로 들고 있고,
+        # Gemini 는 도구 이름 대신 서버측 Google Search grounding 이 붙는다. Gemini 실패 시 claude 로
+        # 대체 생성하므로 두 벌을 모두 만들 수 있어야 한다.
+        search_hint = "웹 검색(Google Search)으로" if gemini else "WebSearch 도구로"
+        collect_hint = ("웹 검색(Google Search)으로" if gemini
+                        else "WebSearch와 WebFetch 도구로")
 
-    system_prompt = f"""당신은 '{args.name}' 전문 브리핑 작성자입니다.
+        system_prompt = f"""당신은 '{args.name}' 전문 브리핑 작성자입니다.
 오늘은 {date_str} (KST)이며, 최근 3일([D-2, D]) 이내 발행된 신뢰할 수 있는 기사·보도자료만 사용하세요.
 {collect_hint} 최신 이슈를 수집한 뒤 한국어로 브리핑을 작성하세요.
 
@@ -140,100 +247,36 @@ def main() -> None:
 {{"title": "핵심 검색어와 팩트 요약 | {title_suffix}", "summary": "한두 줄 요약", "tags": ["{args.name}"], "published_at": {published_at}}}
 </meta_json>"""
 
-    user_msg = (
-        f"오늘은 {date_str} (KST)입니다. "
-        f"'{args.name}' 관련 최근 3일간 주요 이슈를 조사하여 브리핑을 작성하세요. "
-        f"{search_hint} 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
-        f"마지막 응답에 <body_markdown>...</body_markdown> 과 <meta_json>...</meta_json> 두 태그를 정확히 포함하세요. "
-        f"meta_json의 published_at은 {published_at}을 그대로 사용하세요."
-    )
+        user_msg = (
+            f"오늘은 {date_str} (KST)입니다. "
+            f"'{args.name}' 관련 최근 3일간 주요 이슈를 조사하여 브리핑을 작성하세요. "
+            f"{search_hint} 그날 발행된 보도자료·뉴스를 적극 수집한 뒤, "
+            f"마지막 응답에 <body_markdown>...</body_markdown> 과 <meta_json>...</meta_json> 두 태그를 정확히 포함하세요. "
+            f"meta_json의 published_at은 {published_at}을 그대로 사용하세요."
+        )
+        return system_prompt, user_msg
 
+    system_prompt, user_msg = prompts(use_gemini)
     if use_gemini:
         try:
             final_text = gemini_client.generate_with_retry(
                 system_prompt=system_prompt, user_msg=user_msg,
                 model=model, timeout_seconds=TIMEOUT_SECONDS, backoff=BACKOFF_SECONDS)
         except gemini_client.GeminiError as e:
-            if e.is_limit:
-                # 쿼터는 claude 한도와 같은 규약으로 넘긴다 — retry 잡이 그대로 복구한다.
-                reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())
-                print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
-                sys.exit(6)
-            # 인증 실패는 사람이 키를 고쳐야 풀린다 — run_daily.sh 가 즉시 알림을 걸도록 마커를 남긴다.
-            if e.exit_code == 3:
-                print("__BRIEF_AUTH_FAIL__=gemini")
-            sys.exit(e.exit_code)
+            body, meta = _gemini_failed(e, prompts, args.topic_id, date_str)
+        else:
+            try:
+                body, meta = parse_response(final_text)
+            except ResponseFormatError as e:
+                # 본문이 잘렸거나 태그를 빠뜨린 응답도 대체 대상이다(예전엔 exit 4 로 유실).
+                print(f"error: Gemini {e}", file=sys.stderr)
+                print("--- response tail ---\n" + e.detail, file=sys.stderr)
+                body, meta = _gemini_failed(
+                    gemini_client.GeminiError(f"Gemini 응답 형식 오류 — {e}", exit_code=4),
+                    prompts, args.topic_id, date_str)
     else:
-        sys_prompt_path = Path(f"/tmp/brief_system_custom_{args.topic_id}_{date_str}.txt")
-        sys_prompt_path.write_text(system_prompt, encoding="utf-8")
-
-        cmd = [
-            CLAUDE_BIN,
-            "--print",
-            "--model", model,
-            "--allowed-tools", "WebSearch", "WebFetch",
-            "--system-prompt-file", str(sys_prompt_path),
-            "--output-format", "text",
-        ]
-
-        attempt = 0
-        try:
-            while True:
-                try:
-                    result = subprocess.run(
-                        cmd,
-                        input=user_msg,
-                        capture_output=True,
-                        text=True,
-                        timeout=TIMEOUT_SECONDS,
-                    )
-                except subprocess.TimeoutExpired:
-                    print(f"error: claude CLI timeout after {TIMEOUT_SECONDS}s", file=sys.stderr)
-                    sys.exit(5)
-
-                if result.returncode == 0:
-                    break
-
-                combined = result.stdout + result.stderr
-                is_limit = limit_detect.is_limit_message(combined)
-                is_overload = limit_detect.is_overload_message(combined)
-                print(f"error: claude CLI exit {result.returncode} (attempt {attempt + 1}, limit={is_limit}, overload={is_overload})", file=sys.stderr)
-                print(f"--- stdout (last 800 chars) ---\n{result.stdout[-800:]}", file=sys.stderr)
-                print(f"--- stderr (last 800 chars) ---\n{result.stderr[-800:]}", file=sys.stderr)
-
-                # 한도와 일시 과부하(529) 모두 백오프 재시도로 흡수한다.
-                if (is_limit or is_overload) and attempt < len(BACKOFF_SECONDS):
-                    wait = BACKOFF_SECONDS[attempt]
-                    reason = "usage limit" if is_limit else "API 과부하(529)"
-                    print(f"--- {reason} 감지 — {wait}s 대기 후 재시도 ---", file=sys.stderr)
-                    time.sleep(wait)
-                    attempt += 1
-                    continue
-                if is_limit:
-                    # 백오프로 못 흡수한 장시간 한도. reset epoch를 stdout에 알리고 exit 6.
-                    reset_epoch = limit_detect.reset_epoch_or_fallback(combined, datetime.datetime.now(KST))
-                    print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
-                    sys.exit(6)
-                sys.exit(5)
-        finally:
-            sys_prompt_path.unlink(missing_ok=True)
-
-        final_text = result.stdout
-
-    body_m = re.search(r"<body_markdown>(.*?)</body_markdown>", final_text, re.DOTALL)
-    meta_m = re.search(r"<meta_json>\s*(\{.*?\})\s*</meta_json>", final_text, re.DOTALL)
-    if not body_m or not meta_m:
-        print("error: claude 응답에서 body_markdown/meta_json 태그를 찾지 못함", file=sys.stderr)
-        print("--- response last 1000 chars ---\n" + final_text[-1000:], file=sys.stderr)
-        sys.exit(4)
-
-    body = body_m.group(1).strip()
-    try:
-        meta = json.loads(meta_m.group(1).strip())
-    except json.JSONDecodeError as e:
-        print(f"error: meta_json 파싱 실패: {e}", file=sys.stderr)
-        print(meta_m.group(1), file=sys.stderr)
-        sys.exit(4)
+        final_text = _run_claude(model, system_prompt, user_msg, args.topic_id, date_str)
+        body, meta = _parse_or_exit(final_text, "claude")
 
     # 제목 안전망 — 옛 말머리·날짜를 걷어내고 발행 꼬리를 뒤에 붙인다 (generate_brief.py 와 동일).
     meta["title"] = normalize_title(str(meta.get("title") or ""), suffix=title_suffix,

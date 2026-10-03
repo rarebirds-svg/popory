@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { requireAdmin, type AppVars } from "../middleware/session";
 import { requireService, type ServiceVars } from "../middleware/service_auth";
-import { DEFAULT_MODEL, FEATURES, SERVICES, MODELS, FEATURE_KEYS, featuresOf, defaultModelOf, isModelAllowed, type ServiceKey } from "../lib/llm_catalog";
+import { DEFAULT_MODEL, FEATURES, SERVICES, MODELS, FEATURE_KEYS, MODEL_ID_PATTERN, MODEL_ID_MAX, PROVIDER_PREFIX, featuresOf, defaultModelOf, isModelAllowed, type ServiceKey } from "../lib/llm_catalog";
 
 type HonoEnv = { Bindings: Env; Variables: AppVars & ServiceVars };
 // 서비스별 조회 엔드포인트를 여는 area. 각 서비스는 자기 기능만 읽어간다.
@@ -32,6 +32,9 @@ export function mountAdminLlmModels(app: Hono<HonoEnv>) {
       default_model: DEFAULT_MODEL,
       models: MODELS,
       services: SERVICES,
+      // 목록에 없는 새 모델을 어드민에서 직접 적을 수 있게, 서버가 받는 형식을 그대로 내려준다.
+      // 규칙을 화면에 다시 적어 두면 둘이 갈라진다 — 통과할 값을 막거나, 막을 값을 통과시킨다.
+      custom_model: { pattern: MODEL_ID_PATTERN, max_length: MODEL_ID_MAX, prefixes: PROVIDER_PREFIX },
       features: FEATURES.map((f) => {
         const row = overrides.get(f.key);
         return {

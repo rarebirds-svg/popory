@@ -147,10 +147,59 @@ def test_extract_text_reports_finish_reason_when_empty():
     assert "MAX_TOKENS" in str(e.value)
 
 
-def test_extract_text_rejects_empty_candidates():
+def test_extract_text_empty_candidates_is_retryable_with_diagnostics():
+    """candidates 가 통째로 빈 응답은 재시도한다. 원인을 가릴 메타(토큰·모델 버전)를 싣는다.
+
+    2026-09-25 부동산 PICK 5 두 카테고리가 이 응답으로 재시도 없이(exit 4) 유실됐고,
+    메타를 버려서 생각 토큰을 다 쓴 건지 차단된 건지 가릴 수 없었다."""
+    payload = {"usageMetadata": {"promptTokenCount": 9120, "thoughtsTokenCount": 30000,
+                                 "toolUsePromptTokenCount": 51000, "totalTokenCount": 90120,
+                                 "cachedContentTokenCount": 1},
+               "modelVersion": "gemini-3.8-flash-001", "responseId": "r-1"}
+    with pytest.raises(gc.GeminiError) as e:
+        gc._extract_text(payload)
+    assert (e.value.exit_code, e.value.retryable) == (5, True)
+    assert e.value.diag == {
+        "usage": {"promptTokenCount": 9120, "thoughtsTokenCount": 30000,
+                  "toolUsePromptTokenCount": 51000, "totalTokenCount": 90120},
+        "modelVersion": "gemini-3.8-flash-001", "responseId": "r-1",
+    }
+    assert "thoughtsTokenCount" in str(e.value)
+
+
+def test_extract_text_empty_candidates_without_meta_still_says_so():
     with pytest.raises(gc.GeminiError) as e:
         gc._extract_text({"candidates": []})
-    assert e.value.exit_code == 4
+    assert e.value.retryable is True
+    assert "candidates 없음" in str(e.value)
+
+
+@pytest.mark.parametrize("reason", [None, "STOP", "OTHER", "MALFORMED_FUNCTION_CALL"])
+def test_extract_text_empty_body_is_retryable_unless_final(reason):
+    """정책 차단·토큰 상한이 아닌 빈 본문은 같은 프롬프트로 다시 부르면 풀릴 수 있다."""
+    first = {"content": {"parts": []}}
+    if reason:
+        first["finishReason"] = reason
+    with pytest.raises(gc.GeminiError) as e:
+        gc._extract_text({"candidates": [first], "modelVersion": "m"})
+    assert (e.value.exit_code, e.value.retryable) == (5, True)
+    assert e.value.diag["modelVersion"] == "m"
+
+
+@pytest.mark.parametrize("reason", ["SAFETY", "PROHIBITED_CONTENT", "MAX_TOKENS"])
+def test_extract_text_empty_body_final_reasons_are_not_retried(reason):
+    payload = {"candidates": [{"finishReason": reason, "content": {"parts": []}}]}
+    with pytest.raises(gc.GeminiError) as e:
+        gc._extract_text(payload)
+    assert (e.value.exit_code, e.value.retryable) == (4, False)
+    assert e.value.diag["finishReason"] == reason
+
+
+def test_blocked_prompt_carries_diagnostics():
+    with pytest.raises(gc.GeminiError) as e:
+        gc._extract_text({"promptFeedback": {"blockReason": "OTHER"}, "modelVersion": "m"})
+    assert e.value.retryable is False
+    assert e.value.diag["modelVersion"] == "m"
 
 
 # ---------------- generate 요청 모양 ----------------
@@ -468,3 +517,26 @@ def test_generate_still_returns_text_only(monkeypatch):
     _capture_post(monkeypatch, _Resp(200, _payload_with_chunks([])))
     assert gc.generate(system_prompt="s", user_msg="u",
                        model="gemini-3.8-flash", timeout_seconds=10) == "본문"
+
+
+def test_retry_recovers_after_empty_candidates(monkeypatch):
+    """빈 응답 → 재시도 → 정상. 실제 HTTP 층을 거쳐 재시도 판정이 이어지는지 본다."""
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    responses = [_Resp(200, {"usageMetadata": {"totalTokenCount": 1}}),
+                 _Resp(200, {"candidates": [{"content": {"parts": [{"text": "본문"}]}}]})]
+    monkeypatch.setattr(gc.requests, "post", lambda *a, **k: responses.pop(0))
+    slept: list[int] = []
+    out = gc.generate_with_retry(system_prompt="s", user_msg="u", model="gemini-3.8-flash",
+                                 timeout_seconds=1, backoff=[3], sleep=slept.append)
+    assert out == "본문"
+    assert slept == [3]
+
+
+# ---------------- 실행 환경 안내 ----------------
+
+def test_adapt_system_prompt_tells_gemini_it_has_no_webfetch():
+    """매뉴얼은 claude CLI 기준(WebSearch·WebFetch)이다. Gemini 에는 대체 절차를 알려 준다."""
+    out = gc.adapt_system_prompt("매뉴얼 본문")
+    assert out.startswith("매뉴얼 본문")
+    assert "WebFetch" in out and "Google Search" in out
+    assert "두 태그" in out

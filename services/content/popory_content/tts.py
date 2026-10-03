@@ -5,6 +5,8 @@ import re
 
 import requests
 
+from popory_content.pronunciation import apply_pronunciations
+
 TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
 LANGUAGE = "ko-KR"
 
@@ -22,6 +24,8 @@ _QUOTES = re.compile(r"[\"'‘’“”「」『』《》〈〉]")           # �
 _ELLIPSIS = re.compile(r"\.{3,}|…+")                       # 말줄임표 → 쉼표
 _DASH_SEP = re.compile(r"\s*[—–]\s*|\s+-\s+")              # 구분용 대시 → 쉼표
 _TILDE_RANGE = re.compile(r"(?<=\d)\s*[~〜]\s*(?=\d)")     # 숫자 범위 틸드 → "에서"
+# 단위를 공유하는 범위(3~5명)는 앞 숫자에도 단위를 붙인다 — 안 그러면 앞 숫자는 뒤따르는 단위를 몰라
+# "삼에서 오명" 으로 읽힌다. 단위 목록은 아래 _NATIVE_UNIT 과 같다(정의가 뒤에 있어 _normalize_for_tts 에서 쓴다).
 _TILDE = re.compile(r"[~〜]")                              # 그 외 틸드 → 제거
 _MIDDOT = re.compile(r"\s*·\s*")                           # 가운뎃점(나열) → 쉼표
 _COLON = re.compile(r"(?<!\d)\s*[:;]\s*|\s*[:;]\s*(?!\d)")  # 숫자 사이 아닌 콜론·세미콜론 → 쉼표
@@ -44,6 +48,7 @@ def _normalize_for_tts(text: str) -> str:
     text = _QUOTES.sub("", text)
     text = _ELLIPSIS.sub(", ", text)
     text = _DASH_SEP.sub(", ", text)
+    text = _SHARED_UNIT_RANGE.sub(r"\1\3에서 \2\3", text)   # 3~5명 → 3명에서 5명
     text = _TILDE_RANGE.sub("에서 ", text)
     text = _TILDE.sub("", text)
     text = _MIDDOT.sub(", ", text)
@@ -126,6 +131,59 @@ def _sino_korean(n: int) -> str:
     return "".join(parts)
 
 
+# --- 고유어 수사 ---
+# 단위에 따라 고유어 수사를 써야 자연스럽다: 3가지 → 세 가지, 37개 → 서른일곱 개, 3~5명 → 세 명에서 다섯 명.
+# 한자어로 읽으면 "삼가지", "삼십칠개" 가 되어 어색하다(2026-10 대본 34건 스캔에서 가지 7회, 개 2회 확인).
+# 99 이하만 고유어, 100 이상은 한자어를 유지하되 띄어 읽는다("천칠백 명").
+#
+# **목록은 보수적으로 둔다.** 고유어로 바꾸면 틀리는 경우가 있는 단위는 제외했다:
+# - 권: 권수("책 3권 → 세 권")와 권차("1권·2권" = 시리즈의 몇 번째 권 → 일권·이권)가 같은 글자라 가를 수 없다.
+#   대본(채사장 『지적 대화를 위한 넓고 얕은 지식』)의 "1권의 부제는", "1권과 달리 2권은" 은 전부 권차였다 → 한자어 유지.
+#   (2026-10 tts_diff 로 확인. 처음엔 요청서의 "1권 약 17회" 를 권수로 보고 넣었다가 오독이 나서 뺐다.)
+# - 대: "3대 기업" 은 "삼대" 가 맞다(고유어 "세 대" 는 차량·기계일 때뿐) → 뺌.
+# - 개월: "3개월" 은 "삼 개월"(한자어). 고유어는 "달" 일 때만("세 달") → '개' 뒤 월 은 제외.
+# - 달러: "3달러" 의 '달' 은 단위가 아니다 → 달(?!러).
+# - 시: 시각("3시")은 고유어("세 시") 지만 "서울시"·"3시대" 같은 합성어가 있어, 시 뒤가 조사·끝일 때만.
+# - 번: "3번 말했다" 는 고유어("세 번")지만 "1번 항목"·"2번 원칙" 은 번호 이름("일 번")이다. 숫자 뒤 글자만으로는 못 가르므로
+#   **횟수로 읽히는 문맥에서만** 고유어를 쓴다(_BEON_CONTEXT): ① 활용형이 바로 붙을 때(번째·번씩·번이나·번이고…),
+#   ② 띄어 쓴 뒤 횟수 서술어·부사가 이어질 때(말했다·반복·읽었다·다시…), ③ 범위의 한쪽(2번에서 3번 말했다).
+#   그 밖의 "3번." / "1번을" / "1번 법칙" 은 한자어("삼 번") — 틀려도 덜 어색한 쪽이다.
+#   ②에서도 번호 매김 명사(법칙·원칙·단계·방법·전략·규칙·질문·장·항목…)는 명시적으로 제외한다.
+# 앞이 '제' 인 서수("제1권")와 알파벳 바로 뒤("B2B", "F16")는 원래대로 한자어로 둔다.
+_BEON_NOUNS = (
+    r"(?:항목|문제|질문|문항|타자|출구|국도|버스|선수|트랙|곡|보기|번호|방법|방|법칙|원칙|단계|전략|규칙|규율|원리|비결"
+    r"|이유|요소|조건|사례|예시|습관|장|절|조|항|편|화|회|차|부|과|강|호|단원|챕터|섹션|파트|스텝)"
+)
+_BEON_DIRECT = r"(?:째|씩|이나|이고|이라도|이며|이면|만에|쯤|이상|이하|정도|넘게|도(?![가-힣]))"
+_BEON_STEMS = (
+    r"(?:말했|말하|말한|말씀|이야기|강조|반복|읽었|읽고|읽어|읽는|들었|들어보|듣|봤|보았|보고(?!서)|보면|해보|해야|했|하고|하면"
+    r"|넘|실패|시도|성공|만났|만나|다시|연속|거듭|걸쳐|걸렸|걸려|바뀌|바꿔|나왔|나타|겪|경험|도전|출전|우승|방문|이겼|졌|쓰러|떨어"
+    r"|일어났|일어나|돌아|죽|물어|묻|정도|이상|이하|쯤|씩|만에)"
+)
+_BEON_CONTEXT = (
+    rf"(?:{_BEON_DIRECT}|\s+(?!{_BEON_NOUNS}){_BEON_STEMS}"
+    rf"|에서\s*\d+번(?:{_BEON_DIRECT}|\s+(?!{_BEON_NOUNS}){_BEON_STEMS}))"      # 범위: 2번에서 3번 말했다
+)
+_NATIVE_UNIT = (
+    r"(?:명|개(?!월|국|년|소|사|교|처|항)|가지|마리|살|잔|곳|시간|달(?!러)"
+    rf"|번(?={_BEON_CONTEXT})"
+    r"|시(?=$|[^가-힣]|에|부터|까지|쯤|경|가|는|은|를|의|도|정|께|로|와|과))"
+)
+_NATIVE_FOLLOW = re.compile(r"\s?" + _NATIVE_UNIT)
+# 앞 숫자는 소수의 일부가 아니어야 한다 — 3.5~4개 에서 5 만 붙잡아 "3.5개에서 4개"(삼점오개에서 네 개)가 되던 버그.
+# 소수가 낀 범위는 단위를 나누지 않고 "삼점오에서 네 개" 로 읽는다(소수는 고유어로 못 읽는다).
+_SHARED_UNIT_RANGE = re.compile(r"(?<![\d.])(\d+)(?![\d.])\s*[~〜]\s*(\d+)(" + _NATIVE_UNIT + ")")
+_NATIVE_ONES = ["", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉"]
+_NATIVE_TENS = ["", "열", "스물", "서른", "마흔", "쉰", "예순", "일흔", "여든", "아흔"]
+
+
+def _native_korean(n: int) -> str:
+    """1~99 → 단위 앞 고유어 수사(관형형). 1~4 는 한·두·세·네, 20 은 '스무', 21 부터는 '스물한'."""
+    if n == 20:
+        return "스무"
+    return _NATIVE_TENS[n // 10] + _NATIVE_ONES[n % 10]
+
+
 def _read_decimal(tok: str) -> str:
     """소수 토큰(점 1개)을 '정수부 점 소수부(자리별)' 붙인 한글로 — 29.2→이십구점이, 0.5→영점오.
     붙여야 Chirp3-HD가 소수점을 안 흘린다(숫자로 두면 29.2를 "이십구 이"로 읽음)."""
@@ -148,6 +206,18 @@ def _read_number(m: "re.Match[str]") -> str:
         return tok
     if n >= 10 ** 20:                 # 경 그룹 초과 → 변환 생략
         return tok
+    text, start, end = m.string, m.start(), m.end()
+    prev = text[start - 1] if start > 0 else ""
+    # 서수("제1권")와 알파벳 바로 뒤("B2B")는 한자어 그대로.
+    if prev != "제" and not (prev.isascii() and prev.isalpha()):
+        if text[end:end + 1] == "월" and n in (6, 10):     # 6월 → 유월, 10월 → 시월 (다른 달은 한자어 그대로)
+            return "유" if n == 6 else "시"
+        unit = _NATIVE_FOLLOW.match(text, end)
+        if unit:
+            spaced = "" if unit.group().startswith((" ", "\t", "\n")) else " "   # 이미 띄어 있으면 더 넣지 않는다
+            if 1 <= n <= 99:
+                return _native_korean(n) + spaced
+            return _sino_korean(n) + spaced     # 0 과 100 이상은 한자어("백 개", "천칠백 명")
     return _sino_korean(n)
 
 
@@ -155,6 +225,7 @@ def _prep_text(text: str) -> str:
     """합성 직전 텍스트 정리 — 리터럴 대괄호·천 단위 콤마·특수문자·문장 앞 간투사를
     제거/정규화하고, 문장은 공백으로 잇는다. 문장 사이 호흡은 video.py의 무음 갭이
     담당하므로 pause 토큰은 넣지 않는다(markup→ssml 전환)."""
+    text = apply_pronunciations(text)             # 발음 사전 — "&" 를 "앤" 으로 바꾸는 정규화보다 먼저(S&P → 에스앤피)
     text = text.replace("[", "").replace("]", "")
     text = _GROUP_COMMA.sub("", text)             # 천 단위 콤마 제거(1,700 → 1700)
     text = _normalize_for_tts(text)               # 특수문자 → 자연 운율(대시·말줄임표·따옴표 등)
@@ -190,6 +261,14 @@ def _comma_break(m: "re.Match[str]") -> str:
     if len(prev) <= 1:
         return f"{prev}, "
     return f'{prev},<break time="{COMMA_BREAK_MS}ms"/> '
+
+
+def voice_family(voice_name: str) -> str:
+    """음성 이름에서 계열(Neural2 / Chirp3-HD …). 말속도는 계열과 짝이 맞아야 해서 화면·기록에 같이 쓴다."""
+    for fam in ("Chirp3-HD", "Neural2", "Wavenet", "Standard", "Studio", "Journey"):
+        if fam in voice_name:
+            return fam
+    return "기타"
 
 
 def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:

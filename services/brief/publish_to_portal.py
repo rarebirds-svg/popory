@@ -1,7 +1,7 @@
 # 그날의 brief 본문을 portal에 publish 하는 CLI (하루 1회 호출)
 """
 사용법.
-    python publish_to_portal.py --area brief \\
+    python publish_to_portal.py --area brief-{slug} \\
         --meta-file /tmp/brief_YYYY-MM-DD.meta.json \\
         --body-file /tmp/brief_YYYY-MM-DD.md
 
@@ -19,6 +19,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from popory_brief.categories import load_category
 from popory_brief.jwt_signer import KeyMaterial, sign_for_portal
 from popory_brief.portal_client import PortalClient, PortalError
 from popory_brief.log import append_log, safe_error, KST
@@ -71,14 +72,41 @@ def publish(*, area: str, meta_file: Path, body_file: Path, replace_same_day: bo
     return client.post("/api/published_items", json=payload)
 
 
+def check_area(area: str) -> str | None:
+    """발행 영역이 포털 피드가 읽는 형식인지. 문제가 있으면 사유, 없으면 None.
+
+    포털은 brief-{카테고리 slug}·custom-{주제 id} 영역만 피드·카테고리로 보여 준다. 그 밖의 영역도
+    서버는 받아 주므로, 여기서 막지 않으면 발행 성공(ok)으로 끝나고도 아무도 못 보는 글이 된다."""
+    if area == "brief" or (area.startswith("custom-") and len(area) > len("custom-")):
+        return None   # brief: 단일 브리핑 시절 영역(하위호환)
+    if area.startswith("brief-"):
+        slug = area[len("brief-"):]
+        try:
+            load_category(slug)
+        except KeyError:
+            return f"알 수 없는 카테고리 영역 {area!r} — categories/{slug}/SKILL.md 가 없다"
+        return None
+    return f"발행 영역 형식 오류 {area!r} — brief-{{slug}} 또는 custom-{{id}} 여야 한다"
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--area", default="brief")
+    # 기본값을 두지 않고 형식도 확인한다(check_area). 2026-09-25 수동 발행에서 영역을
+    # "realestate-pick5-blog"(brief- 접두사 누락)로 넘겨 글이 아무 피드에도 안 잡히는 영역에 들어갔고,
+    # 제 영역(brief-realestate-pick5-blog)에는 발행이 없었다.
+    p.add_argument("--area", required=True,
+                   help="발행 영역 — 카테고리는 brief-{slug}, 커스텀 주제는 custom-{id}")
     p.add_argument("--meta-file", required=True)
     p.add_argument("--body-file", required=True)
     p.add_argument("--replace-same-day", action="store_true",
                    help="같은 area·같은 KST 날짜의 기존 발행물을 지우고 새로 넣는다")
     args = p.parse_args()
+    problem = check_area(args.area)
+    if problem:
+        print(f"error: {problem}", file=sys.stderr)
+        append_log(LOGS_DIR, {"cli": "publish_to_portal", "status": "init_fail",
+                              "area": args.area, "error": problem[:200]})
+        sys.exit(2)
     try:
         body = publish(area=args.area,
                        meta_file=Path(args.meta_file),

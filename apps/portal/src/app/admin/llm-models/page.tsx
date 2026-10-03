@@ -2,12 +2,12 @@
 import { headers } from "next/headers";
 import { API_BASE } from "@/lib/env";
 import { saveModels } from "./actions";
-import { ModelForm, type FeatureRow, type ModelOption, type ServiceGroup } from "./ModelForm";
+import { ModelForm, type CustomModelRule, type FeatureRow, type ModelOption, type ServiceGroup } from "./ModelForm";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
-async function fetchConfig(): Promise<{ default_model: string; models: ModelOption[]; services: ServiceGroup[]; features: FeatureRow[] }> {
+async function fetchConfig(): Promise<{ default_model: string; models: ModelOption[]; services: ServiceGroup[]; custom_model: CustomModelRule; features: FeatureRow[] }> {
   const cookie = (await headers()).get("cookie") ?? "";
   const res = await fetch(`${API_BASE}/api/admin/llm-models`, { headers: { cookie }, cache: "no-store" });
   if (!res.ok) throw new Error(`llm-models ${res.status}`);
@@ -15,7 +15,7 @@ async function fetchConfig(): Promise<{ default_model: string; models: ModelOpti
 }
 
 export default async function LlmModelsPage() {
-  const { default_model, models, services, features } = await fetchConfig();
+  const { default_model, models, services, custom_model, features } = await fetchConfig();
   // 저장 후 서버 값이 바뀌면 폼을 리마운트해 useState 초기값을 다시 잡는다.
   const signature = features.map((f) => `${f.key}=${f.model}`).join("|");
   return (
@@ -30,7 +30,18 @@ export default async function LlmModelsPage() {
         호출은 맥미니의 claude CLI 를 거치므로 <strong>Claude 플랜에 포함된 모델만</strong> 실제로 돕니다.
         플랜에 없는 모델을 고르면 그 기능이 생성 단계에서 실패합니다(로그의 <code className="font-mono text-xs">claude CLI exit 1</code>).
       </p>
-      <ModelForm key={signature} features={features} models={models} services={services} action={saveModels} />
+      <p className="mt-1 text-sm text-popory-muted">
+        새 모델이 나왔는데 목록에 없으면 <strong>직접 입력</strong> 을 골라 모델 id 를 그대로 적으면 됩니다 —
+        배포를 기다릴 필요가 없습니다. 실재하지 않는 id 도 저장은 되니, 저장 후 해당 기능을 한 번 돌려 확인하세요.
+      </p>
+      <ModelForm
+        key={signature}
+        features={features}
+        models={models}
+        services={services}
+        customModel={custom_model}
+        action={saveModels}
+      />
     </main>
   );
 }

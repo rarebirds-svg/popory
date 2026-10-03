@@ -26,6 +26,7 @@ from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log
 from popory_content.usage import cached_claude_usage
+from popory_content.tts_config import build_tts_config
 from popory_content.instagram_image_prompt import build_carousel_system_prompt, build_carousel_user_message
 from popory_content.instagram_image_contract import parse_carousel
 from popory_content.instagram_image_render import render_carousel
@@ -293,6 +294,12 @@ CF_QUOTA_FILE = LOGS_DIR / "cf_quota.json"
 HEARTBEAT_PATH = "/api/content/worker-heartbeat"
 HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("POPORY_HEARTBEAT_INTERVAL", "30"))
 IMAGEGEN_HEALTH_URL = IMAGEGEN_URL.replace("/generate", "/health")
+# TTS 설정 스냅샷은 프로세스가 도는 동안 변하지 않는다(env 는 시작 시 읽힌다). 매 하트비트(30초)마다
+# 3KB 를 D1 에 쓸 이유가 없어 첫 보고와 이후 이 횟수마다만 싣는다(기본 120회 ≈ 1시간).
+# 첫 보고가 실패해도 다음 주기에 다시 싣도록 report_heartbeat 가 성공 여부로 카운터를 관리한다.
+TTS_REPORT_EVERY = int(os.environ.get("POPORY_TTS_REPORT_EVERY", "120"))
+# 스냅샷을 실은 보고가 거부되면 이 박자 뒤에 다시 시도한다(매 박자 재시도하면 같은 요청이 30초마다 실패한다).
+TTS_RETRY_BEATS = int(os.environ.get("POPORY_TTS_RETRY_BEATS", "10"))
 
 
 def _verify_image(data: bytes) -> None:
@@ -338,22 +345,30 @@ def _cf_reset_date() -> str | None:
     return tomorrow.strftime("%Y-%m-%d")
 
 
-def heartbeat_payload() -> dict:
-    """포털에 보고할 워커 생성 readiness 상태."""
-    return {
+def heartbeat_payload(*, with_tts: bool = False) -> dict:
+    """포털에 보고할 워커 생성 readiness 상태. with_tts 면 어드민 TTS 화면용 설정 스냅샷을 함께 싣는다."""
+    payload = {
         "cf_image_exhausted": _cf_exhausted_today(),
         "cf_reset_date": _cf_reset_date(),
         "imagegen_ok": _imagegen_ok(),
         "usage": cached_claude_usage(),
     }
+    if with_tts:
+        try:
+            payload["tts"] = build_tts_config()
+        except Exception as e:  # noqa: BLE001 — 설정 화면용 부가 정보. 실패해도 하트비트(생성 가능 판정)는 보낸다
+            append_log(LOGS_DIR, {"worker": "content", "status": "tts_config_failed", "error": str(e)[:200]})
+    return payload
 
 
-def report_heartbeat(client) -> None:
-    """포털에 하트비트 보고. 실패는 non-fatal(생성 작업에 영향 없음)."""
+def report_heartbeat(client, *, with_tts: bool = False) -> bool:
+    """포털에 하트비트 보고. 실패는 non-fatal(생성 작업에 영향 없음). 보냈으면 True."""
     try:
-        client.post(HEARTBEAT_PATH, json=heartbeat_payload())
+        client.post(HEARTBEAT_PATH, json=heartbeat_payload(with_tts=with_tts))
+        return True
     except Exception as e:  # noqa: BLE001
         append_log(LOGS_DIR, {"worker": "content", "status": "heartbeat_failed", "error": str(e)[:200]})
+        return False
 
 
 def heartbeat_loop(client, stop: threading.Event) -> None:
@@ -361,8 +376,17 @@ def heartbeat_loop(client, stop: threading.Event) -> None:
     하트비트를 끊김 없이 보낸다. 예전엔 루프 사이에서만 보내 생성 중엔 끊겨
     포털이 워커를 오프라인으로 오판했다. PortalClient 는 호출마다 새 연결·서명이라
     메인 스레드와 client 를 공유해도 안전하다."""
+    since_tts = TTS_REPORT_EVERY          # 첫 박자에 바로 싣는다
     while not stop.is_set():
-        report_heartbeat(client)
+        with_tts = since_tts >= TTS_REPORT_EVERY
+        ok = report_heartbeat(client, with_tts=with_tts)
+        if with_tts and not ok:
+            # 스냅샷이 실린 요청이 거부돼도 생존 신호는 끊기면 안 된다 — 안 보내면 포털이 워커를
+            # 오프라인(120초 무보고)으로 보고 생성 가능 판정이 꺼진다. 부가 정보가 본 기능을 죽이면 안 된다.
+            report_heartbeat(client)
+            since_tts = max(0, TTS_REPORT_EVERY - TTS_RETRY_BEATS)   # 잠시 뒤 다시 싣는다
+        else:
+            since_tts = 1 if with_tts else since_tts + 1
         stop.wait(HEARTBEAT_INTERVAL_SECONDS)
 
 

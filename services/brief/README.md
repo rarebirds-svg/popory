@@ -90,6 +90,7 @@ printf '%s\n' '<발급받은 키>' > secrets/gemini_api_key && chmod 600 secrets
 | `BRIEF_GEMINI_SEARCH_TOOL` | `google_search` | grounding 도구 이름. 모델 세대에 따라 갈리면 여기서 교정 |
 | `BRIEF_GEMINI_MAX_OUTPUT_TOKENS` | `32768` | 출력 상한. 낮으면 본문이 잘려 태그 파싱이 깨진다 |
 | `BRIEF_GEMINI_RESET_FALLBACK_SECONDS` | `900` | 429 가 리셋 시각을 안 알려줄 때 대기 |
+| `BRIEF_FALLBACK_MODEL` | `claude-sonnet-4-6` | Gemini 실패 시 대신 쓸 claude 모델. `off` 면 대체 안 함 (§4) |
 
 ## 2-1. 모델·공급자
 
@@ -128,7 +129,7 @@ done
 
 # 3) 발송 끝난 뒤 publish 1회
 ${BRIEF_DIR}/.venv/bin/python ${BRIEF_DIR}/publish_to_portal.py \
-  --area brief --meta-file "$META" --body-file "$BODY"
+  --area brief-{slug} --meta-file "$META" --body-file "$BODY"
 ```
 
 ## 4. Exit code 규약
@@ -151,7 +152,39 @@ ${BRIEF_DIR}/.venv/bin/python ${BRIEF_DIR}/publish_to_portal.py \
 | 429 (plan·billing) | 3 | 쿼터 미할당 — 결제 미연결 프로젝트의 키. 재시도로 안 풀리므로 위와 같이 즉시 알린다 |
 | 5xx·타임아웃·네트워크 | 5 | 백오프 재시도 후 |
 | 그 외 4xx | 4 | 도구 이름·모델 id 오류 등. 서버 메시지를 로그에 싣는다 |
-| 본문 없음·차단 | 4 | `finishReason`(MAX_TOKENS 등)·`blockReason` 을 로그에 싣는다 |
+| candidates 없음·본문 없음 | 5 | 백오프 재시도 후. 토큰 사용량(`thoughtsTokenCount`·`toolUsePromptTokenCount` 등)·`modelVersion`·`finishReason` 을 로그 `diag` 에 싣는다 |
+| 차단·MAX_TOKENS | 4 | `blockReason`·정책 차단 `finishReason`·토큰 상한은 재시도해도 같아서 바로 넘긴다 |
+
+**claude 대체.** Gemini 가 위 어느 이유로든 재시도까지 실패하거나, 응답은 왔지만 태그가 빠졌거나
+잘려 파싱이 안 되면 그 카테고리를 claude CLI 로 한 번 더 쓴다(기본 `claude-sonnet-4-6`, 프롬프트는
+claude 용 원본). 2026-09-25 부동산 PICK 5 두 카테고리가 Gemini 빈 응답으로 그날 유실된 뒤 넣었다.
+
+- 로그. `gemini_fail` 에 `"fallback": "<모델>"` 이 붙고(대체 시도), 대체로 발행까지 되면 `ok` 에도
+  같은 필드가 붙는다(대체 성공). 헬스체크는 뒤쪽으로 "Claude 대체 발행" 을 가른다.
+- 대체 성공. exit 0. 인증 마커를 남기지 않는다 — 대신 21:00 헬스체크 `브리핑잡` 이
+  "Gemini 실패 N건 Claude 대체" 로 warn 을 띄운다(크레딧·키·프롬프트를 봐야 한다는 신호).
+- 대체도 실패. 비정상 종료·형식 불량·예외 어느 쪽이든 같은 규칙으로 Gemini 쪽 복구 경로를 되살린다
+  (`fallback.restore_gemini_contract`). Gemini 가 쿼터(6)였으면 exit 6 + Gemini 리셋 epoch(retry 잡 대기),
+  키·결제(3)였으면 `__BRIEF_AUTH_FAIL__=gemini` 를 남긴다. 그 밖엔 claude 경로의 exit code 그대로.
+- 끄기. `BRIEF_FALLBACK_MODEL=off`. claude CLI 가 없는 머신에서는 자동으로 꺼진다.
+
+**자정을 넘긴 재시도.** `retry_pending.sh`(10분마다)는 오늘과 전날 pending 중 리셋 시각이 지난
+것을 전날 것부터 하나 처리한다. 예전엔 오늘 날짜 pending 만 봐서, 2026-09-14 09:27 claude 한도(리셋
+09-15 01:00)로 실패한 7개 카테고리가 재시도 없이 통째로 유실됐다. 이틀 이상 지난 pending 은 보지 않는다.
+
+- 날짜 고정. 고른 pending 의 날짜를 `run_daily.sh --date=<날짜>` 로 넘기고, run_daily 는 그 날짜를
+  generate·generic 에도 항상 넘긴다. 23시대에 시작한 재시도가 자정을 넘겨도 산출 파일·발행·메일이 한
+  날짜로 맞는다. 날짜가 오늘이면 generate 는 published_at·프롬프트 시각을 실행 시각으로, 지난 날짜면
+  그날 0시(published_at)·23:59(프롬프트)로 둔다.
+- 로그. run_daily 가 `BRIEF_LOG_DATE` 를 넘겨 하위 CLI 의 JSONL 까지 그 날짜 파일에 남긴다. 전날 재시도
+  기록이 오늘 파일에 섞이면 오늘 헬스체크가 오늘 브리핑이 실패한 것으로 오판한다. 전날 유실 자체는
+  09:00 헬스체크의 발행 확인(직전 발행일 폴백)이 잡는다.
+- 중단. run_daily 가 결과 마커를 찍기 전에 비정상 종료하면(카테고리 스캔 중단 등) 복구로 보지 않는다.
+  pending 과 retry_count 를 그대로 두고 30분 뒤로 미루며, `notify.sh --once-key=brief_retry_abort` 로 알린다.
+
+Gemini 로 보낼 때는 카테고리 매뉴얼 끝에 실행 환경 안내를 덧붙인다
+(`gemini_client.TOOL_NOTE`). 매뉴얼은 claude CLI 기준이라 "WebFetch 로 열어 확인" 같은 절차가
+있는데 Gemini 에는 Google Search 하나뿐이다 — 할 수 없는 절차를 무엇으로 대신할지 적어 둔다.
 
 routine 분기.
 
