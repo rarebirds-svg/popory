@@ -150,7 +150,7 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
             </span>
           </li>
           <li className="flex justify-between border-b border-popory-muted/20 pb-2">
-            <span className="text-popory-muted">무료 이미지(Cloudflare · FLUX.1 schnell)</span>
+            <span className="text-popory-muted">무료 이미지(Cloudflare Workers AI)</span>
             <span className={s.image_free.exhausted ? "text-popory-warn" : "text-popory-success"}>
               {s.image_free.exhausted ? `오늘 소진 · ${s.image_free.reset_date} 09:00(KST) 리셋 → 로컬 폴백` : "사용 가능"}
             </span>
