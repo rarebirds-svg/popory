@@ -863,3 +863,48 @@ def test_render_video_motion_off_skips_zoom_and_pan(monkeypatch, tmp_path):
     seen.clear()
     video.render_video(scenes, job_id="on", portrait=True)   # 쇼츠는 따로 켜져 있다
     assert seen and all(m is True for _, m in seen)
+
+
+# ---- 문장 분리: 닫는 따옴표·괄호는 앞 문장에 속한다 ----
+
+def test_split_keeps_closing_quote_with_its_sentence_real_script():
+    """실제 롱폼 대본(#25)에서 닫는 따옴표가 다음 문장 머리로 넘어가 자막이 `" 이렇게…` 로 시작하던 문제."""
+    text = ('"당신의 불행은 전부 당신이 선택한 것입니다." 이렇게 잘라 말하는 책 한 권이 일본과 한국에서 수백만 부가 팔리며 '
+            '사람들의 인생관을 뒤흔들었습니다.')
+    parts = _split_sentences(text)
+    assert parts == ['"당신의 불행은 전부 당신이 선택한 것입니다."',
+                     "이렇게 잘라 말하는 책 한 권이 일본과 한국에서 수백만 부가 팔리며 사람들의 인생관을 뒤흔들었습니다."]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("“행복은 선택이다.” 그는 이렇게 썼다. 이후 수백만 부가 팔렸다.",
+     ["“행복은 선택이다.”", "그는 이렇게 썼다.", "이후 수백만 부가 팔렸다."]),                  # 곡선 따옴표
+    ("결과는 (놀랍게도 성공이었다.) 다음은 실패다.", ["결과는 (놀랍게도 성공이었다.)", "다음은 실패다."]),   # 닫는 괄호
+    ('"끝났다." 그가 말했다. 다음.', ['"끝났다."', "그가 말했다.", "다음."]),
+])
+def test_split_closing_marks_stay_with_previous_sentence(text, expected):
+    assert _split_sentences(text) == expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ('그는 "그만하자!"라고 했다. 그리고 떠났다.', ['그는 "그만하자!"라고 했다.', "그리고 떠났다."]),   # 인용 조사가 이어지면 한 문장
+    ("“그만하자!”라는 말이 나왔다. 끝.", ["“그만하자!”라는 말이 나왔다.", "끝."]),
+])
+def test_split_does_not_cut_quote_from_its_quotative(text, expected):
+    assert _split_sentences(text) == expected
+
+
+def test_split_opening_quote_right_after_period_is_not_swallowed():
+    # 마침표 바로 뒤의 직선 따옴표가 여는 쪽(뒤가 글자)이면 앞 문장에 붙이지 않는다.
+    assert _split_sentences('그가 말했다."안녕" 그리고 갔다.') == ["그가 말했다.", '"안녕" 그리고 갔다.']
+
+
+def test_split_runs_of_terminators_are_one_boundary():
+    # 예전엔 부호마다 끊어 "정말?" / "!" 와 "." / "." / "." 로 쪼개졌다.
+    assert _split_sentences("정말?! 그럴 리가 없다...그런데 사실이다.") == ["정말?!", "그럴 리가 없다...", "그런데 사실이다."]
+
+
+def test_split_existing_rules_unchanged():
+    assert _split_sentences("6.25 전쟁은 1950년에 났다. 3.5배 늘었다.") == ["6.25 전쟁은 1950년에 났다.", "3.5배 늘었다."]
+    assert _split_sentences("A vs. B 의 대결입니다. 다음.") == ["A vs. B 의 대결입니다.", "다음."]
+    assert _split_sentences("") == [] and _split_sentences("  ") == []

@@ -13,6 +13,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from popory_content.generate import run_claude_cli, model_for
+from popory_content.hook_check import check_hook
 from popory_content.script_review import review_script
 from popory_content.subtitles import scene_offsets, Cue
 from popory_content import tts as _tts
@@ -333,12 +334,44 @@ def render_thumbnail(copy: str | None, image_prompt: str | None, out_jpg: Path,
     return out_jpg
 
 
+_SENT_END = re.compile(r"[.?!]+")           # "?!"·"..." 는 한 덩어리 — 예전엔 글자마다 끊겨 "정말?" / "!" 로 갈렸다
+_CLOSERS = "”’」』)]"                         # 문장 끝 바로 뒤에 붙는 닫는 따옴표·괄호는 앞 문장에 속한다
+_CLOSERS_AMBIGUOUS = "\"'"                    # 직선 따옴표는 여는지 닫는지 모호 → 뒤가 공백·끝·구두점일 때만 닫는 쪽으로 본다
+_QUOTATIVE = re.compile(r"\s*(?:이?라고|이?라는|이?라며|이?라면서)")
+
+
 def _split_sentences(text: str) -> list[str]:
     """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음). 뒤가 숫자면 소수점이므로 끊지 않는다
-    — 6.25 가 "6." / "25" 로 갈리면 문장별 합성이라 tts 의 소수→한글 변환이 점을 흘린다."""
-    # "A vs. B" 의 마침표는 문장 끝이 아니다 — 끊으면 클립이 둘로 갈라지고 0.7초 정적이 들어간다(발음 사전의 vs. 과 짝).
-    parts = re.split(r"(?<=[.?!])(?<!vs\.)(?<!Vs\.)(?<!VS\.)(?!\d)\s*", text.strip())
-    return [p.strip() for p in parts if p.strip()]
+    — 6.25 가 "6." / "25" 로 갈리면 문장별 합성이라 tts 의 소수→한글 변환이 점을 흘린다.
+
+    문장 끝 부호 바로 뒤의 **닫는 따옴표·괄호는 앞 문장에 붙인다.** 예전엔 부호 직후에서 그대로 끊어
+    `"…선택한 것입니다."` 의 닫는 따옴표가 다음 문장 머리(`" 이렇게 잘라…`)로 넘어가, 화면 자막이 따옴표로
+    시작하고 TTS 클립이 따옴표 앞뒤로 어색하게 갈렸다. 닫는 따옴표 뒤에 `라고` 같은 인용 조사가 곧바로 이어지면
+    같은 문장이므로 끊지 않는다("그만하자!"라고 했다)."""
+    text = text.strip()
+    pieces: list[str] = []
+    start = 0
+    for m in _SENT_END.finditer(text):
+        end = m.end()
+        if text[end:end + 1].isdigit():
+            continue                                         # 6.25 같은 소수점
+        # "A vs. B" 의 마침표는 문장 끝이 아니다 — 끊으면 클립이 둘로 갈라지고 0.7초 정적이 들어간다(발음 사전의 vs. 과 짝).
+        if m.group() == "." and text[max(0, m.start() - 2):end] in ("vs.", "Vs.", "VS."):
+            continue
+        closers_from = end
+        while end < len(text):
+            c, nxt = text[end], text[end + 1:end + 2]
+            if c in _CLOSERS or (c in _CLOSERS_AMBIGUOUS and (
+                    not nxt or nxt.isspace() or nxt in ",.…·)" or _QUOTATIVE.match(text, end + 1))):
+                end += 1
+            else:
+                break
+        if end > closers_from and _QUOTATIVE.match(text, end):
+            continue                                         # "…"라고 했다 — 인용문과 서술이 한 문장
+        pieces.append(text[start:end])
+        start = end
+    pieces.append(text[start:])
+    return [p.strip() for p in pieces if p.strip()]
 
 
 # 문장별 TTS 클립 사이에 넣는 호흡(무음) 길이(초). 자막 타이밍이 이 값을 그대로 반영한다.
@@ -351,6 +384,8 @@ CHAPTER_GAP = 2 * SENTENCE_GAP
 # 시청자가 생각할 틈이 없어 톤이 단조롭게 들린다(2026-09 대표 영상 검토). 0.8~1초 무음을 둔다.
 QUESTION_GAP = float(os.environ.get("POPORY_QUESTION_GAP", "1.0"))
 XFADE_TD = 0.4  # 장면 크로스페이드 전이 길이(초). _xfade_graph·자막 오프셋이 공유.
+
+
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
     try:
         v = float(os.environ.get(name, default))
@@ -912,6 +947,10 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
                                    job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw,
                                    system_prompt_builder=system_prompt_builder, user_msg_builder=user_msg_builder,
                                    feature="shorts_script" if portrait else "video_script")
+    # 롱폼 첫 장면이 프리후크 규칙(첫 문장에 결과)을 지켰는지 판정하고, 어겼으면 앞 문장만 고친다(fail-open).
+    # 쇼츠는 60초 안에 별도 규칙이라 대상이 아니다. 오탈자 검수보다 먼저 — 새로 쓴 문장도 그 검수를 거치게.
+    if not portrait:
+        meta["hook_check"] = check_hook(scenes, meta, split=_split_sentences, job_id=job_id)
     # 렌더 전에 오탈자·고유명사 검수(치환만, fail-open). TTS·자막·제목·태그가 모두 이 대본에서
     # 나가므로 여기서 한 번 잡으면 전부 같이 고쳐진다. 결과는 meta 에 남겨 포털에서 볼 수 있게 한다.
     meta["script_review"] = review_script(scenes, meta, job_id=job_id)

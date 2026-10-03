@@ -125,3 +125,34 @@ def test_video_and_shorts_prompts_avoid_faces():
         assert "뒷모습" in sp and "실루엣" in sp     # 사람이 필요하면 이렇게
         assert "클로즈업" in sp                      # 정면 얼굴·손 클로즈업 금지
         assert "얼굴이 보여도" not in sp             # 옛 허용 문구가 남으면 안 된다
+
+
+def test_prehook_rule_forbids_the_openers_seen_in_real_scripts():
+    """실제 대본 10편에서 나온 위반 유형(인물 소개·질문 시작·상황 묘사)이 금지로 명시돼 있고 좋은 예가 여러 유형이다."""
+    from popory_content.video_prompt import build_video_system_prompt
+    sp = build_video_system_prompt([], scene_count=16)
+    assert "금지하는 시작" in sp
+    for banned in ("인물·상황 소개", "질문으로 여는 문장", "인사", "서정적인 배경 묘사"):
+        assert banned in sp
+    for kind in ("결과 선공개", "충격적인 수치", "극적인 대비", "도발적인 주장"):
+        assert kind in sp
+    assert "60자 안쪽" in sp                       # 첫 문장 길이 상한
+    assert "지어내지 않고" in sp                    # 결과를 위해 없는 사실을 만들지 않는다
+    assert "그대로 가져다 쓰지도" in sp             # 예시 문장 복붙 방지
+
+
+def test_style_samples_cannot_override_prehook_in_longform():
+    """말투 샘플은 프롬프트 맨 끝에 붙는다 — 어조만 따르고 첫 장면 구성은 프리후크가 우선이라고 못 박는다."""
+    from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
+    sp = build_video_system_prompt(["서정적으로 시작하는 샘플 글"], scene_count=16)
+    tail = sp[sp.index("## 4. 말투 스타일"):]
+    assert "어조와 어미만" in tail and "프리후크 규칙이 항상 우선" in tail
+    # 쇼츠는 별도 규칙이라 이 문구를 쓰지 않는다
+    assert "프리후크 규칙이 항상 우선" not in build_shorts_system_prompt(["샘플"], scene_count=5)
+
+
+def test_longform_user_message_repeats_the_hook_rule_last():
+    from popory_content.video_prompt import build_video_user_message
+    msg = build_video_user_message("돈의 심리학", [])
+    assert "첫 문장은 인물·상황 소개나 질문이 아니라" in msg
+    assert msg.rstrip().endswith("두 태그를 정확히 포함하세요.")   # 출력 형식 지시는 여전히 마지막
