@@ -1,7 +1,7 @@
 ---
 slug: geopolitics
 name: 글로벌 지정학
-delivery_mode: bundled
+delivery_mode: portal_only
 subject_template: "[{name} 이슈 브리핑] {date}"
 sender_name: "{name} 이슈 브리핑"
 enabled: true
