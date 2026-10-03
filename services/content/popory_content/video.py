@@ -336,7 +336,8 @@ def render_thumbnail(copy: str | None, image_prompt: str | None, out_jpg: Path,
 def _split_sentences(text: str) -> list[str]:
     """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음). 뒤가 숫자면 소수점이므로 끊지 않는다
     — 6.25 가 "6." / "25" 로 갈리면 문장별 합성이라 tts 의 소수→한글 변환이 점을 흘린다."""
-    parts = re.split(r"(?<=[.?!])(?!\d)\s*", text.strip())
+    # "A vs. B" 의 마침표는 문장 끝이 아니다 — 끊으면 클립이 둘로 갈라지고 0.7초 정적이 들어간다(발음 사전의 vs. 과 짝).
+    parts = re.split(r"(?<=[.?!])(?<!vs\.)(?<!Vs\.)(?<!VS\.)(?!\d)\s*", text.strip())
     return [p.strip() for p in parts if p.strip()]
 
 
