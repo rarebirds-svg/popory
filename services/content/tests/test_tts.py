@@ -231,7 +231,7 @@ def test_to_ssml_number_glued_to_hangul_has_no_break():
 def test_to_ssml_converts_thousands():
     from popory_content.tts import _to_ssml
     out = _to_ssml("회원이 1700명 늘었다.")
-    assert "천칠백명" in out
+    assert "천칠백 명" in out        # 100 이상은 한자어를 유지하되 띄어 읽는다
 
 
 def test_to_ssml_converts_sentence_final_integer():
@@ -265,7 +265,7 @@ def test_to_ssml_converts_date_components():
     # 한국식 날짜는 숫자가 단위로 분리돼 각각 변환
     out = _to_ssml("2024년 6월 21일")
     assert "이천이십사년" in out
-    assert "육월" in out
+    assert "유월" in out             # 6월 → 유월 (육월이 아니다)
     assert "이십일일" in out
 
 

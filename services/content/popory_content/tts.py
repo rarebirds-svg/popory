@@ -22,6 +22,8 @@ _QUOTES = re.compile(r"[\"'‘’“”「」『』《》〈〉]")           # �
 _ELLIPSIS = re.compile(r"\.{3,}|…+")                       # 말줄임표 → 쉼표
 _DASH_SEP = re.compile(r"\s*[—–]\s*|\s+-\s+")              # 구분용 대시 → 쉼표
 _TILDE_RANGE = re.compile(r"(?<=\d)\s*[~〜]\s*(?=\d)")     # 숫자 범위 틸드 → "에서"
+# 단위를 공유하는 범위(3~5명)는 앞 숫자에도 단위를 붙인다 — 안 그러면 앞 숫자는 뒤따르는 단위를 몰라
+# "삼에서 오명" 으로 읽힌다. 단위 목록은 아래 _NATIVE_UNIT 과 같다(정의가 뒤에 있어 _normalize_for_tts 에서 쓴다).
 _TILDE = re.compile(r"[~〜]")                              # 그 외 틸드 → 제거
 _MIDDOT = re.compile(r"\s*·\s*")                           # 가운뎃점(나열) → 쉼표
 _COLON = re.compile(r"(?<!\d)\s*[:;]\s*|\s*[:;]\s*(?!\d)")  # 숫자 사이 아닌 콜론·세미콜론 → 쉼표
@@ -44,6 +46,7 @@ def _normalize_for_tts(text: str) -> str:
     text = _QUOTES.sub("", text)
     text = _ELLIPSIS.sub(", ", text)
     text = _DASH_SEP.sub(", ", text)
+    text = _SHARED_UNIT_RANGE.sub(r"\1\3에서 \2\3", text)   # 3~5명 → 3명에서 5명
     text = _TILDE_RANGE.sub("에서 ", text)
     text = _TILDE.sub("", text)
     text = _MIDDOT.sub(", ", text)
@@ -126,6 +129,36 @@ def _sino_korean(n: int) -> str:
     return "".join(parts)
 
 
+# --- 고유어 수사 ---
+# 단위에 따라 고유어 수사를 써야 자연스럽다: 1권 → 한 권, 3가지 → 세 가지, 37개 → 서른일곱 개.
+# 한자어로 읽으면 "일권", "삼가지" 가 되어 어색하다(2026-10 대본 34건 스캔에서 1권 약 17회, 가지 7회 확인).
+# 99 이하만 고유어, 100 이상은 한자어를 유지하되 띄어 읽는다("천칠백 명").
+#
+# **목록은 보수적으로 둔다.** 고유어로 바꾸면 틀리는 경우가 있는 단위는 제외했다:
+# - 대: "3대 기업" 은 "삼대" 가 맞다(고유어 "세 대" 는 차량·기계일 때뿐) → 뺌.
+# - 개월: "3개월" 은 "삼 개월"(한자어). 고유어는 "달" 일 때만("세 달") → '개' 뒤 월 은 제외.
+# - 달러: "3달러" 의 '달' 은 단위가 아니다 → 달(?!러).
+# - 시: 시각("3시")은 고유어("세 시") 지만 "서울시"·"3시대" 같은 합성어가 있어, 시 뒤가 조사·끝일 때만.
+# - 번: "3번 말했다" 는 고유어("세 번") 지만 "1번 항목" 은 번호 이름("일 번") → 번호 이름 뒤따르는 명사를 제외.
+# 앞이 '제' 인 서수("제1권")와 알파벳 바로 뒤("B2B", "F16")는 원래대로 한자어로 둔다.
+_NATIVE_UNIT = (
+    r"(?:명|개(?!월|국|년|소|사|교|처|항)|권|가지|마리|살|잔|곳|시간|달(?!러)"
+    r"|번(?!\s*(?:항목|문제|질문|문항|타자|출구|국도|버스|선수|트랙|곡|보기|번호|방))"
+    r"|시(?=$|[^가-힣]|에|부터|까지|쯤|경|가|는|은|를|의|도|정|께|로|와|과))"
+)
+_NATIVE_FOLLOW = re.compile(r"\s?" + _NATIVE_UNIT)
+_SHARED_UNIT_RANGE = re.compile(r"(\d+)\s*[~〜]\s*(\d+)(" + _NATIVE_UNIT + ")")
+_NATIVE_ONES = ["", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉"]
+_NATIVE_TENS = ["", "열", "스물", "서른", "마흔", "쉰", "예순", "일흔", "여든", "아흔"]
+
+
+def _native_korean(n: int) -> str:
+    """1~99 → 단위 앞 고유어 수사(관형형). 1~4 는 한·두·세·네, 20 은 '스무', 21 부터는 '스물한'."""
+    if n == 20:
+        return "스무"
+    return _NATIVE_TENS[n // 10] + _NATIVE_ONES[n % 10]
+
+
 def _read_decimal(tok: str) -> str:
     """소수 토큰(점 1개)을 '정수부 점 소수부(자리별)' 붙인 한글로 — 29.2→이십구점이, 0.5→영점오.
     붙여야 Chirp3-HD가 소수점을 안 흘린다(숫자로 두면 29.2를 "이십구 이"로 읽음)."""
@@ -148,6 +181,18 @@ def _read_number(m: "re.Match[str]") -> str:
         return tok
     if n >= 10 ** 20:                 # 경 그룹 초과 → 변환 생략
         return tok
+    text, start, end = m.string, m.start(), m.end()
+    prev = text[start - 1] if start > 0 else ""
+    # 서수("제1권")와 알파벳 바로 뒤("B2B")는 한자어 그대로.
+    if prev != "제" and not (prev.isascii() and prev.isalpha()):
+        if text[end:end + 1] == "월" and n in (6, 10):     # 6월 → 유월, 10월 → 시월 (다른 달은 한자어 그대로)
+            return "유" if n == 6 else "시"
+        unit = _NATIVE_FOLLOW.match(text, end)
+        if unit:
+            spaced = "" if unit.group().startswith((" ", "\t", "\n")) else " "   # 이미 띄어 있으면 더 넣지 않는다
+            if 1 <= n <= 99:
+                return _native_korean(n) + spaced
+            return _sino_korean(n) + spaced     # 0 과 100 이상은 한자어("백 개", "천칠백 명")
     return _sino_korean(n)
 
 
