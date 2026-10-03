@@ -13,6 +13,34 @@ const TTS_JSON_MAX = 20_000;
 
 type Vars = AppVars & ServiceVars;
 
+// 워커가 보고한 TTS 설정 스냅샷에서 **상태 화면에 필요한 것만** 뽑는다(음성·계열·말속도). 이 응답은 일반 로그인 사용자도
+// 읽으므로 규칙 표·인명 교정 같은 전체 스냅샷은 싣지 않는다(그건 /api/admin/tts). 모양이 달라도(워커 버전 차이) 죽지 않는다.
+export type TtsSummary = {
+  longform: { voice: string; family: string } | null;
+  shorts: { voice: string; family: string } | null;
+  speaking_rate: number | null;
+};
+export function summarizeTts(json: string | null): TtsSummary | null {
+  if (!json) return null;
+  try {
+    const c = JSON.parse(json) as {
+      voices?: { key: string; name: string; family: string }[];
+      defaults?: { longform?: { voice?: string }; shorts?: { voice?: string } };
+      speed?: { speaking_rate?: { current?: number } };
+    };
+    const pick = (k?: string) => {
+      const v = c.voices?.find((x) => x.key === k);
+      return v ? { voice: v.name, family: v.family } : null;
+    };
+    const rate = c.speed?.speaking_rate?.current;
+    return {
+      longform: pick(c.defaults?.longform?.voice),
+      shorts: pick(c.defaults?.shorts?.voice),
+      speaking_rate: typeof rate === "number" ? rate : null,
+    };
+  } catch { return null; }
+}
+
 export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>) {
   // 워커 → 포털 하트비트 보고(워커 전용).
   app.post("/api/content/worker-heartbeat", requireService, async (c) => {
@@ -49,10 +77,10 @@ export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>
     if (unauth) return unauth;
     const now = Math.floor(Date.now() / 1000);
     const hb = await c.env.DB.prepare(
-      "SELECT reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok, usage_json FROM worker_heartbeat WHERE id=?",
+      "SELECT reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok, usage_json, tts_json FROM worker_heartbeat WHERE id=?",
     ).bind(WORKER_ID).first<{
       reported_at: number; cf_image_exhausted: number; cf_reset_date: string | null; imagegen_ok: number;
-      usage_json: string | null;
+      usage_json: string | null; tts_json: string | null;
     }>();
     const online = !!hb && now - hb.reported_at < STALE_SEC;
     let claudeUsage: unknown = null;
@@ -66,6 +94,7 @@ export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>
       image_free: { exhausted: !!hb && hb.cf_image_exhausted === 1, reset_date: hb?.cf_reset_date ?? null },
       imagegen_ok: !!hb && hb.imagegen_ok === 1,
       claude_usage: claudeUsage,
+      tts: summarizeTts(hb?.tts_json ?? null),     // null = 워커가 아직 보고 안 함(구버전이거나 재시작 전)
       can_generate: online,
       traffic: results,
     });

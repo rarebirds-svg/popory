@@ -130,3 +130,61 @@ describe("content status", () => {
     expect(body.claude_usage).toBe(null);
   });
 });
+
+
+describe("status 의 TTS 요약", () => {
+  const snapshot = {
+    voices: [
+      { key: "male", name: "ko-KR-Neural2-C", family: "Neural2" },
+      { key: "female-calm", name: "ko-KR-Chirp3-HD-Aoede", family: "Chirp3-HD" },
+    ],
+    defaults: { longform: { voice: "male" }, shorts: { voice: "female-calm" } },
+    speed: { speaking_rate: { current: 1.06, env: "POPORY_TTS_SPEAKING_RATE", default: "1.0", overridden: true } },
+    // 상태 화면에 필요 없는 상세 — 일반 사용자 응답에 실리면 안 된다
+    normalization: [{ label: "x", input: "y", spoken: "z" }],
+    name_fixes: [{ wrong: "a", right: "b" }],
+    engine: { api_key_set: true },
+  };
+
+  async function beat(body: Record<string, unknown>) {
+    const token = await workerToken();
+    return SELF.fetch("https://example.com/api/content/worker-heartbeat", {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ cf_image_exhausted: false, imagegen_ok: true, ...body }),
+    });
+  }
+  const status = async () => (await SELF.fetch("https://example.com/api/content/status", { headers: { cookie: await userCookie() } }))
+    .json<{ tts: { longform: { voice: string; family: string } | null; shorts: { voice: string; family: string } | null; speaking_rate: number | null } | null }>();
+
+  it("워커가 보고한 실제 음성·말속도를 요약해 준다(동영상/쇼츠 따로)", async () => {
+    await beat({ tts: snapshot });
+    const { tts } = await status();
+    expect(tts).toEqual({
+      longform: { voice: "ko-KR-Neural2-C", family: "Neural2" },
+      shorts: { voice: "ko-KR-Chirp3-HD-Aoede", family: "Chirp3-HD" },
+      speaking_rate: 1.06,
+    });
+  });
+
+  it("규칙 표·인명 교정 같은 상세는 일반 사용자 응답에 싣지 않는다", async () => {
+    await beat({ tts: snapshot });
+    const res = await SELF.fetch("https://example.com/api/content/status", { headers: { cookie: await userCookie() } });
+    const raw = await res.text();
+    expect(raw).not.toContain("normalization");
+    expect(raw).not.toContain("name_fixes");
+    expect(raw).not.toContain("api_key_set");
+  });
+
+  it("워커가 아직 보고하지 않았으면 tts 는 null — 화면이 '미보고' 를 보인다", async () => {
+    await beat({});
+    expect((await status()).tts).toBeNull();
+  });
+
+  it("모양이 다른 스냅샷(워커 버전 차이)이나 깨진 JSON 이어도 status 는 죽지 않는다", async () => {
+    await beat({ tts: { unexpected: true } });
+    const { tts } = await status();
+    expect(tts).toEqual({ longform: null, shorts: null, speaking_rate: null });
+    await env.DB.prepare("UPDATE worker_heartbeat SET tts_json='{not json'").run();
+    expect((await status()).tts).toBeNull();
+  });
+});

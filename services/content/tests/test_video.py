@@ -751,3 +751,53 @@ def test_make_video_runs_script_review_before_render(monkeypatch):
     _, out_scenes, meta, *_ = _video.make_video(topic="t", sources=[], style_samples=[], job_id="j")
     assert order == ["review", ("render", "버몬트")]
     assert meta["script_review"]["status"] == "ok"
+
+
+def test_render_video_counts_say_fallback_sentences(monkeypatch, tmp_path):
+    """Google TTS 가 실패해 say 로 대체한 문장 수를 센다 — 어느 음성이 실제 영상에 쓰였는지의 근거."""
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    # 'X' 가 든 문장만 합성 실패(None) → say 폴백
+    monkeypatch.setattr(video, "synthesize", lambda text, voice=None: None if "X" in text else b"AUDIO")
+    stats = {}
+    scenes = [{"caption": "a", "narration": "정상 문장. X 실패 문장."},
+              {"caption": "b", "narration": "또 정상 문장."}]
+    video.render_video(scenes, job_id="fbtest", tts_stats=stats)
+    assert stats == {"sentences": 3, "fallback": 1}
+
+
+def test_render_video_tts_stats_is_optional(monkeypatch, tmp_path):
+    """tts_stats 를 안 주는 기존 호출부는 그대로 동작한다."""
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    out, *_ = video.render_video([{"caption": "a", "narration": "n1"}, {"caption": "b", "narration": "n2"}],
+                                 job_id="nostats")
+    assert out is not None
+
+
+def test_tts_meta_records_voice_rate_and_fallback(monkeypatch):
+    from popory_content import video, tts
+    monkeypatch.setattr(tts, "SPEAKING_RATE", 1.06)
+    m = video.tts_meta("ko-KR-Chirp3-HD-Aoede", {"sentences": 40, "fallback": 0})
+    assert m == {"voice": "ko-KR-Chirp3-HD-Aoede", "family": "Chirp3-HD", "speaking_rate": 1.06,
+                 "sentences": 40, "fallback_sentences": 0, "fallback": False}
+    m = video.tts_meta("ko-KR-Neural2-C", {"sentences": 40, "fallback": 3})
+    assert m["family"] == "Neural2" and m["fallback"] is True and m["fallback_sentences"] == 3
+
+
+def test_make_video_puts_tts_record_in_meta(monkeypatch, tmp_path):
+    from popory_content import video
+    monkeypatch.setattr(video, "generate_scenes", lambda **kw: ([{"caption": "a", "narration": "n"}], {"title": "t"}))
+    monkeypatch.setattr(video, "review_script", lambda *a, **k: {})
+
+    def fake_render(scenes, job_id, image_fetcher, voice, portrait, tts_stats):
+        tts_stats.update(sentences=5, fallback=2)
+        return tmp_path / "o.mp4", 0, 0, []
+    monkeypatch.setattr(video, "render_video", fake_render)
+    _, _, meta, *_ = video.make_video(topic="t", sources=[], style_samples=[], voice="ko-KR-Neural2-C")
+    assert meta["tts"]["voice"] == "ko-KR-Neural2-C" and meta["tts"]["fallback_sentences"] == 2
+    assert meta["title"] == "t"                  # 기존 meta 는 그대로

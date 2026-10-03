@@ -44,17 +44,10 @@ def _env_info(name: str, default: str, current) -> dict:
     return {"env": name, "default": default, "current": current, "overridden": raw is not None and raw != default}
 
 
-def _voice_family(voice_name: str) -> str:
-    for fam in ("Chirp3-HD", "Neural2", "Wavenet", "Standard", "Studio", "Journey"):
-        if fam in voice_name:
-            return fam
-    return "기타"
-
-
 def build_tts_config() -> dict:
     """어드민 TTS 화면이 그대로 그리는 JSON. 키는 화면과의 계약이라 함부로 바꾸지 않는다."""
     voices = [
-        {"key": k, "name": v, "family": _voice_family(v)}
+        {"key": k, "name": v, "family": tts.voice_family(v)}
         for k, v in options.VOICE.items()
     ]
     return {

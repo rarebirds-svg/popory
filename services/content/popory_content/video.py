@@ -15,7 +15,8 @@ from PIL import Image, ImageDraw, ImageFont
 from popory_content.generate import run_claude_cli, model_for
 from popory_content.script_review import review_script
 from popory_content.subtitles import scene_offsets, Cue
-from popory_content.tts import synthesize, spoken_text
+from popory_content import tts as _tts
+from popory_content.tts import synthesize, spoken_text, voice_family
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
 from popory_content.video_contract import parse_video
 
@@ -722,8 +723,12 @@ def _deepen_voice(audio: Path) -> Path:
 
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
-                 portrait: bool = False) -> tuple[Path, int, int, list[Cue]]:
-    """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → xfade 합산 후 loudnorm 마스터 MP4."""
+                 portrait: bool = False,
+                 tts_stats: "dict[str, int] | None" = None) -> tuple[Path, int, int, list[Cue]]:
+    """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → xfade 합산 후 loudnorm 마스터 MP4.
+
+    tts_stats 를 주면 합성한 문장 수(sentences)와 Google TTS 가 실패해 macOS say 로 대체한 문장 수
+    (fallback)를 채워 준다. 반환 튜플을 늘리지 않으려고 출력 인자로 받는다(호출부·테스트가 많이 물려 있다)."""
     if not Path(FONT_PATH).exists():
         raise VideoError(f"한국어 폰트 없음: {FONT_PATH}")
     work = TMP / f"video_{job_id}"
@@ -767,12 +772,16 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         seg_durs: list[float] = []
         for j, sent in enumerate(sentences):
             seg_bytes = synthesize(sent, voice=voice)
+            if tts_stats is not None:
+                tts_stats["sentences"] = tts_stats.get("sentences", 0) + 1
             if seg_bytes:
                 seg = work / f"{i}_{j}.mp3"
                 seg.write_bytes(seg_bytes)
             else:
                 seg = work / f"{i}_{j}.aiff"
                 _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(seg), sent])
+                if tts_stats is not None:
+                    tts_stats["fallback"] = tts_stats.get("fallback", 0) + 1
             seg = _deepen_voice(seg)  # 묵직한 중저음으로 변형(길이 보존)
             seg_audios.append(seg)
             seg_durs.append(_duration(seg))
@@ -857,6 +866,20 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     return out, images_missing, images_total, cues
 
 
+def tts_meta(voice: str, stats: "dict[str, int]") -> dict[str, Any]:
+    """영상별 TTS 기록 — 어느 음성·속도로 만들었는지, Google TTS 가 실패해 say 로 대체한 문장이 있는지.
+    기본 음성이 바뀌어도(과거 영상에 무엇이 쓰였는지) 나중에 역추적할 수 있게 job meta 에 남긴다."""
+    fallback = int(stats.get("fallback", 0))
+    return {
+        "voice": voice,
+        "family": voice_family(voice),
+        "speaking_rate": _tts.SPEAKING_RATE,      # 모듈 속성으로 읽어 합성에 실제 쓰인 값과 같게 한다
+        "sentences": int(stats.get("sentences", 0)),
+        "fallback_sentences": fallback,
+        "fallback": fallback > 0,
+    }
+
+
 def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
                job_id: str = "adhoc", image_fetcher: Any = None, scene_count: int = 8,
                image_style_kw: str = "photorealistic, cinematic",
@@ -870,5 +893,8 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
     # 렌더 전에 오탈자·고유명사 검수(치환만, fail-open). TTS·자막·제목·태그가 모두 이 대본에서
     # 나가므로 여기서 한 번 잡으면 전부 같이 고쳐진다. 결과는 meta 에 남겨 포털에서 볼 수 있게 한다.
     meta["script_review"] = review_script(scenes, meta, job_id=job_id)
-    mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice, portrait=portrait)
+    tts_stats: dict[str, int] = {}
+    mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice,
+                                                     portrait=portrait, tts_stats=tts_stats)
+    meta["tts"] = tts_meta(voice, tts_stats)
     return mp4, scenes, meta, img_missing, img_total, cues

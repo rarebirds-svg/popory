@@ -150,6 +150,24 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                 <p className="text-xs text-amber-600">배경 이미지 일부 누락 ({missing}/{total}). 재생성을 권장합니다.</p>
               ) : null;
             })()}
+            {(() => {
+              // 이 영상을 어떤 음성·속도로 만들었는지, Google TTS 가 실패해 시스템 음성(say)으로 대체된 문장이 있는지.
+              const t = meta?.tts as { voice?: string; family?: string; speaking_rate?: number; sentences?: number; fallback_sentences?: number } | undefined;
+              if (!t || typeof t.voice !== "string") return null;
+              const fb = typeof t.fallback_sentences === "number" ? t.fallback_sentences : 0;
+              return (
+                <div className="space-y-1">
+                  <p className="text-xs text-popory-muted">
+                    음성 {t.voice}{t.family ? ` (${t.family})` : ""}{typeof t.speaking_rate === "number" ? ` · 말속도 ${t.speaking_rate}×` : ""}
+                  </p>
+                  {fb > 0 && (
+                    <p className="text-xs text-amber-600">
+                      Google TTS 합성이 실패해 {typeof t.sentences === "number" ? `${fb}/${t.sentences}` : fb}문장은 시스템 음성으로 대체됐습니다. 재생성을 권장합니다.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
             <video controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video`} />
             <RegenerateButton jobId={job.id} />
             {showYtUpload && (
