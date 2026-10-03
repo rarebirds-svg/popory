@@ -14,6 +14,7 @@ import { mountAdminActivity } from "./routes/admin_activity";
 import { mountAdminOverview } from "./routes/admin_overview";
 import { mountAdminBriefCategories } from "./routes/admin_brief_categories";
 import { mountAdminLlmModels } from "./routes/admin_llm_models";
+import { mountAdminTts } from "./routes/admin_tts";
 import { mountJwks } from "./routes/jwks";
 import { mountGo } from "./routes/go";
 import { mountPublished } from "./routes/published";
@@ -65,6 +66,7 @@ export function createApp() {
   mountAdminOverview(app);
   mountAdminBriefCategories(app);
   mountAdminLlmModels(app);
+  mountAdminTts(app);
   mountJwks(app);
   mountGo(app);
   mountPublished(app);

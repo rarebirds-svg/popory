@@ -72,3 +72,49 @@ def test_heartbeat_loop_posts_repeatedly_and_stops(monkeypatch):
     t.join(timeout=2)
     assert not t.is_alive()       # stop 시 종료
     assert len(calls) >= 3        # 인터벌마다 반복 송출
+
+
+def _loop_payloads(monkeypatch, *, every, beats, fail_first=0):
+    """heartbeat_loop 를 beats 번 돌려 각 박자의 페이로드에 tts 가 실렸는지 기록한다."""
+    monkeypatch.setattr(worker, "HEARTBEAT_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(worker, "TTS_REPORT_EVERY", every)
+    monkeypatch.setattr(worker, "_cf_exhausted_today", lambda: False)
+    monkeypatch.setattr(worker, "_imagegen_ok", lambda: True)
+    monkeypatch.setattr(worker, "build_tts_config", lambda: {"marker": 1})
+    seen = []
+    stop = threading.Event()
+
+    class Client:
+        def post(self, path, *, json=None):
+            seen.append("tts" in json)
+            if len(seen) <= fail_first:
+                raise RuntimeError("portal down")
+            if len(seen) >= beats:
+                stop.set()
+            return {}
+
+    worker.heartbeat_loop(Client(), stop)
+    return seen
+
+
+def test_tts_snapshot_rides_first_heartbeat_then_every_n(monkeypatch):
+    """스냅샷은 프로세스 수명 동안 안 변하므로 매 30초 D1 에 쓰지 않는다 — 첫 박자와 N 박자마다만."""
+    assert _loop_payloads(monkeypatch, every=3, beats=7) == [True, False, False, True, False, False, True]
+
+
+def test_tts_snapshot_is_retried_next_beat_when_the_report_failed(monkeypatch):
+    """스냅샷을 실은 보고가 실패하면 N 박자를 기다리지 않고 다음 박자에 다시 싣는다."""
+    seen = _loop_payloads(monkeypatch, every=100, beats=4, fail_first=2)
+    assert seen == [True, True, True, False]      # 두 번 실패 → 세 번째에 성공 → 그 뒤는 안 싣는다
+
+
+def test_heartbeat_payload_omits_tts_by_default_and_survives_snapshot_failure(monkeypatch):
+    assert "tts" not in worker.heartbeat_payload()
+    monkeypatch.setattr(worker, "_cf_exhausted_today", lambda: False)
+    monkeypatch.setattr(worker, "_imagegen_ok", lambda: True)
+
+    def boom():
+        raise RuntimeError("snapshot broke")
+    monkeypatch.setattr(worker, "build_tts_config", boom)
+    p = worker.heartbeat_payload(with_tts=True)       # 부가 정보 실패가 생성 가능 판정을 죽이면 안 된다
+    assert "tts" not in p and p["imagegen_ok"] is True

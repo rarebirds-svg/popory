@@ -8,6 +8,8 @@ const WORKER_AREA = "content-worker";
 const WORKER_ID = "content-worker";
 // 이 시간(초) 안에 하트비트가 없으면 워커 오프라인으로 본다.
 const STALE_SEC = 120;
+// 워커가 보고하는 TTS 설정 스냅샷의 상한(문자 수). 실제 크기는 3KB 안팎이다.
+const TTS_JSON_MAX = 20_000;
 
 type Vars = AppVars & ServiceVars;
 
@@ -17,21 +19,27 @@ export function mountContentStatus(app: Hono<{ Bindings: Env; Variables: Vars }>
     const svc = c.get("service")!;
     if (svc.area !== WORKER_AREA) return c.text("forbidden", 403);
     const body = (await c.req.json().catch(() => null)) as
-      | { cf_image_exhausted?: unknown; cf_reset_date?: unknown; imagegen_ok?: unknown; usage?: unknown }
+      | { cf_image_exhausted?: unknown; cf_reset_date?: unknown; imagegen_ok?: unknown; usage?: unknown; tts?: unknown }
       | null;
     if (!body) return c.text("bad request", 400);
     const exhausted = body.cf_image_exhausted ? 1 : 0;
     const imagegenOk = body.imagegen_ok ? 1 : 0;
     const resetDate = typeof body.cf_reset_date === "string" ? body.cf_reset_date : null;
     const usageJson = body.usage && typeof body.usage === "object" ? JSON.stringify(body.usage) : null;
+    // TTS 설정 스냅샷은 매 박자 오지 않는다(첫 박자 + 주기적으로만) — 안 온 박자가 기존 값을 지우면 안 되므로
+    // NULL 은 "유지" 다. 객체가 아니거나 상한(20KB)을 넘으면 버린다: 어드민 화면용 부가 정보가 하트비트를 막으면 안 된다.
+    const ttsRaw = body.tts && typeof body.tts === "object" ? JSON.stringify(body.tts) : null;
+    const ttsJson = ttsRaw && ttsRaw.length <= TTS_JSON_MAX ? ttsRaw : null;
     const now = Math.floor(Date.now() / 1000);
     await c.env.DB.prepare(
-      `INSERT INTO worker_heartbeat (id, reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok, usage_json)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO worker_heartbeat (id, reported_at, cf_image_exhausted, cf_reset_date, imagegen_ok, usage_json, tts_json, tts_reported_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET reported_at=excluded.reported_at,
          cf_image_exhausted=excluded.cf_image_exhausted, cf_reset_date=excluded.cf_reset_date,
-         imagegen_ok=excluded.imagegen_ok, usage_json=excluded.usage_json`,
-    ).bind(WORKER_ID, now, exhausted, resetDate, imagegenOk, usageJson).run();
+         imagegen_ok=excluded.imagegen_ok, usage_json=excluded.usage_json,
+         tts_json=COALESCE(excluded.tts_json, tts_json),
+         tts_reported_at=CASE WHEN excluded.tts_json IS NULL THEN tts_reported_at ELSE excluded.tts_reported_at END`,
+    ).bind(WORKER_ID, now, exhausted, resetDate, imagegenOk, usageJson, ttsJson, ttsJson ? now : null).run();
     return c.json({ ok: true });
   });
 
