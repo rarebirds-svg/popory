@@ -4,7 +4,7 @@
 import os
 import datetime
 
-from popory_content import names, options, pronunciation, tts, video
+from popory_content import names, options, pronunciation, runtime_info, tts, video
 
 # 규칙 설명 + 그 규칙이 드러나는 입력 예시. 결과는 보고 시점에 실제 함수로 계산한다.
 # (라벨, 입력) — 한 입력이 여러 규칙을 건드려도 된다. 새 규칙을 tts.py 에 넣으면 여기에도 한 줄 추가.
@@ -53,6 +53,8 @@ def build_tts_config() -> dict:
     ]
     return {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        # 설정 스냅샷과 같은 보고에 실어 보낸다(마이그레이션 없이). 워커가 어떤 코드로 도는지 — runtime_info.py 참고.
+        "runtime": runtime_info.runtime_snapshot(),
         "engine": {
             "provider": "Google Cloud Text-to-Speech",
             "language": tts.LANGUAGE,

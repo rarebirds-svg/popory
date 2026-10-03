@@ -2,7 +2,7 @@
 // 콘텐츠 생성 상태를 10초마다 폴링해 readiness·트래픽을 표시하는 client 컴포넌트.
 import { useEffect, useState } from "react";
 import { platformLabel } from "../_lib/labels";
-import { formatKstIso } from "../_lib/format";
+import { formatKst, formatKstIso } from "../_lib/format";
 
 interface UsageItem { percent: number; resets_at: string; severity: string }
 interface ClaudeUsage { session?: UsageItem; weekly_all?: UsageItem; weekly_fable?: UsageItem }
@@ -18,12 +18,55 @@ function ttsLine(t: Status["tts"]): string {
   return `Google TTS · ${voices}${t.speaking_rate != null ? ` · 말속도 ${t.speaking_rate}×` : ""}`;
 }
 
+// 워커가 실제로 돌리는 코드 버전 + 뒤처짐 경고(판정은 API 가 한다 — summarizeRuntime).
+interface WorkerRuntime {
+  available: boolean;
+  commit: string | null;
+  subject: string | null;
+  branch: string | null;
+  started_at: number | null;
+  warnings: string[];
+  report_age_sec: number | null;
+}
+
+function RuntimeRow({ r }: { r: Status["worker_runtime"] }) {
+  const label = <span className="shrink-0 text-popory-muted">워커 코드</span>;
+  if (!r) {
+    return (
+      <li className="flex justify-between gap-4 border-b border-popory-muted/20 pb-2">
+        {label}
+        <span className="text-popory-muted">미보고 — 워커 재시작 후 표시</span>
+      </li>
+    );
+  }
+  const bad = !r.available || r.warnings.length > 0;
+  return (
+    <li className="border-b border-popory-muted/20 pb-2">
+      <div className="flex justify-between gap-4">
+        {label}
+        <span className={bad ? "text-popory-warn" : "text-popory-success"}>
+          {r.available
+            ? `${r.commit ?? "알 수 없음"}${r.branch ? ` · ${r.branch}` : ""}${r.started_at ? ` · ${formatKst(r.started_at)} 시작` : ""}`
+            : "버전 미확인"}
+        </span>
+      </div>
+      {r.available && r.subject && <p className="mt-1 text-right text-xs text-popory-muted">{r.subject}</p>}
+      {r.warnings.length > 0 && (
+        <ul className="mt-2 space-y-1 rounded-lg bg-popory-warn-soft px-3 py-2 text-xs text-popory-warn">
+          {r.warnings.map((w) => <li key={w}>⚠️ {w}</li>)}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 interface Status {
   worker: { online: boolean; reported_at: number | null; age_sec: number | null };
   image_free: { exhausted: boolean; reset_date: string | null };
   imagegen_ok: boolean;
   claude_usage: ClaudeUsage | null;
   tts: { longform: TtsVoice | null; shorts: TtsVoice | null; speaking_rate: number | null } | null;
+  worker_runtime: WorkerRuntime | null;
   can_generate: boolean;
   traffic: { platform: string; status: string; count: number }[];
 }
@@ -118,10 +161,11 @@ export function StatusPanel({ apiBase }: { apiBase: string }) {
               {s.imagegen_ok ? "응답" : "무응답"}
             </span>
           </li>
-          <li className="flex justify-between pb-2">
+          <li className="flex justify-between border-b border-popory-muted/20 pb-2">
             <span className="text-popory-muted">음성(TTS)</span>
             <span className={s.tts ? "text-popory-fg" : "text-popory-muted"}>{ttsLine(s.tts)}</span>
           </li>
+          <RuntimeRow r={s.worker_runtime} />
         </ul>
       </section>
 

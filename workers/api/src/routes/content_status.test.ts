@@ -188,3 +188,90 @@ describe("status 의 TTS 요약", () => {
     expect((await status()).tts).toBeNull();
   });
 });
+
+
+describe("status 의 워커 버전 경고", () => {
+  const runtime = (over: Record<string, unknown> = {}) => ({
+    loaded_commit: "4457717", loaded_subject: "feat(tts): 발음 사전", head_commit: "4457717", branch: "main",
+    started_at: 1790000000, pulled_not_restarted: false, behind: { state: "up_to_date", count: 0 }, ...over,
+  });
+  async function beat(tts: unknown) {
+    const token = await workerToken();
+    return SELF.fetch("https://example.com/api/content/worker-heartbeat", {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ cf_image_exhausted: false, imagegen_ok: true, ...(tts ? { tts } : {}) }),
+    });
+  }
+  type R = { available: boolean; commit: string | null; branch: string | null; warnings: string[] } | null;
+  const rt = async () => (await (await SELF.fetch("https://example.com/api/content/status", { headers: { cookie: await userCookie() } }))
+    .json<{ worker_runtime: R }>()).worker_runtime;
+
+  it("최신 코드로 main 에서 도는 워커는 경고가 없다", async () => {
+    await beat({ runtime: runtime() });
+    const r = await rt();
+    expect(r).toMatchObject({ available: true, commit: "4457717", branch: "main", warnings: [] });
+  });
+
+  it("pull 은 했는데 재시작 안 한 워커 — 이번 사고의 형태", async () => {
+    await beat({ runtime: runtime({ head_commit: "abcdef0", pulled_not_restarted: true }) });
+    const r = await rt();
+    expect(r?.warnings).toHaveLength(1);
+    expect(r?.warnings[0]).toContain("재시작되지 않았습니다");
+    expect(r?.warnings[0]).toContain("4457717");
+    expect(r?.warnings[0]).toContain("abcdef0");
+  });
+
+  it("pull 을 안 한 워커 — 뒤처진 커밋 수를 알면 보여 주고, 모르면 문구만", async () => {
+    await beat({ runtime: runtime({ behind: { state: "behind", count: 3 } }) });
+    expect((await rt())?.warnings[0]).toContain("3커밋 뒤처졌습니다");
+    await beat({ runtime: runtime({ behind: { state: "behind", count: null } }) });
+    expect((await rt())?.warnings[0]).toContain("새 커밋을 아직 받지 못했습니다");
+  });
+
+  it("main 이 아닌 브랜치에서 돌면 경고", async () => {
+    await beat({ runtime: runtime({ branch: "claude/old-feature" }) });
+    expect((await rt())?.warnings[0]).toContain("claude/old-feature");
+  });
+
+  it("origin 을 확인하지 못했다(unknown)고 경고하지는 않는다 — 모르는 것을 문제라고 하지 않는다", async () => {
+    await beat({ runtime: runtime({ behind: { state: "unknown", count: null } }) });
+    expect((await rt())?.warnings).toEqual([]);
+  });
+
+  it("여러 문제가 겹치면 모두 보여 준다", async () => {
+    await beat({ runtime: runtime({ pulled_not_restarted: true, branch: "x", behind: { state: "behind", count: 1 } }) });
+    expect((await rt())?.warnings).toHaveLength(3);
+  });
+
+  it("버전 정보가 없는 스냅샷 = 이 기능 이전 코드 — available:false 와 안내", async () => {
+    await beat({ speed: { speaking_rate: { current: 1 } } });
+    const r = await rt();
+    expect(r?.available).toBe(false);
+    expect(r?.warnings[0]).toContain("버전 정보가 없습니다");
+  });
+
+  it("스냅샷 자체가 없으면 null", async () => {
+    await beat(null);
+    expect(await rt()).toBeNull();
+  });
+
+  it("보고가 오래되면 경고 — 워커는 살아 있는데 버전 갱신이 멎은 경우", async () => {
+    await beat({ runtime: runtime() });
+    await env.DB.prepare("UPDATE worker_heartbeat SET tts_reported_at = tts_reported_at - 4 * 3600").run();
+    expect((await rt())?.warnings.some((w) => w.includes("4시간째 갱신되지 않았습니다"))).toBe(true);
+  });
+
+  it("깨진 JSON 이어도 status 는 죽지 않는다", async () => {
+    await beat({ runtime: runtime() });
+    await env.DB.prepare("UPDATE worker_heartbeat SET tts_json='{not json'").run();
+    expect(await rt()).toBeNull();
+  });
+
+  it("알 수 없는 필드는 응답에 새지 않는다(화이트리스트)", async () => {
+    await beat({ runtime: runtime({ secret_path: "/Users/x/secrets" }), engine: { api_key_set: true } });
+    const res = await SELF.fetch("https://example.com/api/content/status", { headers: { cookie: await userCookie() } });
+    const raw = await res.text();
+    expect(raw).not.toContain("secret_path");
+    expect(raw).not.toContain("api_key_set");
+  });
+});
