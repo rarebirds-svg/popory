@@ -9,7 +9,10 @@
 #   2) pull 자체를 안 함            — origin/main 이 로컬 HEAD 의 조상이 아님
 #   3) main 이 아닌 브랜치           — 옛 브랜치에서 돌고 있을 수 있다
 # 모든 git 호출은 실패해도 None 을 돌려준다 — 부가 정보가 워커를 죽이거나 하트비트를 막으면 안 된다.
-# origin 확인은 ls-remote(읽기 전용)만 쓴다: fetch 는 사용자가 쓰는 저장소의 refs 를 바꾸기 때문이다.
+# origin 확인은 ls-remote(읽기 전용)가 기본이다. 새 커밋이 로컬에 없어 "무엇이 바뀌었는지" 를 알아야 할 때만 fetch 하되,
+# **사용자의 refs 는 건드리지 않는다** — origin/main·FETCH_HEAD 가 아니라 전용 ref(refs/popory/origin-main)로만 받는다.
+# 왜 알아야 하나: 포털·API 만 바뀐 머지에도 "git pull 후 재시작하세요" 가 뜨면 경고가 소음이 되어 정작 중요한 날 무뎌진다.
+# 워커가 쓰는 코드(services/content, 테스트·도구·로그 제외)가 바뀐 새 커밋만 경고 대상이다.
 import subprocess
 import time
 from pathlib import Path
@@ -19,6 +22,15 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 BASE_BRANCH = "main"
 GIT_TIMEOUT = 10
 REMOTE_TIMEOUT = 15
+# 새 원격 커밋 객체를 받아 둘 전용 ref. 사용자의 origin/main 이나 FETCH_HEAD 를 바꾸지 않는다.
+PRIVATE_REF = "refs/popory/origin-main"
+# 워커 프로세스가 실제로 실행하는 코드의 경로. 이 밖(포털·API·문서·테스트·도구)만 바뀐 커밋은 워커를 낡게 만들지 않는다.
+WORKER_PREFIX = "services/content/"
+NON_WORKER_PREFIXES = ("services/content/tests/", "services/content/tools/", "services/content/logs/")
+
+
+def _is_worker_file(path: str) -> bool:
+    return path.startswith(WORKER_PREFIX) and not path.startswith(NON_WORKER_PREFIXES)
 
 
 def _git(*args: str, timeout: int = GIT_TIMEOUT) -> "subprocess.CompletedProcess[str] | None":
@@ -44,9 +56,18 @@ def _short(sha: "str | None") -> "str | None":
     return sha[:7] if sha else None
 
 
+def _worker_files_changed(head: str, remote: str) -> "int | None":
+    """head 에서 remote 로 가며 바뀐 파일 중 워커 코드 수. 알 수 없으면 None(→ 화면은 예전처럼 경고한다)."""
+    r = _git("diff", "--name-only", f"{head}...{remote}")
+    if r is None or r.returncode != 0:
+        return None
+    return sum(1 for line in r.stdout.splitlines() if _is_worker_file(line.strip()))
+
+
 def _behind_origin(head: "str | None") -> dict:
-    """origin/main 과 비교. state: up_to_date | behind | unknown. count 는 객체를 아는 경우에만."""
-    unknown = {"state": "unknown", "count": None}
+    """origin/main 과 비교. state: up_to_date | behind | unknown. count·worker_files 는 알 수 있을 때만(아니면 None).
+    worker_files = 새 커밋이 바꾼 파일 중 워커가 실행하는 코드의 수. 0 이면 포털·API 만 바뀐 것이라 재시작이 필요 없다."""
+    unknown = {"state": "unknown", "count": None, "worker_files": None}
     if not head:
         return unknown
     r = _git("ls-remote", "origin", f"refs/heads/{BASE_BRANCH}", timeout=REMOTE_TIMEOUT)
@@ -54,15 +75,22 @@ def _behind_origin(head: "str | None") -> dict:
         return unknown
     remote = r.stdout.split()[0]
     if remote == head:
-        return {"state": "up_to_date", "count": 0}
+        return {"state": "up_to_date", "count": 0, "worker_files": 0}
     have = _git("cat-file", "-e", f"{remote}^{{commit}}")
     if have is None or have.returncode != 0:
-        return {"state": "behind", "count": None}     # 원격 커밋을 로컬이 모른다 = 가져오지 않았다 = 뒤처짐
+        # 로컬이 새 커밋을 모른다 = 가져오지 않았다 = 뒤처짐. 무엇이 바뀌었는지 보려고 전용 ref 로만 받아 본다.
+        # --refmap= 이 없으면 git 이 origin/main 도 슬쩍 갱신하고(opportunistic update), --no-write-fetch-head 는 FETCH_HEAD 를 막는다.
+        got = _git("fetch", "--quiet", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/{BASE_BRANCH}:{PRIVATE_REF}",
+                   timeout=REMOTE_TIMEOUT)
+        have = _git("cat-file", "-e", f"{remote}^{{commit}}") if got is not None and got.returncode == 0 else None
+        if have is None or have.returncode != 0:
+            return {"state": "behind", "count": None, "worker_files": None}
     anc = _git("merge-base", "--is-ancestor", remote, head)
     if anc is not None and anc.returncode == 0:
-        return {"state": "up_to_date", "count": 0}      # 로컬이 원격을 포함한다(앞서 있거나 같음)
+        return {"state": "up_to_date", "count": 0, "worker_files": 0}      # 로컬이 원격을 포함한다(앞서 있거나 같음)
     n = _out("rev-list", "--count", f"{head}..{remote}")
-    return {"state": "behind", "count": int(n) if n and n.isdigit() else None}
+    return {"state": "behind", "count": int(n) if n and n.isdigit() else None,
+            "worker_files": _worker_files_changed(head, remote)}
 
 
 def runtime_snapshot() -> dict:

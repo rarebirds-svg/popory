@@ -66,15 +66,24 @@ export function summarizeRuntime(json: string | null, reportedAt: number | null,
   }
   const str = (v: unknown) => (typeof v === "string" && v ? v : null);
   const loaded = str(r.loaded_commit), head = str(r.head_commit), branch = str(r.branch);
-  const behind = (r.behind ?? {}) as { state?: unknown; count?: unknown };
+  const behind = (r.behind ?? {}) as { state?: unknown; count?: unknown; worker_files?: unknown };
   const warnings: string[] = [];
   if (r.pulled_not_restarted === true) {
     warnings.push(`pull 은 됐지만 워커가 재시작되지 않았습니다 (실행 중 ${loaded ?? "?"} → 디스크 ${head ?? "?"}). 재시작하세요.`);
   }
   if (behind.state === "behind") {
-    warnings.push(typeof behind.count === "number" && behind.count > 0
-      ? `origin/main 보다 ${behind.count}커밋 뒤처졌습니다. git pull 후 재시작하세요.`
-      : "origin/main 의 새 커밋을 아직 받지 못했습니다. git pull 후 재시작하세요.");
+    // worker_files = 새 커밋이 바꾼 파일 중 워커가 실행하는 코드 수. 0 이면 포털·API·문서만 바뀐 것이라 워커는 낡지 않았다 —
+    // 그걸로 경고하면 포털만 배포하는 날마다 뜨는 소음이 되어 정말 필요한 날 무뎌진다. 모르면(null·구버전 워커) 예전처럼 경고한다.
+    const wf = typeof behind.worker_files === "number" ? behind.worker_files : null;
+    if (wf !== 0) {
+      const n = typeof behind.count === "number" && behind.count > 0 ? behind.count : null;
+      const what = wf !== null && wf > 0 ? `워커 코드가 바뀐 새 커밋이 있습니다(워커 파일 ${wf}개${n ? `, ${n}커밋` : ""}).` : null;
+      warnings.push(what
+        ? `origin/main 에 ${what} git pull 후 재시작하세요.`
+        : n
+          ? `origin/main 보다 ${n}커밋 뒤처졌습니다. git pull 후 재시작하세요.`
+          : "origin/main 의 새 커밋을 아직 받지 못했습니다. git pull 후 재시작하세요.");
+    }
   }
   if (branch && branch !== "main") warnings.push(`main 이 아닌 브랜치(${branch})에서 실행 중입니다.`);
   if (age !== null && age > REPORT_STALE_SEC) {
