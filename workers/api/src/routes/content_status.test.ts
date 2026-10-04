@@ -228,6 +228,34 @@ describe("status 의 워커 버전 경고", () => {
     expect((await rt())?.warnings[0]).toContain("새 커밋을 아직 받지 못했습니다");
   });
 
+  it("워커 코드가 바뀐 새 커밋이면 어떤 변경인지 알려 준다", async () => {
+    await beat({ runtime: runtime({ behind: { state: "behind", count: 3, worker_files: 2 } }) });
+    const w = (await rt())?.warnings[0] ?? "";
+    expect(w).toContain("워커 코드가 바뀐 새 커밋");
+    expect(w).toContain("워커 파일 2개");
+    expect(w).toContain("3커밋");
+    expect(w).toContain("git pull 후 재시작");
+  });
+
+  it("포털·API 만 바뀐 새 커밋(worker_files=0)이면 경고하지 않는다 — 경고 소음 방지", async () => {
+    await beat({ runtime: runtime({ behind: { state: "behind", count: 2, worker_files: 0 } }) });
+    expect((await rt())?.warnings).toEqual([]);
+  });
+
+  it("변경 파일을 모르면(worker_files 없음·null — 구버전 워커·fetch 실패) 예전처럼 경고한다", async () => {
+    await beat({ runtime: runtime({ behind: { state: "behind", count: 2 } }) });
+    expect((await rt())?.warnings[0]).toContain("2커밋 뒤처졌습니다");
+    await beat({ runtime: runtime({ behind: { state: "behind", count: null, worker_files: null } }) });
+    expect((await rt())?.warnings[0]).toContain("새 커밋을 아직 받지 못했습니다");
+  });
+
+  it("worker_files=0 이어도 다른 문제(재시작 안 함)는 그대로 경고한다", async () => {
+    await beat({ runtime: runtime({ pulled_not_restarted: true, behind: { state: "behind", count: 1, worker_files: 0 } }) });
+    const r = await rt();
+    expect(r?.warnings).toHaveLength(1);
+    expect(r?.warnings[0]).toContain("재시작되지 않았습니다");
+  });
+
   it("main 이 아닌 브랜치에서 돌면 경고", async () => {
     await beat({ runtime: runtime({ branch: "claude/old-feature" }) });
     expect((await rt())?.warnings[0]).toContain("claude/old-feature");
