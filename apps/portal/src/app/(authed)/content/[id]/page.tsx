@@ -168,6 +168,27 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                 </div>
               );
             })()}
+            {(() => {
+              // 롱폼 첫 장면 프리후크 판정 결과(hook_check). 고쳤으면 전/후 문장을 보여 준다 — 판정이 맞는지 사람이 점검할 근거.
+              // 쇼츠에는 없다. 'passed' 는 조용히 두고, 고쳤거나(rewritten) 고치려다 못 한(rejected) 경우만 알린다.
+              const h = meta?.hook_check as { status?: string; kind?: string; reason?: string; before?: string[]; after?: string[]; rejected_because?: string } | undefined;
+              if (!h || (h.status !== "rewritten" && h.status !== "rejected")) return null;
+              const list = (xs?: string[]) => (Array.isArray(xs) ? xs.slice(0, 2).join(" ") : "");
+              return (
+                <details className="rounded-md border border-popory-border px-3 py-2 text-xs">
+                  <summary className="cursor-pointer text-popory-muted">
+                    {h.status === "rewritten" ? "첫 문장을 프리후크 규칙에 맞게 고쳤습니다" : "첫 문장이 프리후크 규칙을 어겼지만 자동 수정은 건너뛰었습니다"}
+                    {h.reason ? ` — ${h.reason}` : ""}
+                  </summary>
+                  <div className="mt-2 space-y-1">
+                    <p><span className="text-popory-muted">전 </span>{list(h.before)}</p>
+                    {h.status === "rewritten"
+                      ? <p><span className="text-popory-muted">후 </span>{list(h.after)}</p>
+                      : <p className="text-popory-muted">건너뛴 이유: {h.rejected_because ?? "—"}</p>}
+                  </div>
+                </details>
+              );
+            })()}
             <video controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video`} />
             <RegenerateButton jobId={job.id} />
             {showYtUpload && (
