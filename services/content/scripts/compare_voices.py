@@ -4,18 +4,21 @@
 #   cloud  — 현행 Cloud TTS(Neural2·Chirp3-HD). 실제 영상과 같은 조건(문장별 합성 → SENTENCE_GAP 무음).
 #   gemini — Cloud TTS 엔드포인트의 Gemini-TTS(같은 API 키). 무료 한도가 없어 과금된다(AI Pro 크레딧 대상).
 #            유료에서도 하루 요청 수 상한이 낮아 운영은 장면 단위가 될 것이므로 원고 전체를 한 번에 합성한다.
-#   qwen   — 맥(Apple Silicon) 로컬 Qwen3-TTS(mlx-audio). 영구 무료. `--with-qwen` 을 줄 때만 로드한다.
+#   qwen   — 맥(Apple Silicon) 로컬 Qwen3-TTS(mlx-audio). 영구 무료. mlx-audio 가 설치돼 있으면 기본 목록에
+#            자동으로 들어간다(--no-qwen 으로 제외). 만들지 못한 후보는 이유와 함께 비교 페이지에 남는다.
 #
 # 실행: services/content 에서
 #   source secrets/env.sh && .venv/bin/python scripts/compare_voices.py
 #   .venv/bin/python scripts/compare_voices.py --list            # 계정에서 ko-KR 화자 목록 조회
 #   .venv/bin/python scripts/compare_voices.py --voices male,charon,aoede
-#   .venv/bin/pip install mlx-audio && .venv/bin/python scripts/compare_voices.py --with-qwen
+#   .venv/bin/pip install mlx-audio && .venv/bin/python scripts/compare_voices.py   # Qwen 자동 포함
 #
 # 출력: ~/Downloads/popory_voice_ab/<timestamp>/ 에 MP3 + index.html(브라우저에서 바로 재생)
 import argparse
 import base64
 import datetime
+import html
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -37,11 +40,19 @@ from popory_content.video import (
 VOICES_URL = "https://texttospeech.googleapis.com/v1/voices"
 LANGUAGE = "ko-KR"
 
-# Gemini-TTS 모델 ID. 3.8 계열은 2026-09-23 출시 프리뷰라 Cloud TTS 쪽 이름이 바뀔 수 있다 —
-# 404/400 이 나면 오류 본문을 보고 env 로 바꿔 다시 돌린다(코드 수정 불필요).
-GEMINI_MODELS = {
-    "flash": os.environ.get("POPORY_GEMINI_TTS_FLASH", "gemini-3.8-flash-tts"),
-    "lite": os.environ.get("POPORY_GEMINI_TTS_LITE", "gemini-3.8-flash-lite-tts"),
+
+
+def _model_ids(env: str, *defaults: str) -> list[str]:
+    value = os.environ.get(env, "").strip()
+    return [value] if value else list(defaults)
+
+
+# Gemini-TTS 모델 ID 후보. 3.8 계열은 2026-09-23 출시 프리뷰라 Cloud TTS 쪽 이름에 -preview 가 붙을 수 있다
+# (3.1 은 Cloud TTS 에서 gemini-3.1-flash-tts-preview 였다). 앞에서부터 시도해 400/404 면 다음 이름으로 넘어가고,
+# 맞은 이름은 기억해 같은 계열 후보에 재사용한다. env 를 주면 그 이름 하나만 쓴다.
+GEMINI_MODEL_IDS = {
+    "flash": _model_ids("POPORY_GEMINI_TTS_FLASH", "gemini-3.8-flash-tts", "gemini-3.8-flash-tts-preview"),
+    "lite": _model_ids("POPORY_GEMINI_TTS_LITE", "gemini-3.8-flash-lite-tts", "gemini-3.8-flash-lite-tts-preview"),
 }
 # 출력(오디오) 단가 $/1M 토큰, 2026-10-04 cloud.google.com/text-to-speech/pricing 직접 확인.
 # 2026-12-31 까지 프리뷰 할인가이고 2027-01-01 부터 두 배(flash 18, lite 12)다. 오디오는 초당 25토큰.
@@ -158,25 +169,33 @@ def list_voices() -> None:
         print()
 
 
-def synth_cloud(text: str, label: str, voice: str, out_dir: Path, index: int) -> dict | None:
+ENGINE_NAMES = {"cloud": "Cloud TTS(현행)", "gemini": "Gemini 3.8 TTS", "qwen": "Qwen3-TTS(맥 로컬)"}
+
+
+class SynthError(Exception):
+    """후보 하나를 만들지 못한 이유. 비교 페이지에 그대로 실어, 후보가 왜 안 보이는지 화면에서 알 수 있게 한다."""
+
+
+def synth_cloud(text: str, label: str, voice: str, out_dir: Path, index: int) -> dict:
     """현행 Cloud TTS — 실제 영상과 같이 문장별 합성 + 무음 갭 + (설정 시) 중저음 변형."""
     sentences = _split_sentences(text) or [text]
     work = out_dir / f"_work_{index}"
     work.mkdir(parents=True, exist_ok=True)
     segs: list[Path] = []
     billed = 0
-    for j, sent in enumerate(sentences):
-        billed += len(_to_ssml(_prep_text(sent)))  # SSML 태그까지 과금 대상이라 그대로 센다
-        data = synthesize(sent, voice=voice)
-        if not data:
-            print(f"  ! {voice}: 문장 {j + 1} 합성 실패(키·권한·미지원 화자 확인)", file=sys.stderr)
-            return None
-        seg = work / f"{j}.mp3"
-        seg.write_bytes(data)
-        segs.append(_deepen_voice(seg))
-    out = out_dir / f"{index:02d}_{voice}.mp3"
-    _concat_audio_with_gaps(segs, SENTENCE_GAP, out)
-    shutil.rmtree(work, ignore_errors=True)  # 문장별 중간 클립은 비교에 불필요 — 폴더를 깔끔히 유지
+    try:
+        for j, sent in enumerate(sentences):
+            billed += len(_to_ssml(_prep_text(sent)))  # SSML 태그까지 과금 대상이라 그대로 센다
+            data = synthesize(sent, voice=voice)
+            if not data:
+                raise SynthError(f"{voice}: 문장 {j + 1} 합성 실패 — 키·권한·미지원 화자 확인")
+            seg = work / f"{j}.mp3"
+            seg.write_bytes(data)
+            segs.append(_deepen_voice(seg))
+        out = out_dir / f"{index:02d}_{voice}.mp3"
+        _concat_audio_with_gaps(segs, SENTENCE_GAP, out)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)  # 문장별 중간 클립은 비교에 불필요 — 폴더를 깔끔히 유지
     return {"label": label, "voice": voice, "file": out.name, "seconds": _duration(out),
             "mode": "문장별", "cost": f"{billed:,}자 (무료 버킷)"}
 
@@ -196,25 +215,41 @@ def gemini_cost_usd(seconds: float, tier: str) -> float:
     return seconds * GEMINI_TOKENS_PER_SEC * GEMINI_OUT_PRICE[tier] / 1_000_000
 
 
+# 400/404 가 아닌 오류는 모델 이름을 바꿔도 같으므로 다음 이름을 시도하지 않고 바로 이유를 보여준다.
+GEMINI_HINTS = {
+    401: "API 키가 유효하지 않음 — secrets/env.sh 의 GOOGLE_TTS_API_KEY 확인",
+    403: "권한 거부 — 결제 계정 연결, Gemini-TTS 사용 권한, API 키의 허용 API 제한을 Cloud Console 에서 확인",
+    429: "요청 한도 초과 — 잠시 뒤 다시 실행(Gemini 3.8 TTS 는 하루 요청 수 상한이 낮다)",
+}
+_gemini_resolved: dict[str, str] = {}  # 계열 → 실제로 통한 모델 ID
+
+
 def synth_gemini(text: str, label: str, spec: tuple[str, str], style: str,
-                 out_dir: Path, index: int) -> dict | None:
+                 out_dir: Path, index: int) -> dict:
     tier, speaker = spec
-    model = GEMINI_MODELS[tier]
     key = _require_key()
-    try:
-        resp = requests.post(f"{TTS_URL}?key={key}", json=gemini_payload(text, model, speaker, style),
-                             timeout=120)
-    except requests.RequestException as e:
-        print(f"  ! {model}/{speaker}: 요청 실패 — {e}", file=sys.stderr)
-        return None
-    if resp.status_code != 200:
+    ids = [_gemini_resolved[tier]] if tier in _gemini_resolved else GEMINI_MODEL_IDS[tier]
+    tried: list[str] = []
+    for model in ids:
+        try:
+            resp = requests.post(f"{TTS_URL}?key={key}", json=gemini_payload(text, model, speaker, style),
+                                 timeout=120)
+        except requests.RequestException as e:
+            raise SynthError(f"{model}/{speaker}: 요청 실패 — {e}") from e
+        if resp.status_code == 200:
+            break
         # 모델명·권한·결제 연결 문제는 본문에 이유가 나온다 — 잘라 버리지 않고 보여준다.
-        print(f"  ! {model}/{speaker}: {resp.status_code} — {resp.text[:400]}", file=sys.stderr)
-        return None
+        tried.append(f"{model} → {resp.status_code} {resp.text[:300]}")
+        if resp.status_code not in (400, 404):
+            hint = GEMINI_HINTS.get(resp.status_code)
+            raise SynthError(" / ".join(tried) + (f" ({hint})" if hint else ""))
+    else:
+        raise SynthError(" / ".join(tried)
+                         + " (모델 ID 가 다르면 POPORY_GEMINI_TTS_FLASH·POPORY_GEMINI_TTS_LITE 로 지정해 다시 실행)")
+    _gemini_resolved[tier] = model
     audio = resp.json().get("audioContent")
     if not audio:
-        print(f"  ! {model}/{speaker}: 응답에 오디오 없음", file=sys.stderr)
-        return None
+        raise SynthError(f"{model}/{speaker}: 응답에 오디오 없음")
     out = out_dir / f"{index:02d}_gemini-{tier}-{speaker}.mp3"
     out.write_bytes(base64.b64decode(audio))
     out = _deepen_voice(out)
@@ -223,8 +258,15 @@ def synth_gemini(text: str, label: str, spec: tuple[str, str], style: str,
             "mode": "원고 한 번에", "cost": f"약 ${gemini_cost_usd(seconds, tier):.4f}"}
 
 
+def mlx_audio_installed() -> bool:
+    try:
+        return importlib.util.find_spec("mlx_audio") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 class QwenRunner:
-    """mlx-audio 를 첫 사용 때만 import 한다 — 맥이 아니거나 미설치면 Qwen 후보만 건너뛴다.
+    """mlx-audio 를 첫 사용 때만 import 한다 — 맥이 아니거나 미설치면 Qwen 후보만 실패로 남긴다.
     모델은 방식별로 한 번만 올리고, 복제용 기준 음성도 한 번만 만든다."""
 
     def __init__(self, out_dir: Path):
@@ -257,8 +299,9 @@ class QwenRunner:
 
     def _reference(self) -> Path:
         if self.ref_wav is None:
-            self.ref_wav = self.out_dir / "_qwen_ref.wav"
-            self._design(QWEN_REF_TEXT, self.ref_wav)
+            ref = self.out_dir / "_qwen_ref.wav"
+            self._design(QWEN_REF_TEXT, ref)
+            self.ref_wav = ref
         return self.ref_wav
 
     def synth(self, text: str, mode: str, speaker: str | None, wav: Path) -> None:
@@ -277,60 +320,96 @@ class QwenRunner:
 
 
 def synth_qwen(runner: QwenRunner, text: str, label: str, spec: tuple[str, str | None],
-               out_dir: Path, index: int) -> dict | None:
+               out_dir: Path, index: int) -> dict:
     mode, speaker = spec
     wav = out_dir / f"_qwen_{index}.wav"
     try:
         runner.synth(text, mode, speaker, wav)
-    except ImportError:
-        print("  ! mlx-audio 미설치 — 맥에서 '.venv/bin/pip install mlx-audio' 후 다시 실행하세요.",
-              file=sys.stderr)
-        return None
+    except ImportError as e:
+        raise SynthError("mlx-audio 미설치 — 맥(Apple Silicon)에서 '.venv/bin/pip install mlx-audio' 후 다시 실행") from e
     except Exception as e:  # noqa: BLE001 — 비교 도구라 한 후보 실패가 나머지를 막지 않게 한다
-        print(f"  ! Qwen {mode}: {type(e).__name__}: {e}", file=sys.stderr)
-        return None
+        raise SynthError(f"Qwen {mode}: {type(e).__name__}: {e}") from e
     out = out_dir / f"{index:02d}_qwen-{mode}.mp3"
-    subprocess.run([FFMPEG_BIN, "-y", "-loglevel", "error", "-i", str(wav), "-b:a", "128k", str(out)],
-                   check=True)
-    wav.unlink(missing_ok=True)
+    try:
+        subprocess.run([FFMPEG_BIN, "-y", "-loglevel", "error", "-i", str(wav), "-b:a", "128k", str(out)],
+                       check=True)
+    finally:
+        wav.unlink(missing_ok=True)
     out = _deepen_voice(out)
     return {"label": label, "voice": QWEN_MODELS["base" if mode == "clone" else mode], "file": out.name,
             "seconds": _duration(out), "mode": "원고 한 번에", "cost": "$0 (로컬)"}
 
 
-def build_index(text: str, style: str, rows: list[dict], out_dir: Path) -> None:
+def build_index(text: str, style: str, rows: list[dict], failures: list[dict], notes: list[str],
+                engines: list[str], out_dir: Path) -> None:
+    esc = html.escape
     deepen = (f"{VOICE_DEEPEN_SEMITONES}반음 적용" if VOICE_DEEPEN_SEMITONES > 0 else "미적용(기본)")
     cells = "".join(
-        f"<tr><td>{r['label']}</td><td><code>{r['voice']}</code></td><td>{r['mode']}</td>"
-        f"<td>{r['seconds']:.1f}초</td><td>{r['cost']}</td>"
-        f"<td><audio controls preload=none src='{r['file']}'></audio></td></tr>"
+        f"<tr><td>{esc(r['label'])}</td><td><code>{esc(r['voice'])}</code></td><td>{r['mode']}</td>"
+        f"<td>{r['seconds']:.1f}초</td><td>{esc(r['cost'])}</td>"
+        f"<td><audio controls preload=none src='{esc(r['file'])}'></audio></td></tr>"
         for r in rows
     )
-    html = (
+    note_html = "".join(f"<p class=note>{esc(n)}</p>" for n in notes)
+    fail_html = ""
+    if failures:
+        fail_rows = "".join(f"<tr><td>{esc(f['label'])}</td><td><code>{esc(f['reason'])}</code></td></tr>"
+                            for f in failures)
+        fail_html = ("<h2>만들지 못한 후보</h2><p>터미널에도 같은 이유가 출력된다. 이유를 고친 뒤 다시 실행하면 표에 들어간다.</p>"
+                     f"<table><tr><th>후보</th><th>이유</th></tr>{fail_rows}</table>")
+    page = (
         "<meta charset='utf-8'><title>포포리 TTS 화자 비교</title>"
         "<style>body{font-family:system-ui;margin:2rem;max-width:64rem}"
         "table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:.6rem;text-align:left}"
-        "blockquote{background:#f6f6f6;padding:1rem;border-left:4px solid #999}</style>"
+        "td code{white-space:pre-wrap;word-break:break-all}"
+        "blockquote{background:#f6f6f6;padding:1rem;border-left:4px solid #999}"
+        ".note{background:#fff7e0;border-left:4px solid #e0a800;padding:.6rem 1rem}</style>"
         "<h1>포포리 TTS 화자 비교</h1>"
-        f"<blockquote>{text}</blockquote>"
+        f"<p>이번 실행 엔진: <b>{esc(' · '.join(ENGINE_NAMES[e] for e in engines))}</b></p>"
+        f"{note_html}"
+        f"<blockquote>{esc(text)}</blockquote>"
         "<table><tr><th>화자</th><th>음성/모델</th><th>합성 단위</th><th>길이</th><th>비용</th><th>재생</th></tr>"
         f"{cells}</table>"
+        f"{fail_html}"
         f"<p>문장별 = 현행 영상과 같은 조건(문장마다 따로 합성, 사이에 {SENTENCE_GAP}초 무음). "
         "원고 한 번에 = 장면 단위 합성(문장 사이 호흡은 모델이 정한다). 중저음 변형 " + deepen + ".</p>"
-        f"<p>Gemini 낭독 지시: <code>{style}</code></p>"
+        f"<p>Gemini 낭독 지시: <code>{esc(style)}</code></p>"
         "<p>Gemini 비용은 2026년 말까지의 프리뷰 단가 기준 추정이며 2027년부터 두 배다. "
         "Cloud TTS 무료 버킷(Neural2·Chirp3-HD 각 월 100만 자)은 Gemini-TTS 에 적용되지 않는다.</p>"
     )
-    (out_dir / "index.html").write_text(html, encoding="utf-8")
+    (out_dir / "index.html").write_text(page, encoding="utf-8")
+
+
+def choose_picks(args: argparse.Namespace) -> tuple[list[str], list[str]]:
+    """비교할 별칭과, 기본 후보가 빠진 이유(페이지 상단 안내). 별칭을 직접 골랐으면 그대로 따른다."""
+    notes: list[str] = []
+    if args.all:
+        return list(CANDIDATES), notes
+    if args.voices:
+        picks = [p.strip() for p in args.voices.split(",") if p.strip()]
+        engines = {CANDIDATES[p][1] for p in picks if p in CANDIDATES}
+        if "gemini" not in engines or "qwen" not in engines:
+            notes.append("--voices 로 고른 후보만 비교했습니다. Gemini·Qwen 까지 보려면 --voices 없이 실행하세요.")
+        return picks, notes
+    picks = list(DEFAULT_PICKS)
+    if args.no_qwen:
+        notes.append("--no-qwen 으로 Qwen3-TTS 를 뺐습니다.")
+    elif args.with_qwen or mlx_audio_installed():
+        picks += QWEN_PICKS
+    else:
+        notes.append("Qwen3-TTS 는 mlx-audio 가 설치되지 않아 빠졌습니다. 맥에서 "
+                     "'.venv/bin/pip install mlx-audio' 후 다시 실행하면 자동으로 포함됩니다.")
+    return picks, notes
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="포포리 TTS 화자 A/B 비교")
     ap.add_argument("--list", action="store_true", help="계정에서 ko-KR 화자 목록 조회 후 종료")
-    ap.add_argument("--voices", help=f"비교할 별칭 쉼표 구분 (기본: {','.join(DEFAULT_PICKS)})")
-    ap.add_argument("--all", action="store_true", help="CANDIDATES 전체 비교(Qwen 포함)")
+    ap.add_argument("--voices", help=f"비교할 별칭 쉼표 구분 (기본: {','.join(DEFAULT_PICKS)} + Qwen)")
+    ap.add_argument("--all", action="store_true", help="CANDIDATES 전체 비교")
     ap.add_argument("--with-qwen", action="store_true",
-                    help=f"기본 목록에 맥 로컬 Qwen3-TTS({','.join(QWEN_PICKS)})를 더한다")
+                    help="mlx-audio 설치 여부와 상관없이 Qwen 후보를 넣는다(미설치면 페이지에 이유가 남는다)")
+    ap.add_argument("--no-qwen", action="store_true", help="mlx-audio 가 설치돼 있어도 Qwen 후보를 뺀다")
     ap.add_argument("--text", help="샘플 원고 직접 지정")
     ap.add_argument("--style", help="Gemini 낭독 연출 지시(영어 권장)")
     args = ap.parse_args()
@@ -341,41 +420,47 @@ def main() -> None:
 
     text = args.text or SAMPLE
     style = args.style or GEMINI_STYLE
-    if args.all:
-        picks = list(CANDIDATES)
-    elif args.voices:
-        picks = [p.strip() for p in args.voices.split(",") if p.strip()]
-    else:
-        picks = DEFAULT_PICKS + (QWEN_PICKS if args.with_qwen else [])
+    picks, notes = choose_picks(args)
     unknown = [p for p in picks if p not in CANDIDATES]
     if unknown:
         print(f"error: 모르는 별칭 {unknown} — 가능: {', '.join(CANDIDATES)}", file=sys.stderr)
         sys.exit(2)
     if any(CANDIDATES[p][1] != "qwen" for p in picks):
         _require_key()
+    engines = [e for e in ENGINE_NAMES if any(CANDIDATES[p][1] == e for p in picks)]
+    print(f"포포리 TTS 화자 비교 — 엔진: {' · '.join(ENGINE_NAMES[e] for e in engines)} / 후보 {len(picks)}개")
+    for n in notes:
+        print(f"  · {n}")
 
     out_dir = Path.home() / "Downloads" / "popory_voice_ab" / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
     qwen = QwenRunner(out_dir)
-    rows = []
+    rows: list[dict] = []
+    failures: list[dict] = []
     for i, alias in enumerate(picks, start=1):
         label, engine, spec = CANDIDATES[alias]
         print(f"[{i}/{len(picks)}] {label}")
-        if engine == "cloud":
-            row = synth_cloud(text, label, spec, out_dir, i)
-        elif engine == "gemini":
-            row = synth_gemini(text, label, spec, style, out_dir, i)
-        else:
-            row = synth_qwen(qwen, text, label, spec, out_dir, i)
-        if row:
-            rows.append(row)
-            print(f"    → {row['file']} ({row['seconds']:.1f}초, {row['cost']})")
+        try:
+            if engine == "cloud":
+                row = synth_cloud(text, label, spec, out_dir, i)
+            elif engine == "gemini":
+                row = synth_gemini(text, label, spec, style, out_dir, i)
+            else:
+                row = synth_qwen(qwen, text, label, spec, out_dir, i)
+        except SynthError as e:
+            failures.append({"label": label, "reason": str(e)})
+            print(f"    ✗ 실패: {e}", file=sys.stderr)
+            continue
+        rows.append(row)
+        print(f"    → {row['file']} ({row['seconds']:.1f}초, {row['cost']})")
     (out_dir / "_qwen_ref.wav").unlink(missing_ok=True)
+    build_index(text, style, rows, failures, notes, engines, out_dir)
+    print(f"\n성공 {len(rows)}개 · 실패 {len(failures)}개")
+    for f in failures:
+        print(f"  ✗ {f['label']}: {f['reason']}")
+    print(f"결과: open {out_dir}/index.html")
     if not rows:
-        print("error: 합성된 음성이 없습니다.", file=sys.stderr)
         sys.exit(1)
-    build_index(text, style, rows, out_dir)
-    print(f"\n완료: open {out_dir}/index.html")
 
 
 if __name__ == "__main__":
