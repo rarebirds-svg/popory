@@ -2,7 +2,8 @@
 #
 # 엔진 세 가지:
 #   cloud  — 현행 Cloud TTS(Neural2·Chirp3-HD). 실제 영상과 같은 조건(문장별 합성 → SENTENCE_GAP 무음).
-#   gemini — Cloud TTS 엔드포인트의 Gemini-TTS(같은 API 키). 무료 한도가 없어 과금된다(AI Pro 크레딧 대상).
+#   gemini — Gemini API(generateContent)의 Gemini 3.8 TTS. 키는 GEMINI_API_KEY(AI Studio), 없으면 Cloud TTS 키.
+#            3.8 TTS 는 Cloud TTS text:synthesize 가 받지 않는다. 결제 연결 시 과금(AI Pro 크레딧 대상).
 #            유료에서도 하루 요청 수 상한이 낮아 운영은 장면 단위가 될 것이므로 원고 전체를 한 번에 합성한다.
 #   qwen   — 맥(Apple Silicon) 로컬 Qwen3-TTS(mlx-audio). 영구 무료. mlx-audio 가 설치돼 있으면 기본 목록에
 #            자동으로 들어간다(--no-qwen 으로 제외). 만들지 못한 후보는 이유와 함께 비교 페이지에 남는다.
@@ -20,6 +21,7 @@ import datetime
 import html
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -30,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import requests
 
-from popory_content.tts import synthesize, spoken_text, _prep_text, _to_ssml, TTS_URL
+from popory_content.tts import synthesize, spoken_text, _prep_text, _to_ssml
 # 실제 영상 조립과 똑같은 조건으로 듣기 위해 video.py 헬퍼를 그대로 재사용한다.
 from popory_content.video import (
     _split_sentences, _concat_audio_with_gaps, _deepen_voice, _duration,
@@ -47,8 +49,7 @@ def _model_ids(env: str, *defaults: str) -> list[str]:
     return [value] if value else list(defaults)
 
 
-# Gemini-TTS 모델 ID 후보. 3.8 계열은 2026-09-23 출시 프리뷰라 Cloud TTS 쪽 이름에 -preview 가 붙을 수 있다
-# (3.1 은 Cloud TTS 에서 gemini-3.1-flash-tts-preview 였다). 앞에서부터 시도해 400/404 면 다음 이름으로 넘어가고,
+# Gemini-TTS 모델 ID 후보(Gemini API 기준). 앞에서부터 시도해 400/404 면 다음 이름으로 넘어가고,
 # 맞은 이름은 기억해 같은 계열 후보에 재사용한다. env 를 주면 그 이름 하나만 쓴다.
 GEMINI_MODEL_IDS = {
     "flash": _model_ids("POPORY_GEMINI_TTS_FLASH", "gemini-3.8-flash-tts", "gemini-3.8-flash-tts-preview"),
@@ -200,14 +201,35 @@ def synth_cloud(text: str, label: str, voice: str, out_dir: Path, index: int) ->
             "mode": "문장별", "cost": f"{billed:,}자 (무료 버킷)"}
 
 
-def gemini_payload(text: str, model: str, speaker: str, style: str) -> dict:
-    """Cloud TTS text:synthesize 의 Gemini-TTS 요청 본문. SSML 을 받지 않으므로 평문을 보낸다 —
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+
+def gemini_payload(text: str, speaker: str, style: str) -> dict:
+    """Gemini API generateContent 의 TTS 요청 본문. 3.8 TTS 는 Cloud TTS(text:synthesize)가 아니라
+    Gemini API·Vertex 에서만 받는다(2026-10-04 Cloud TTS 가 'model is not supported' 400 으로 거절).
+    연출 지시와 대본을 한 텍스트에 담되 머리표로 나눠 지시문을 소리 내 읽지 않게 하고,
     숫자 한글화·발음 사전 같은 tts.py 정규화는 그대로 적용해 엔진 차이만 들리게 한다."""
     return {
-        "input": {"text": spoken_text(text), "prompt": style},
-        "voice": {"languageCode": LANGUAGE, "name": speaker, "modelName": model},
-        "audioConfig": {"audioEncoding": "MP3"},
+        "contents": [{"parts": [{"text": f"### DIRECTOR'S NOTES\n{style}\n\n#### TRANSCRIPT\n{spoken_text(text)}"}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": speaker}}},
+        },
     }
+
+
+def _gemini_key() -> str:
+    """AI Studio 키(GEMINI_API_KEY)가 있으면 그것을, 없으면 Cloud TTS 키를 쓴다 — 같은 프로젝트에서
+    Generative Language API 가 켜져 있고 키의 허용 API 에 들어 있으면 그대로 통한다."""
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_TTS_API_KEY")
+    if not key:
+        raise SynthError("GEMINI_API_KEY(또는 GOOGLE_TTS_API_KEY) 미설정")
+    return key
+
+
+def _pcm_rate(mime: str) -> int:
+    m = re.search(r"rate=(\d+)", mime or "")
+    return int(m.group(1)) if m else 24000
 
 
 def gemini_cost_usd(seconds: float, tier: str) -> float:
@@ -218,8 +240,9 @@ def gemini_cost_usd(seconds: float, tier: str) -> float:
 # 400/404 가 아닌 오류는 모델 이름을 바꿔도 같으므로 다음 이름을 시도하지 않고 바로 이유를 보여준다.
 GEMINI_HINTS = {
     401: "API 키가 유효하지 않음 — secrets/env.sh 의 GOOGLE_TTS_API_KEY 확인",
-    403: "권한 거부 — 결제 계정 연결, Gemini-TTS 사용 권한, API 키의 허용 API 제한을 Cloud Console 에서 확인",
-    429: "요청 한도 초과 — 잠시 뒤 다시 실행(Gemini 3.8 TTS 는 하루 요청 수 상한이 낮다)",
+    403: "권한 거부 — 키의 프로젝트에서 Generative Language API 를 켜고 키의 허용 API 에 넣거나, "
+         "AI Studio(aistudio.google.com)에서 만든 키를 secrets/env.sh 에 GEMINI_API_KEY 로 넣을 것",
+    429: "요청 한도 초과 — 잠시 뒤 다시 실행(무료 티어는 하루 요청 수가 적다. 결제 연결 시 상향)",
 }
 _gemini_resolved: dict[str, str] = {}  # 계열 → 실제로 통한 모델 ID
 
@@ -227,13 +250,13 @@ _gemini_resolved: dict[str, str] = {}  # 계열 → 실제로 통한 모델 ID
 def synth_gemini(text: str, label: str, spec: tuple[str, str], style: str,
                  out_dir: Path, index: int) -> dict:
     tier, speaker = spec
-    key = _require_key()
+    key = _gemini_key()
     ids = [_gemini_resolved[tier]] if tier in _gemini_resolved else GEMINI_MODEL_IDS[tier]
     tried: list[str] = []
     for model in ids:
         try:
-            resp = requests.post(f"{TTS_URL}?key={key}", json=gemini_payload(text, model, speaker, style),
-                                 timeout=120)
+            resp = requests.post(GEMINI_API_URL.format(model=model), params={"key": key},
+                                 json=gemini_payload(text, speaker, style), timeout=180)
         except requests.RequestException as e:
             raise SynthError(f"{model}/{speaker}: 요청 실패 — {e}") from e
         if resp.status_code == 200:
@@ -247,11 +270,21 @@ def synth_gemini(text: str, label: str, spec: tuple[str, str], style: str,
         raise SynthError(" / ".join(tried)
                          + " (모델 ID 가 다르면 POPORY_GEMINI_TTS_FLASH·POPORY_GEMINI_TTS_LITE 로 지정해 다시 실행)")
     _gemini_resolved[tier] = model
-    audio = resp.json().get("audioContent")
-    if not audio:
-        raise SynthError(f"{model}/{speaker}: 응답에 오디오 없음")
+    try:
+        inline = resp.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
+        pcm = base64.b64decode(inline["data"])
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        raise SynthError(f"{model}/{speaker}: 응답에 오디오 없음 — {resp.text[:300]}") from e
+    # 응답은 머리 없는 16비트 모노 PCM 이다 — 다른 후보와 같은 MP3 로 바꿔 나란히 듣게 한다.
+    raw = out_dir / f"_gemini_{index}.pcm"
+    raw.write_bytes(pcm)
     out = out_dir / f"{index:02d}_gemini-{tier}-{speaker}.mp3"
-    out.write_bytes(base64.b64decode(audio))
+    try:
+        subprocess.run([FFMPEG_BIN, "-y", "-loglevel", "error", "-f", "s16le", "-ar",
+                        str(_pcm_rate(inline.get("mimeType", ""))), "-ac", "1", "-i", str(raw),
+                        "-b:a", "128k", str(out)], check=True)
+    finally:
+        raw.unlink(missing_ok=True)
     out = _deepen_voice(out)
     seconds = _duration(out)
     return {"label": label, "voice": f"{model} / {speaker}", "file": out.name, "seconds": seconds,
@@ -425,7 +458,7 @@ def main() -> None:
     if unknown:
         print(f"error: 모르는 별칭 {unknown} — 가능: {', '.join(CANDIDATES)}", file=sys.stderr)
         sys.exit(2)
-    if any(CANDIDATES[p][1] != "qwen" for p in picks):
+    if any(CANDIDATES[p][1] == "cloud" for p in picks):
         _require_key()
     engines = [e for e in ENGINE_NAMES if any(CANDIDATES[p][1] == e for p in picks)]
     print(f"포포리 TTS 화자 비교 — 엔진: {' · '.join(ENGINE_NAMES[e] for e in engines)} / 후보 {len(picks)}개")

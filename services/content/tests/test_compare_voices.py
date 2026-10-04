@@ -15,22 +15,32 @@ _spec.loader.exec_module(cv)
 
 
 class _Resp:
-    def __init__(self, status: int, text: str = "", audio: bytes = b"MP3"):
+    def __init__(self, status: int, text: str = "", audio: bytes = b"\x00\x01" * 10):
         self.status_code = status
         self.text = text
         self._audio = audio
 
     def json(self):
-        return {"audioContent": base64.b64encode(self._audio).decode()}
+        return {"candidates": [{"content": {"parts": [{"inlineData": {
+            "mimeType": "audio/L16;codec=pcm;rate=24000", "data": base64.b64encode(self._audio).decode()}}]}}]}
 
 
 @pytest.fixture
 def no_audio_tools(monkeypatch):
-    """ffmpeg 없이 돌게 오디오 후처리·길이 측정을 가짜로 바꾸고, 모델 ID 기억도 비운다."""
+    """ffmpeg 없이 돌게 PCM→MP3 변환·후처리·길이 측정을 가짜로 바꾸고, 모델 ID 기억도 비운다."""
+    ffmpeg_calls = []
+
+    def fake_run(cmd, check=False):
+        ffmpeg_calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"MP3")
+
+    monkeypatch.setattr(cv.subprocess, "run", fake_run)
     monkeypatch.setattr(cv, "_deepen_voice", lambda p: p)
     monkeypatch.setattr(cv, "_duration", lambda p: 40.0)
     monkeypatch.setattr(cv, "_gemini_resolved", {})
     monkeypatch.setenv("GOOGLE_TTS_API_KEY", "k")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    return ffmpeg_calls
 
 
 def _args(**kw) -> argparse.Namespace:
@@ -39,13 +49,33 @@ def _args(**kw) -> argparse.Namespace:
     return argparse.Namespace(**base)
 
 
-def test_gemini_payload_sends_plain_normalized_text_not_ssml():
-    body = cv.gemini_payload("수익률은 29.2%였습니다.", "gemini-3.8-flash-tts", "Orus", "calm")
-    assert "ssml" not in body["input"]                      # Gemini-TTS 는 SSML 을 받지 않는다
-    assert body["input"]["prompt"] == "calm"
-    assert "이십구점이퍼센트" in body["input"]["text"]       # tts.py 숫자 정규화는 그대로 적용
-    assert body["voice"] == {"languageCode": "ko-KR", "name": "Orus", "modelName": "gemini-3.8-flash-tts"}
-    assert body["audioConfig"] == {"audioEncoding": "MP3"}
+def test_gemini_payload_is_generate_content_audio_request():
+    body = cv.gemini_payload("수익률은 29.2%였습니다.", "Orus", "calm")
+    prompt = body["contents"][0]["parts"][0]["text"]
+    assert prompt.startswith("### DIRECTOR'S NOTES\ncalm")  # 연출 지시와 대본을 머리표로 나눈다
+    assert "#### TRANSCRIPT\n" in prompt
+    assert "이십구점이퍼센트" in prompt                      # tts.py 숫자 정규화는 그대로 적용
+    assert "<speak>" not in prompt                          # SSML 아님
+    cfg = body["generationConfig"]
+    assert cfg["responseModalities"] == ["AUDIO"]
+    assert cfg["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Orus"
+
+
+def test_gemini_key_prefers_ai_studio_key(monkeypatch):
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", "cloud")
+    monkeypatch.setenv("GEMINI_API_KEY", "studio")
+    assert cv._gemini_key() == "studio"
+    monkeypatch.delenv("GEMINI_API_KEY")
+    assert cv._gemini_key() == "cloud"
+    monkeypatch.delenv("GOOGLE_TTS_API_KEY")
+    with pytest.raises(cv.SynthError):
+        cv._gemini_key()
+
+
+def test_pcm_rate_from_mime():
+    assert cv._pcm_rate("audio/L16;codec=pcm;rate=24000") == 24000
+    assert cv._pcm_rate("audio/L16;rate=16000") == 16000
+    assert cv._pcm_rate("") == 24000
 
 
 def test_gemini_cost_uses_audio_seconds():
@@ -71,12 +101,17 @@ def test_sample_exercises_question_and_haeyo_endings():
     assert "?" in cv.SAMPLE and "죠." in cv.SAMPLE
 
 
-def test_gemini_falls_back_to_preview_model_id_and_remembers_it(monkeypatch, tmp_path, no_audio_tools):
+def _model_of(url: str) -> str:
+    return url.split("/models/")[1].split(":")[0]
+
+
+def test_gemini_falls_back_to_next_model_id_and_remembers_it(monkeypatch, tmp_path, no_audio_tools):
     calls = []
 
-    def post(url, json=None, timeout=None):
-        calls.append(json["voice"]["modelName"])
-        if json["voice"]["modelName"].endswith("-preview"):
+    def post(url, params=None, json=None, timeout=None):
+        calls.append(_model_of(url))
+        assert url.endswith(":generateContent") and params == {"key": "k"}
+        if _model_of(url).endswith("-preview"):
             return _Resp(200)
         return _Resp(404, "Model not found")
 
@@ -85,6 +120,9 @@ def test_gemini_falls_back_to_preview_model_id_and_remembers_it(monkeypatch, tmp
     assert calls == ["gemini-3.8-flash-tts", "gemini-3.8-flash-tts-preview"]
     assert row["voice"] == "gemini-3.8-flash-tts-preview / Orus"
     assert (tmp_path / row["file"]).read_bytes() == b"MP3"
+    cmd = no_audio_tools[0]                           # 머리 없는 PCM 을 16비트·24kHz·모노로 읽어 MP3 로
+    assert cmd[cmd.index("-f") + 1] == "s16le" and cmd[cmd.index("-ar") + 1] == "24000"
+    assert not list(tmp_path.glob("_gemini_*.pcm"))   # 중간 PCM 은 지운다
     # 같은 계열의 다음 후보는 통한 이름으로 바로 간다(헛호출 없음)
     cv.synth_gemini("문장입니다.", "y", ("flash", "Iapetus"), "s", tmp_path, 2)
     assert calls[-1] == "gemini-3.8-flash-tts-preview" and len(calls) == 3
@@ -106,7 +144,7 @@ def test_gemini_permission_error_is_not_retried(monkeypatch, tmp_path, no_audio_
     with pytest.raises(cv.SynthError) as e:
         cv.synth_gemini("문장입니다.", "x", ("flash", "Orus"), "s", tmp_path, 1)
     assert len(calls) == 1                           # 이름을 바꿔도 같은 오류라 재시도하지 않는다
-    assert "PERMISSION_DENIED" in str(e.value) and "권한" in str(e.value)
+    assert "PERMISSION_DENIED" in str(e.value) and "GEMINI_API_KEY" in str(e.value)
 
 
 def test_gemini_model_id_env_override(monkeypatch):
