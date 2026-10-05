@@ -422,6 +422,68 @@ def test_brief_run_catches_scan_abort(tmp_path):
     assert "스캔 중단" in msg
 
 
+# run_daily.sh 4단계가 커스텀 주제 조회에 실패했을 때 남기는 줄.
+_CUSTOM_LOOKUP_FAIL = '{"ts":"2026-09-04T08:31:40+09:00","cli":"run_daily","msg":"custom_topics lookup failed exit=3"}'
+
+
+def test_brief_run_warns_on_custom_lookup_failure_even_when_done(tmp_path):
+    """조회는 done 몇 초 전에 일어나고 재시도 대상도 아니다 — done 이 정상이어도 그날 커스텀
+    주제는 빠진 것이다. done 전에만 보는 실패 마커로는 점검 시각에 이미 안 보인다."""
+    log = tmp_path / "d.log"
+    log.write_text(_CUSTOM_LOOKUP_FAIL + "\n" + _DONE_OK, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "7개" in msg and "커스텀 주제 조회 실패" in msg
+
+
+def test_brief_run_keeps_category_cause_alongside_custom_lookup_failure(tmp_path):
+    log = tmp_path / "d.log"
+    log.write_text(_CUSTOM_LOOKUP_FAIL + "\n" + _DONE_LIMIT, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "세션 한도" in msg and "커스텀 주제 조회 실패" in msg
+
+
+def test_brief_run_am_warns_on_custom_lookup_failure_while_generating(tmp_path):
+    """생성 창 안이라도 조회 실패는 그날 확정이다 — 오전 점검에서 바로 띄운다."""
+    log = tmp_path / "d.log"
+    log.write_text('{"msg":"generate all done"}\n' + _CUSTOM_LOOKUP_FAIL, encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log), mode="am")
+    assert status == "warn"
+    assert "커스텀 주제 조회 실패" in msg
+
+
+_CUSTOM_LOOKUP_OK = '{"ts":"2026-09-04T11:00:12+09:00","cli":"run_daily","msg":"custom_topics lookup ok"}'
+
+
+def test_brief_run_clears_custom_lookup_failure_after_later_success(tmp_path):
+    """같은 날 전체 재실행이 조회에 성공했으면 복구된 것이다 — 하루 종일 경고를 남기지 않는다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([_CUSTOM_LOOKUP_FAIL, _DONE_OK, _CUSTOM_LOOKUP_OK, _DONE_OK]), encoding="utf-8")
+    assert checks.check_brief_run(str(log))[0] == "ok"
+
+
+def test_brief_run_keeps_custom_lookup_failure_after_earlier_success(tmp_path):
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([_CUSTOM_LOOKUP_OK, _DONE_OK, _CUSTOM_LOOKUP_FAIL, _DONE_OK]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn" and "커스텀 주제 조회 실패" in msg
+
+
+def test_brief_run_does_not_read_custom_lookup_init_fail_as_brief_failure(tmp_path):
+    """조회 CLI 의 init_fail(설정 누락)을 "초기화 실패" 로 읽으면 정규 카테고리가 실패한 것처럼 보인다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        '{"msg":"generate all done"}',
+        '{"ts": "2026-09-04T08:31:40+09:00", "cli": "fetch_custom_topics", "status": "init_fail", '
+        '"error": "POPORY_BRIEF_KEY_FILE 또는 POPORY_PORTAL_API_BASE 미설정"}',
+        _CUSTOM_LOOKUP_FAIL,
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log), mode="am")
+    assert status == "warn"
+    assert "커스텀 주제 조회 실패" in msg and "초기화 실패" not in msg
+
+
 def test_brief_run_am_does_not_warn_while_generating(tmp_path):
     """오전 점검은 생성 창(08:00~10:00)과 겹치므로 미완료를 경보하지 않는다."""
     log = tmp_path / "d.log"
