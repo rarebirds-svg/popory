@@ -5,6 +5,7 @@ import { Header, Kicker } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
 import { friendlyError } from "@/lib/content-errors";
+import { elapsedLabel, expectedDuration } from "@/lib/content-status";
 import { DraftEditor } from "./DraftEditor";
 import { AutoRefresh } from "./AutoRefresh";
 import { RetryButton } from "./RetryButton";
@@ -116,8 +117,10 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
           <div className="mt-8 space-y-3">
             <p className="text-sm text-popory-muted">
               {job.status === "queued"
-                ? "대기 중입니다. 워커가 작업을 가져가면 생성을 시작합니다."
-                : "생성 중입니다. 리서치·작성·검토에 보통 2~5분 걸립니다."}
+                ? `대기 중입니다(${elapsedLabel(job.updated_at)}). 워커가 작업을 가져가면 생성을 시작합니다.`
+                : job.platform === "youtube" || job.platform === "shorts"
+                  ? `영상 생성 중입니다(${elapsedLabel(job.updated_at)}). 음성 합성·장면 인코딩까지 ${expectedDuration(job.platform, job.params_json)} 걸립니다.`
+                  : `생성 중입니다(${elapsedLabel(job.updated_at)}). 리서치·작성·검토에 ${expectedDuration(job.platform)} 걸립니다.`}
             </p>
             <AutoRefresh since={job.updated_at} />
           </div>

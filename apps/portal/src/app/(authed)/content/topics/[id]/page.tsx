@@ -5,7 +5,7 @@ import { headers } from "next/headers";
 import { Header, Kicker } from "@popory/ui";
 import { getCurrentUser } from "@/lib/session";
 import { API_BASE } from "@/lib/env";
-import { TONE_CLASS, type Tone } from "@/lib/content-status";
+import { TONE_DOT, TONE_FG, elapsedLabel, expectedDuration, type Tone } from "@/lib/content-status";
 import { StartJobButton } from "./StartJobButton";
 import { TopicAutoRefresh } from "./TopicAutoRefresh";
 import { AddPlatformForm } from "./AddPlatformForm";
@@ -37,6 +37,7 @@ const PLATFORM_LABEL: Record<string, string> = {
   "naver-blog": "네이버 블로그",
   youtube: "유튜브 동영상",
   shorts: "쇼츠 영상",
+  "youtube-post": "유튜브 커뮤니티 글",
   "instagram-image": "인스타 이미지",
 };
 
@@ -50,7 +51,7 @@ function jobStatusInfo(job: JobSlot): { label: string; tone: Tone } {
   switch (job.status) {
     case "idle": return { label: "시작 전", tone: "muted" };
     case "queued": return { label: "생성 대기 중", tone: "yellow" };
-    case "running": return { label: "생성 중…", tone: "blue" };
+    case "running": return { label: "생성 중", tone: "blue" };
     case "review": return { label: "생성 완료 · 검토 필요", tone: "purple" };
     case "done": return { label: "검토 완료", tone: "green" };
     case "failed": return { label: "생성 실패", tone: "red" };
@@ -58,12 +59,32 @@ function jobStatusInfo(job: JobSlot): { label: string; tone: Tone } {
   }
 }
 
-function StatusBadge({ job }: { job: JobSlot }) {
+// 상태는 점 + 글자로만 — 테두리 알약은 아래 이동 버튼과 같은 생김새라 눌리는 것처럼 보였다.
+function StatusText({ job }: { job: JobSlot }) {
   const { label, tone } = jobStatusInfo(job);
   return (
-    <span className={`rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${TONE_CLASS[tone] ?? TONE_CLASS.muted}`}>
+    <span className={`inline-flex items-center gap-1.5 text-xs font-medium whitespace-nowrap ${TONE_FG[tone]}`}>
+      <span aria-hidden className={`inline-block h-2 w-2 rounded-full ${TONE_DOT[tone]}`} />
       {label}
     </span>
+  );
+}
+
+// 카드 하단의 이동 버튼. 진행 중에도 상세 화면(작업 ID·진행 안내)으로 들어갈 수 있어야 한다.
+function JobAction({ job }: { job: JobSlot }) {
+  if (job.status === "idle") return <StartJobButton jobId={job.id} />;
+  const label =
+    job.status === "queued" || job.status === "running" ? "진행 상황 보기"
+    : job.status === "review" ? "검토 · 업로드"
+    : job.status === "failed" ? "실패 원인 보기"
+    : "결과 보기";
+  const tone = job.status === "failed"
+    ? "border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950/40"
+    : "border-popory-border text-popory-fg hover:bg-popory-bg";
+  return (
+    <Link href={`/content/${job.id}`} className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-xs font-medium ${tone}`}>
+      {label} <span aria-hidden>→</span>
+    </Link>
   );
 }
 
@@ -101,38 +122,28 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ id
         {/* 콘텐츠 우선: 유형별 상태를 클릭 없이 한눈에 */}
         <h2 className="mt-8 text-sm font-semibold text-popory-fg">컨텐츠</h2>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          {topic.jobs.map((job) => (
-            <div key={job.id} className="rounded-lg border border-popory-border bg-popory-card p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium text-popory-fg">{PLATFORM_LABEL[job.platform] ?? job.platform}</span>
-                <StatusBadge job={job} />
+          {topic.jobs.map((job) => {
+            const active = job.status === "queued" || job.status === "running";
+            return (
+              <div key={job.id} className="flex flex-col gap-3 rounded-lg border border-popory-border bg-popory-card p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-sm font-medium text-popory-fg">{PLATFORM_LABEL[job.platform] ?? job.platform}</span>
+                  <StatusText job={job} />
+                </div>
+                {active && (
+                  <p className="text-xs text-popory-muted">
+                    {elapsedLabel(job.updated_at)} · {expectedDuration(job.platform, job.params_json)} 걸립니다
+                  </p>
+                )}
+                {job.status === "failed" && (
+                  <p className="truncate text-xs text-red-600 dark:text-red-400">{job.error ?? "원인 미상"}</p>
+                )}
+                <div className="mt-auto">
+                  <JobAction job={job} />
+                </div>
               </div>
-
-              {job.status === "idle" && <StartJobButton jobId={job.id} />}
-
-              {(job.status === "queued" || job.status === "running") && (
-                <div className="flex items-center gap-2 text-xs text-popory-muted">
-                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-popory-accent" />
-                  {job.status === "queued" ? "생성 대기 중…" : "생성 중…"}
-                </div>
-              )}
-
-              {(job.status === "review" || job.status === "done") && (
-                <Link href={`/content/${job.id}`} className="inline-block rounded-md border border-popory-border px-3 py-1.5 text-xs hover:bg-popory-card">
-                  {job.status === "review" ? "검토 · 업로드 →" : "결과 보기 →"}
-                </Link>
-              )}
-
-              {job.status === "failed" && (
-                <div className="space-y-2">
-                  <p className="text-xs text-red-600 truncate">{job.error ?? "원인 미상"}</p>
-                  <Link href={`/content/${job.id}`} className="inline-block rounded-md border border-red-300 px-3 py-1.5 text-xs text-red-700">
-                    상세 보기
-                  </Link>
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* 보조: 이 주제에 콘텐츠 유형 더 추가 */}
