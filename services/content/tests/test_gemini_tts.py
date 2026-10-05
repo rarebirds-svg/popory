@@ -230,3 +230,57 @@ def test_pause_spans_reports_inner_pauses_only():
     pcm = _build([("s", 0.2), ("t", 0.5), ("s", 0.3), ("t", 0.5), ("s", 0.2)])
     spans = g.pause_spans(pcm, 24000, 80)
     assert len(spans) == 1 and spans[0][0] == pytest.approx(0.7, abs=0.02) and spans[0][1] == pytest.approx(1.0, abs=0.02)
+
+
+def _voiced(f0, seconds=3.0, rate=24000, harmonics=20, bright=1.0):
+    """기본 주파수 f0 의 배음 소리(살짝 떨림) + 짧은 쉼 — 목소리 측정 확인용."""
+    a = array("h")
+    ph = 0.0
+    n = int(seconds * rate)
+    for i in range(n):
+        ph += 2 * math.pi * f0 * (1 + 0.02 * math.sin(2 * math.pi * 3 * i / rate)) / rate
+        s = sum((0.6 / h) * bright ** (h / 5) * math.sin(h * ph) for h in range(1, harmonics))
+        a.append(int(7000 * s) if (i // (rate // 2)) % 4 != 3 else 0)
+    return a.tobytes()
+
+
+def test_voice_profile_measures_pitch_within_a_fraction_of_a_semitone():
+    for f0 in (100.0, 125.0, 160.0):
+        prof = g.voice_profile(_voiced(f0), 24000, chars=20)
+        assert abs(g._semitones(prof["f0"] / f0)) < 0.15
+        assert prof["cps"] > 0
+
+
+def test_voice_profile_is_none_for_silence():
+    assert g.voice_profile(b"\x00\x00" * 24000, 24000, 10) is None
+
+
+def test_match_filter_deadzone_pitch_tempo_and_tilt():
+    ref = {"f0": 120.0, "tilt_db": -18.0, "cps": 7.0}
+    assert g.match_filter(ref, dict(ref), 24000) is None                     # 같으면 손대지 않는다
+    assert g.match_filter(ref, {**ref, "f0": 120.5}, 24000) is None          # 0.07반음 — 안 들린다
+    up = g.match_filter(ref, {**ref, "f0": 127.0}, 24000)
+    rate_part, _, rest = up.partition(",aresample=24000,")
+    assert rate_part == f"asetrate={round(24000 * 120 / 127)}"
+    assert rest == f"atempo={127 / 120:.4f}"                                # 피치만 내리고 빠르기는 되돌림
+    faster = g.match_filter(ref, {**ref, "cps": 7.5}, 24000)
+    assert faster == f"atempo={7.0 / 7.5:.4f}"                               # 말이 빠르면 늦춘다
+    assert g.match_filter(ref, {**ref, "tilt_db": -16.0}, 24000) == "treble=g=-2.0:f=1200"
+    # 상한 — 반음 2개·빠르기 8%·밝기 3dB 를 넘겨 비틀지 않는다
+    big = g.match_filter(ref, {"f0": 150.0, "tilt_db": -10.0, "cps": 9.0}, 24000)
+    assert f"asetrate={round(24000 * 2 ** (-2 / 12))}" in big and "treble=g=-3.0" in big
+    # 2차 보정은 밝기만
+    assert g.match_filter(ref, {"f0": 127.0, "tilt_db": -16.0, "cps": 7.5}, 24000, tilt_only=True) == "treble=g=-2.0:f=1200"
+
+
+def test_needs_retry_and_distance():
+    ref = {"f0": 120.0, "tilt_db": -18.0, "cps": 7.0}
+    assert not g.needs_retry(ref, {**ref, "f0": 124.0})                     # 0.57반음
+    assert g.needs_retry(ref, {**ref, "f0": 126.0})                         # 0.84반음
+    assert g.voice_distance(ref, {**ref, "f0": 122.0}) < g.voice_distance(ref, {**ref, "f0": 127.0})
+
+
+def test_head_pcm_takes_leading_share():
+    pcm = bytes(range(200))
+    assert g.head_pcm(pcm, 0.25) == pcm[:50]
+    assert g.head_pcm(pcm, 2.0) == pcm

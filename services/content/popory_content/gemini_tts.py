@@ -402,3 +402,144 @@ def pause_spans(pcm: bytes, rate: int, min_ms: int = 80) -> list[tuple[float, fl
     flags, frame = _quiet_frames(samples, rate)
     return [(a * frame / rate, b * frame / rate) for a, b in _runs(flags, True)
             if (b - a) * FRAME_MS >= min_ms and a > 0 and b < len(flags)]
+
+
+# --- 요청 사이 목소리 맞추기 ---
+# Gemini TTS 는 화자 이름(prebuiltVoiceConfig)만 고정할 뿐 요청마다 소리를 새로 생성한다. 그래서 같은 화자라도
+# 요청이 바뀌면 음높이·밝기·말빠르기가 조금씩 달라진다(롱폼은 출력 상한 때문에 최소 2요청). 첫 장면(챕터 1)의
+# 음높이(F0 중앙값)·밝기(고역 비중)·말빠르기(초당 글자)를 기준으로 재고, 이후 요청의 오디오를 그 값에 맞춘다.
+PROFILE_RATE = 8000          # 분석용으로 낮춘 샘플레이트 — 남성 음성 F0(60~300Hz)를 재기에 충분하다
+F0_MIN, F0_MAX = 60.0, 300.0
+PROFILE_WINDOW_MS = 40
+PROFILE_FRAMES = 160         # 분석할 유성 구간 수 — 순수 파이썬이라 표본으로 잰다(묶음당 수 초)
+VOICED_CORR = 0.5            # 자기상관이 이보다 낮은 창은 무성음·잡음으로 보고 버린다
+MAX_SHIFT_SEMITONES = 2.0    # 보정 상한 — 이보다 크면 보정보다 다시 합성하는 편이 낫다
+MAX_TEMPO = 1.08
+MAX_TILT_DB = 3.0
+TILT_SHELF_HZ = 1200         # 밝기 측정(1차 차분 에너지)이 주로 보는 대역 — 셸프를 여기서 걸어야 측정과 보정이 맞는다
+PITCH_DEADZONE = 0.15        # 반음. 이보다 작은 차이는 들리지 않으므로 손대지 않는다
+TEMPO_DEADZONE = 0.02
+TILT_DEADZONE_DB = 0.5
+# 기준과 이만큼(반음) 넘게 다르면 한 번 더 합성해 가까운 쪽을 쓴다(보정은 작을수록 자연스럽다).
+RETRY_SEMITONES = float(os.environ.get("POPORY_GEMINI_TTS_RETRY_SEMITONES", "0.7"))
+MATCH_RETRIES = int(os.environ.get("POPORY_GEMINI_TTS_MATCH_RETRIES", "1"))
+MATCH_ENABLED = os.environ.get("POPORY_GEMINI_TTS_MATCH", "1") != "0"
+
+
+def _semitones(ratio: float) -> float:
+    return 12 * math.log2(ratio)
+
+
+def _frame_f0(x: list[float], fs: int) -> "float | None":
+    """한 창의 기본 주파수 — 정규화 자기상관 최댓값의 85% 를 넘는 가장 짧은 지연(옥타브 오류 방지)."""
+    lo, hi = int(fs / F0_MAX), int(fs / F0_MIN)
+    n = len(x) - hi
+    if n <= lo:
+        return None
+    e0 = sum(v * v for v in x[:n])
+    if e0 <= 0:
+        return None
+    corr = []
+    for lag in range(lo, hi + 1):
+        seg = x[lag:lag + n]
+        el = sum(v * v for v in seg)
+        c = sum(a * b for a, b in zip(x[:n], seg)) / math.sqrt(e0 * el) if el > 0 else 0.0
+        corr.append(c)
+    best = max(corr)
+    if best < VOICED_CORR:
+        return None
+    pick = corr.index(best)
+    for k in range(1, len(corr) - 1):
+        if corr[k] >= 0.85 * best and corr[k] >= corr[k - 1] and corr[k] >= corr[k + 1]:
+            pick = k
+            break
+    # 포물선 보간으로 지연을 표본 사이까지 — 8kHz 정수 지연만 쓰면 1.5%(0.27반음) 단위로 뭉개진다.
+    shift = 0.0
+    if 0 < pick < len(corr) - 1:
+        a, b, c = corr[pick - 1], corr[pick], corr[pick + 1]
+        den = a - 2 * b + c
+        if den < 0:
+            shift = max(-0.5, min(0.5, 0.5 * (a - c) / den))
+    return fs / (lo + pick + shift)
+
+
+def voice_profile(pcm: bytes, rate: int, chars: int) -> "dict | None":
+    """발화의 음높이(F0 중앙값 Hz)·밝기(1차 차분 에너지 비, dB)·말빠르기(발화 초당 글자)."""
+    samples = array("h")
+    samples.frombytes(pcm[: len(pcm) // 2 * 2])
+    if not samples:
+        return None
+    flags, frame = _quiet_frames(samples, rate)
+    voiced = [k for k, q in enumerate(flags) if not q]
+    if len(voiced) < 20:
+        return None
+    speech_sec = len(voiced) * FRAME_MS / 1000
+    dec = max(1, rate // PROFILE_RATE)
+    fs = rate / dec
+    win = int(rate * PROFILE_WINDOW_MS / 1000)
+    step = max(1, len(voiced) // PROFILE_FRAMES)
+    f0s: list[float] = []
+    hi_e = lo_e = 0.0
+    for k in voiced[::step]:
+        a = k * frame
+        raw = samples[a:a + win]
+        if len(raw) < win:
+            continue
+        # 평균으로 낮춰 받는다(간이 저역 통과 겸 다운샘플).
+        x = [sum(raw[i:i + dec]) / dec for i in range(0, len(raw) - dec + 1, dec)]
+        f0 = _frame_f0(x, int(fs))
+        if f0:
+            f0s.append(f0)
+        lo_e += sum(v * v for v in raw)
+        hi_e += sum((raw[i] - raw[i - 1]) ** 2 for i in range(1, len(raw)))
+    if len(f0s) < 5 or lo_e <= 0 or hi_e <= 0:
+        return None
+    f0s.sort()
+    return {"f0": f0s[len(f0s) // 2], "tilt_db": 10 * math.log10(hi_e / lo_e),
+            "cps": chars / speech_sec if speech_sec else 0.0}
+
+
+def head_pcm(pcm: bytes, share: float) -> bytes:
+    """묶음 오디오의 앞쪽 share 비율(첫 장면 몫) — 기준 목소리를 첫 챕터에서만 재기 위함."""
+    n = len(pcm) // 2
+    return pcm[: max(2, int(n * min(1.0, max(0.0, share)))) * 2]
+
+
+def voice_distance(ref: dict, cur: dict) -> float:
+    """기준과 얼마나 다른지(반음 단위로 환산한 합). 다시 합성한 두 후보 중 가까운 쪽을 고를 때 쓴다."""
+    d = abs(_semitones(cur["f0"] / ref["f0"]))
+    d += abs(cur["tilt_db"] - ref["tilt_db"]) / 3
+    if ref["cps"] and cur["cps"]:
+        d += abs(math.log(cur["cps"] / ref["cps"])) / math.log(1.1)
+    return d
+
+
+def needs_retry(ref: dict, cur: dict) -> bool:
+    return abs(_semitones(cur["f0"] / ref["f0"])) > RETRY_SEMITONES
+
+
+def match_filter(ref: dict, cur: dict, rate: int, tilt_only: bool = False) -> "str | None":
+    """cur 오디오를 ref 목소리에 맞추는 ffmpeg -af. 차이가 들리지 않을 만큼 작으면 None.
+
+    음높이는 asetrate(빠르기도 같이 바뀐다) 뒤 atempo 로 빠르기를 되돌리며, 말빠르기 차이도 그 atempo 에
+    함께 싣는다. 밝기는 고역 셸프로 맞춘다. 보정 폭은 상한으로 묶는다 — 크게 비틀면 그 자체가 어색하다.
+    tilt_only 는 2차 보정용 — 셸프가 잡음 바닥을 올려 발화 길이(말빠르기) 측정이 흔들리므로 밝기만 맞춘다."""
+    st = _semitones(ref["f0"] / cur["f0"])
+    st = max(-MAX_SHIFT_SEMITONES, min(MAX_SHIFT_SEMITONES, st))
+    tempo = 1.0
+    if ref["cps"] and cur["cps"]:
+        tempo = max(1 / MAX_TEMPO, min(MAX_TEMPO, ref["cps"] / cur["cps"]))
+    tilt = max(-MAX_TILT_DB, min(MAX_TILT_DB, ref["tilt_db"] - cur["tilt_db"]))
+    if tilt_only:
+        st, tempo = 0.0, 1.0
+    parts: list[str] = []
+    atempo = tempo if abs(tempo - 1) >= TEMPO_DEADZONE else 1.0
+    if abs(st) >= PITCH_DEADZONE:
+        ratio = 2 ** (st / 12)
+        parts += [f"asetrate={round(rate * ratio)}", f"aresample={rate}"]
+        atempo /= ratio
+    if abs(atempo - 1) >= 0.002:
+        parts.append(f"atempo={atempo:.4f}")
+    if abs(tilt) >= TILT_DEADZONE_DB:
+        parts.append(f"treble=g={tilt:.1f}:f={TILT_SHELF_HZ}")
+    return ",".join(parts) or None
