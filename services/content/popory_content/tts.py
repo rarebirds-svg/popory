@@ -85,6 +85,7 @@ COMMA_BREAK_MS = int(os.environ.get("POPORY_TTS_COMMA_BREAK_MS", "175"))
 # cb48d04 머지에서 한때 VOICE["male"]=Neural2-C 인데 이 값만 1.06으로 남아 어긋났다(PR #5 브랜치가
 # aae6588 보다 먼저 갈라져 나와 섞인 결과). 기본 음성이 Neural2-C 이므로 1.0으로 통일한다.
 # 화자를 Chirp3-HD 계열로 바꾸면 이 값도 1.06으로 함께 올릴 것. POPORY_TTS_SPEAKING_RATE로 튜닝.
+# 기본 남성이 Gemini(말속도 값 없음)가 된 뒤로는 그 폴백인 options.FALLBACK_VOICE(Neural2-C)와 짝을 맞춘다.
 SPEAKING_RATE = float(os.environ.get("POPORY_TTS_SPEAKING_RATE", "1.0"))
 _COMMA = re.compile(r",\s*")
 # 콤마 직전 나열 항목(공백·콤마 아닌 연속 글자) + 콤마 + 뒤 공백.
@@ -264,7 +265,9 @@ def _comma_break(m: "re.Match[str]") -> str:
 
 
 def voice_family(voice_name: str) -> str:
-    """음성 이름에서 계열(Neural2 / Chirp3-HD …). 말속도는 계열과 짝이 맞아야 해서 화면·기록에 같이 쓴다."""
+    """음성 이름에서 계열(Neural2 / Chirp3-HD / Gemini …). 말속도는 계열과 짝이 맞아야 해서 화면·기록에 같이 쓴다."""
+    if voice_name.startswith("gemini-"):
+        return "Gemini"
     for fam in ("Chirp3-HD", "Neural2", "Wavenet", "Standard", "Studio", "Journey"):
         if fam in voice_name:
             return fam

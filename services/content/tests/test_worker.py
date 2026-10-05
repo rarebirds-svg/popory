@@ -206,7 +206,7 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
     assert body["status"] == "review"
     assert callable(captured.get("image_fetcher"))
     assert captured.get("scene_count") == 12
-    assert captured.get("voice") == "ko-KR-Neural2-C"
+    assert captured.get("voice") == "gemini-3.8-flash-tts/Iapetus"   # male 기본 = Gemini Iapetus
     assert "illustration" in captured.get("image_style_kw")
 
 

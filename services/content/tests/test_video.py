@@ -765,7 +765,7 @@ def test_render_video_counts_say_fallback_sentences(monkeypatch, tmp_path):
     scenes = [{"caption": "a", "narration": "정상 문장. X 실패 문장."},
               {"caption": "b", "narration": "또 정상 문장."}]
     video.render_video(scenes, job_id="fbtest", tts_stats=stats)
-    assert stats == {"sentences": 3, "fallback": 1}
+    assert stats == {"sentences": 3, "fallback": 1, "used_voice": "ko-KR-Chirp3-HD-Aoede"}
 
 
 def test_render_video_tts_stats_is_optional(monkeypatch, tmp_path):
@@ -908,3 +908,94 @@ def test_split_existing_rules_unchanged():
     assert _split_sentences("6.25 전쟁은 1950년에 났다. 3.5배 늘었다.") == ["6.25 전쟁은 1950년에 났다.", "3.5배 늘었다."]
     assert _split_sentences("A vs. B 의 대결입니다. 다음.") == ["A vs. B 의 대결입니다.", "다음."]
     assert _split_sentences("") == [] and _split_sentences("  ") == []
+
+
+def _pcm_with_pauses(rate=24000, parts=(0.6, 0.9), pause=0.4):
+    """소리(사인파) 구간 사이에 무음을 둔 16비트 PCM — Gemini 장면 오디오 흉내."""
+    import math
+    from array import array
+    a = array("h")
+    a.extend([0] * int(rate * 0.1))
+    for k, sec in enumerate(parts):
+        a.extend(int(8000 * math.sin(2 * math.pi * 220 * t / rate)) for t in range(int(rate * sec)))
+        a.extend([0] * int(rate * (pause if k < len(parts) - 1 else 0.1)))
+    return a.tobytes()
+
+
+def test_render_video_gemini_voice_synthesizes_per_scene_and_splits(monkeypatch, tmp_path):
+    from popory_content import video, gemini_tts
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    monkeypatch.setattr(gemini_tts, "LEDGER", tmp_path / "ledger.json")
+    calls = []
+    monkeypatch.setattr(gemini_tts, "synthesize_scene",
+                        lambda text, voice: calls.append(text) or (_pcm_with_pauses(), 24000))
+    cloud = []
+    monkeypatch.setattr(video, "synthesize", lambda text, voice=None: cloud.append(voice) or b"AUDIO")
+    stats = {}
+    scenes = [{"caption": "a", "narration": "첫 문장입니다. 두 번째 문장이죠."},
+              {"caption": "b", "narration": "다음 장면 첫 문장. 그리고 끝 문장."}]
+    video.render_video(scenes, job_id="gemini_ok", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert len(calls) == 2                       # 문장별이 아니라 장면당 한 번
+    assert cloud == []                           # Cloud TTS 는 부르지 않는다
+    assert stats["used_voice"] == "gemini-3.8-flash-tts/Iapetus"
+    assert "engine_fallback" not in stats and "split_fallback_scenes" not in stats
+    assert stats["sentences"] == 4
+    work = video.TMP / "video_gemini_ok"
+    assert (work / "g0_0.wav").exists() and (work / "g0_1.wav").exists()   # 무음에서 문장별로 나뉨
+
+
+def test_render_video_gemini_failure_falls_back_for_whole_video(monkeypatch, tmp_path):
+    from popory_content import video, gemini_tts
+    from popory_content.options import FALLBACK_VOICE
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    monkeypatch.setattr(gemini_tts, "LEDGER", tmp_path / "ledger.json")
+    n = {"i": 0}
+
+    def flaky(text, voice):
+        n["i"] += 1
+        if n["i"] == 2:                          # 두 번째 장면에서 실패
+            raise gemini_tts.GeminiTTSError("429 RESOURCE_EXHAUSTED")
+        return _pcm_with_pauses(parts=(0.6,)), 24000
+
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", flaky)
+    cloud = []
+    monkeypatch.setattr(video, "synthesize", lambda text, voice=None: cloud.append(voice) or b"AUDIO")
+    stats = {}
+    scenes = [{"caption": "a", "narration": "하나."}, {"caption": "b", "narration": "둘."}]
+    video.render_video(scenes, job_id="gemini_fail", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert stats["used_voice"] == FALLBACK_VOICE
+    assert "429" in stats["engine_fallback"] and "장면 2" in stats["engine_fallback"]
+    assert cloud == [FALLBACK_VOICE, FALLBACK_VOICE]   # 첫 장면도 무료 음성으로 — 목소리가 섞이지 않는다
+
+
+def test_render_video_gemini_budget_block_skips_api(monkeypatch, tmp_path):
+    from popory_content import video, gemini_tts
+    from popory_content.options import FALLBACK_VOICE
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    monkeypatch.setattr(gemini_tts, "LEDGER", tmp_path / "ledger.json")
+    monkeypatch.setattr(gemini_tts, "MONTHLY_USD_CAP", 0.0)
+    monkeypatch.setattr(gemini_tts, "synthesize_scene",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("상한이면 부르지 않아야 한다")))
+    stats = {}
+    video.render_video([{"caption": "a", "narration": "하나."}, {"caption": "b", "narration": "둘."}], job_id="gemini_cap",
+                       voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert stats["used_voice"] == FALLBACK_VOICE and "월 상한" in stats["engine_fallback"]
+
+
+def test_tts_meta_for_gemini_and_its_fallback():
+    from popory_content import video
+    m = video.tts_meta("gemini-3.8-flash-tts/Iapetus",
+                       {"sentences": 10, "used_voice": "gemini-3.8-flash-tts/Iapetus"})
+    assert m["family"] == "Gemini" and m["speaking_rate"] is None and m["fallback"] is False
+    assert "requested_voice" not in m
+    m = video.tts_meta("gemini-3.8-flash-tts/Iapetus",
+                       {"sentences": 10, "used_voice": "ko-KR-Neural2-C", "engine_fallback": "월 상한 초과 예상"})
+    assert m["voice"] == "ko-KR-Neural2-C" and m["family"] == "Neural2"
+    assert m["requested_voice"] == "gemini-3.8-flash-tts/Iapetus"
+    assert m["fallback"] is True and m["engine_fallback"] == "월 상한 초과 예상"
