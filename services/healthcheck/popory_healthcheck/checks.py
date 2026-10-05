@@ -198,8 +198,12 @@ _CAUSE_MAX = 40
 _BRIEF_DONE = re.compile(
     r'done dry_run=\d+ generated_ok=(\d+) failed=([^\s"]+) limit_fail=([^\s"]+) auth_fail=([^\s"]+)'
 )
-# run_daily.sh 4단계가 커스텀 주제 조회에 실패하면 남기는 줄. 빈 목록(주제 없음)과 구분된다.
+# run_daily.sh 4단계가 커스텀 주제 조회에 실패·성공하면 남기는 줄. 빈 목록(주제 없음)도 성공이다.
 _BRIEF_CUSTOM_LOOKUP_FAIL = "custom_topics lookup failed"
+_BRIEF_CUSTOM_LOOKUP_OK = "custom_topics lookup ok"
+# 커스텀 주제 조회 CLI 의 JSONL. 그 init_fail 은 조회 실패라 위 줄로 따로 띄운다 — 실패 마커로
+# 읽으면 정규 카테고리가 "초기화 실패" 한 것처럼 보인다.
+_CUSTOM_LOOKUP_CLI = '"cli": "fetch_custom_topics"'
 
 
 def _brief_records(text: str) -> list[dict]:
@@ -260,15 +264,15 @@ def check_brief_run(log_path: str, mode: str = "pm") -> tuple[str, str]:
 
     커스텀 주제 조회 실패는 위 판정에 덧붙여 warn 으로 올린다. 조회는 done 몇 초 전에
     일어나고 재시도(--only)가 다시 하지 않으므로, done 이 정상이어도 그날 커스텀 주제는
-    빠진 것이다 — done 전에만 보는 실패 마커로는 점검 시각에 이미 안 보인다. 수동 전체
-    재실행으로 복구한 날도 경고가 남는다(드물고, 복구한 사람이 안다)."""
+    빠진 것이다 — done 전에만 보는 실패 마커로는 점검 시각에 이미 안 보인다. 같은 날
+    전체 재실행이 조회에 성공했으면(마지막 실패 뒤에 성공 줄) 복구된 것으로 본다."""
     try:
         with open(log_path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
         return ("warn", "오늘 브리핑 잡 미기동 — 로그 없음(launchd 로드 여부 확인)")
     status, msg = _brief_run_verdict(text, mode)
-    if _BRIEF_CUSTOM_LOOKUP_FAIL in text:
+    if text.rfind(_BRIEF_CUSTOM_LOOKUP_FAIL) > text.rfind(_BRIEF_CUSTOM_LOOKUP_OK):
         return ("warn", f"{msg} · 커스텀 주제 조회 실패 — 오늘 커스텀 주제 생략")
     return (status, msg)
 
@@ -304,7 +308,8 @@ def _brief_run_verdict(text: str, mode: str) -> tuple[str, str]:
             label = "Gemini 쿼터 초과" if gemini_quota else "Claude 세션 한도"
             return ("warn", f"브리핑 생성 실패 — {label}, 자동 재시도 대기 ({limit})")
         return ("warn", f"브리핑 생성 실패 — {_causes_by_slug(records, failed.split(','))}")
-    hits = [label for marker, label in _BRIEF_FAIL_MARKERS if marker in text]
+    scan = "\n".join(line for line in text.splitlines() if _CUSTOM_LOOKUP_CLI not in line)
+    hits = [label for marker, label in _BRIEF_FAIL_MARKERS if marker in scan]
     # 대체 생성이 걸린 Gemini 실패는 아직 실패가 아니다(claude 가 쓰는 중).
     if any(_GEMINI_FAIL in line and _FALLBACK_FIELD not in line for line in text.splitlines()):
         hits.append("Gemini 호출 실패")

@@ -164,6 +164,9 @@ else
   if [ ${CUSTOM_LOOKUP_EXIT} -ne 0 ]; then
     log "\"custom_topics lookup failed exit=${CUSTOM_LOOKUP_EXIT}\""
     CUSTOM_SLUGS=""
+  else
+    # 성공도 남긴다 — 같은 날 앞선 실패를 전체 재실행으로 복구했는지 헬스체크가 순서로 가른다.
+    log "\"custom_topics lookup ok\""
   fi
 fi
 
