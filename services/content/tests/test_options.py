@@ -23,7 +23,7 @@ def test_bad_json():
 
 def test_maps_cover_keys():
     assert set(SCENE_COUNT) == {"3", "5", "7", "10"}
-    assert VOICE["male"].startswith("ko-KR")
+    assert VOICE["male"].startswith(("ko-KR", "gemini-"))
     assert "watercolor" in STYLE["watercolor"]
 
 
@@ -64,4 +64,4 @@ def test_voice_map_uses_chirp3hd():
     from popory_content.options import VOICE
     assert VOICE["female-calm"] == "ko-KR-Chirp3-HD-Aoede"
     assert VOICE["female-bright"] == "ko-KR-Chirp3-HD-Leda"
-    assert VOICE["male"] == "ko-KR-Neural2-C"
+    assert VOICE["male"] == "gemini-3.8-flash-tts/Iapetus"   # 2026-10-05 사용자가 비교 후 선택

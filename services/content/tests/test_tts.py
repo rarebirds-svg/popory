@@ -330,10 +330,12 @@ def test_speaking_rate_matches_default_voice_family():
     cb48d04 머지에서 options.py 는 Neural2-C, tts.py 는 1.06 으로 갈려 실제 내레이션이
     Neural2-C 를 Chirp3-HD 속도로 읽었다. 한쪽만 바뀌는 재발을 여기서 잡는다.
     """
-    from popory_content.options import VOICE
+    from popory_content.options import FALLBACK_VOICE, VOICE
 
-    expected = 1.06 if "Chirp3-HD" in VOICE["male"] else 1.0
+    # Gemini 는 말속도 값을 받지 않으므로 실제로 이 값을 쓰는 폴백 음성과 짝을 본다.
+    paced = FALLBACK_VOICE if VOICE["male"].startswith("gemini-") else VOICE["male"]
+    expected = 1.06 if "Chirp3-HD" in paced else 1.0
     assert tts.SPEAKING_RATE == expected, (
-        f'VOICE["male"]={VOICE["male"]} 인데 SPEAKING_RATE={tts.SPEAKING_RATE} 다. '
+        f'말속도를 쓰는 남성 음성={paced} 인데 SPEAKING_RATE={tts.SPEAKING_RATE} 다. '
         "화자 계열을 바꿨으면 말속도도 같이 바꿔야 한다."
     )

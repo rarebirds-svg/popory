@@ -37,7 +37,7 @@ def test_snapshot_reflects_live_module_values(monkeypatch):
 def test_voices_defaults_and_lengths_come_from_options():
     c = tts_config.build_tts_config()
     assert {v["key"]: v["name"] for v in c["voices"]} == options.VOICE
-    assert {v["key"]: v["family"] for v in c["voices"]}["male"] == "Neural2"
+    assert {v["key"]: v["family"] for v in c["voices"]}["male"] == "Gemini"
     assert {v["key"]: v["family"] for v in c["voices"]}["female-calm"] == "Chirp3-HD"
     assert c["defaults"]["longform"]["voice"] == options.DEFAULTS["voice"]
     assert "upload_targets" not in c["defaults"]["shorts"]            # TTS 와 무관한 값은 싣지 않는다

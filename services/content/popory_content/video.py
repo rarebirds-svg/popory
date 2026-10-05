@@ -16,7 +16,9 @@ from popory_content.generate import run_claude_cli, model_for
 from popory_content.hook_check import check_hook
 from popory_content.script_review import review_script
 from popory_content.subtitles import scene_offsets, Cue
+from popory_content import gemini_tts
 from popory_content import tts as _tts
+from popory_content.options import FALLBACK_VOICE
 from popory_content.tts import synthesize, spoken_text, voice_family
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
 from popory_content.video_contract import parse_video
@@ -780,11 +782,14 @@ def _deepen_voice(audio: Path) -> Path:
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False,
-                 tts_stats: "dict[str, int] | None" = None) -> tuple[Path, int, int, list[Cue]]:
+                 tts_stats: "dict[str, Any] | None" = None) -> tuple[Path, int, int, list[Cue]]:
     """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → xfade 합산 후 loudnorm 마스터 MP4.
 
     tts_stats 를 주면 합성한 문장 수(sentences)와 Google TTS 가 실패해 macOS say 로 대체한 문장 수
-    (fallback)를 채워 준다. 반환 튜플을 늘리지 않으려고 출력 인자로 받는다(호출부·테스트가 많이 물려 있다)."""
+    (fallback)를 채워 준다. 반환 튜플을 늘리지 않으려고 출력 인자로 받는다(호출부·테스트가 많이 물려 있다).
+    Gemini 음성이면 실제로 쓴 음성(used_voice)과, 무료 음성으로 내려간 이유(engine_fallback)도 채운다."""
+    if tts_stats is None:
+        tts_stats = {}
     if not Path(FONT_PATH).exists():
         raise VideoError(f"한국어 폰트 없음: {FONT_PATH}")
     work = TMP / f"video_{job_id}"
@@ -799,6 +804,14 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     # 스크림은 배경에 굽지 않고 화면에 고정 오버레이한다 — 배경이 패닝으로 밀리기 때문.
     scrim_png = work / "scrim.png"
     _render_scrim_png(scrim_png, portrait=portrait)
+    # Gemini 음성은 장면마다 한 번에 합성해 두고 시작한다. 한 장면이라도 실패하거나 월 상한을 넘을 것 같으면
+    # 영상 전체를 무료 Cloud TTS 음성으로 만든다 — 영상 중간에 목소리가 바뀌는 것보다 낫다.
+    scene_audio = None
+    if gemini_tts.is_gemini_voice(voice):
+        scene_audio = _gemini_scene_audio(scenes, voice, work, tts_stats)
+        if scene_audio is None:
+            voice = FALLBACK_VOICE
+    tts_stats["used_voice"] = voice
     for i, scene in enumerate(scenes):
         caption = str(scene["caption"]).strip()
         narration = str(scene["narration"]).strip() or " "
@@ -827,24 +840,38 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         sentences = _split_sentences(narration) or [narration.strip() or " "]
         seg_audios: list[Path] = []
         seg_durs: list[float] = []
-        for j, sent in enumerate(sentences):
-            seg_bytes = synthesize(sent, voice=voice)
-            if tts_stats is not None:
-                tts_stats["sentences"] = tts_stats.get("sentences", 0) + 1
-            if seg_bytes:
-                seg = work / f"{i}_{j}.mp3"
-                seg.write_bytes(seg_bytes)
-            else:
-                seg = work / f"{i}_{j}.aiff"
-                _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(seg), sent])
-                if tts_stats is not None:
-                    tts_stats["fallback"] = tts_stats.get("fallback", 0) + 1
-            seg = _deepen_voice(seg)  # 묵직한 중저음으로 변형(길이 보존)
-            seg_audios.append(seg)
-            seg_durs.append(_duration(seg))
         audio = work / f"{i}.mp3"
         gaps = _gaps_for(sentences)  # 질문 뒤엔 QUESTION_GAP — 자막 스팬도 같은 리스트를 쓴다
-        _concat_audio_with_gaps(seg_audios, gaps, audio)
+        pre = scene_audio[i] if scene_audio else None
+        tts_stats["sentences"] = tts_stats.get("sentences", 0) + len(sentences)
+        if pre and "segments" in pre:
+            # 장면 단위로 합성한 뒤 무음에서 문장별로 나눈 조각 — 이후는 Cloud TTS 문장별 경로와 같다.
+            seg_audios = [_deepen_voice(p) for p in pre["segments"]]
+            seg_durs = [_duration(p) for p in seg_audios]
+            _concat_audio_with_gaps(seg_audios, gaps, audio)
+        elif pre:
+            # 문장 경계를 못 찾은 장면 — 모델이 낸 호흡 그대로 통째로 쓰고, 자막은 발화량 비례로 나눈다.
+            whole = _deepen_voice(pre["whole"])
+            _run([FFMPEG_BIN, "-y", "-i", str(whole), str(audio)])
+            total = _duration(audio)
+            w = [max(1, x) for x in pre["weights"]]
+            seg_durs = [total * x / sum(w) for x in w]
+            gaps = [0.0] * (len(sentences) - 1)
+        else:
+            for j, sent in enumerate(sentences):
+                # 내레이션이 빈 장면만 여기로 온다면 Gemini 이름을 Cloud TTS 에 보내지 않는다.
+                seg_bytes = synthesize(sent, voice=FALLBACK_VOICE if gemini_tts.is_gemini_voice(voice) else voice)
+                if seg_bytes:
+                    seg = work / f"{i}_{j}.mp3"
+                    seg.write_bytes(seg_bytes)
+                else:
+                    seg = work / f"{i}_{j}.aiff"
+                    _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(seg), sent])
+                    tts_stats["fallback"] = tts_stats.get("fallback", 0) + 1
+                seg = _deepen_voice(seg)  # 묵직한 중저음으로 변형(길이 보존)
+                seg_audios.append(seg)
+                seg_durs.append(_duration(seg))
+            _concat_audio_with_gaps(seg_audios, gaps, audio)
         # 챕터(상단 헤드라인)가 바뀌는 장면 경계엔 문장 사이보다 긴 호흡을 둔다(마지막 장면 뒤엔
         # 불필요). 무음은 클립에 포함되므로 dur·clip_durations에 반영돼 cue 오프셋이 자동 정합.
         # 장면 전환 크로스페이드(XFADE_TD)가 이 무음 끝을 살짝 먹어 실제 정적은 조금 짧게 들린다.
@@ -923,18 +950,70 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     return out, images_missing, images_total, cues
 
 
-def tts_meta(voice: str, stats: "dict[str, int]") -> dict[str, Any]:
+def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
+                        tts_stats: dict[str, Any]) -> "list[dict[str, Any] | None] | None":
+    """모든 장면 내레이션을 Gemini 로 장면 단위 합성해 문장별 WAV 조각으로 나눠 둔다.
+    상한 초과가 예상되거나 한 장면이라도 실패하면 None(영상 전체를 무료 음성으로) — 이유는 tts_stats 에."""
+    texts: list[str] = []
+    weights: list[list[int]] = []
+    for sc in scenes:
+        narration = str(sc["narration"]).strip() or " "
+        spoken = [spoken_text(s) for s in (_split_sentences(narration) or [narration])]
+        texts.append(" ".join(spoken).strip())
+        weights.append([len(s) for s in spoken])
+    reason = gemini_tts.budget_block_reason([t for t in texts if t])
+    if reason:
+        tts_stats["engine_fallback"] = reason
+        return None
+    out: list[dict[str, Any] | None] = []
+    for i, (text, w) in enumerate(zip(texts, weights)):
+        if not text:
+            out.append(None)
+            continue
+        try:
+            pcm, rate = gemini_tts.synthesize_scene(text, voice)
+        except gemini_tts.GeminiTTSError as e:
+            tts_stats["engine_fallback"] = f"장면 {i + 1} 합성 실패 — {e}"
+            return None
+        pieces = gemini_tts.split_sentences(pcm, rate, w)
+        if pieces and len(pieces) == len(w):
+            paths = []
+            for j, piece in enumerate(pieces):
+                path = work / f"g{i}_{j}.wav"
+                gemini_tts.write_wav(piece, rate, path)
+                paths.append(path)
+            out.append({"segments": paths})
+        else:
+            path = work / f"g{i}.wav"
+            gemini_tts.write_wav(pcm, rate, path)
+            out.append({"whole": path, "weights": w})
+            tts_stats["split_fallback_scenes"] = tts_stats.get("split_fallback_scenes", 0) + 1
+    return out
+
+
+def tts_meta(voice: str, stats: "dict[str, Any]") -> dict[str, Any]:
     """영상별 TTS 기록 — 어느 음성·속도로 만들었는지, Google TTS 가 실패해 say 로 대체한 문장이 있는지.
-    기본 음성이 바뀌어도(과거 영상에 무엇이 쓰였는지) 나중에 역추적할 수 있게 job meta 에 남긴다."""
+    기본 음성이 바뀌어도(과거 영상에 무엇이 쓰였는지) 나중에 역추적할 수 있게 job meta 에 남긴다.
+    voice 는 요청한 음성, stats["used_voice"] 는 실제로 쓴 음성(Gemini 가 무료 음성으로 내려갔으면 다르다)."""
     fallback = int(stats.get("fallback", 0))
-    return {
-        "voice": voice,
-        "family": voice_family(voice),
-        "speaking_rate": _tts.SPEAKING_RATE,      # 모듈 속성으로 읽어 합성에 실제 쓰인 값과 같게 한다
+    used = str(stats.get("used_voice") or voice)
+    gemini = gemini_tts.is_gemini_voice(used)
+    meta: dict[str, Any] = {
+        "voice": used,
+        "family": voice_family(used),
+        # Gemini 는 말속도 값을 받지 않는다(연출 지시로 정한다). 모듈 속성으로 읽어 실제 쓰인 값과 같게 한다.
+        "speaking_rate": None if gemini else _tts.SPEAKING_RATE,
         "sentences": int(stats.get("sentences", 0)),
         "fallback_sentences": fallback,
-        "fallback": fallback > 0,
+        "fallback": fallback > 0 or bool(stats.get("engine_fallback")),
     }
+    if used != voice:
+        meta["requested_voice"] = voice
+    if stats.get("engine_fallback"):
+        meta["engine_fallback"] = str(stats["engine_fallback"])
+    if stats.get("split_fallback_scenes"):
+        meta["split_fallback_scenes"] = int(stats["split_fallback_scenes"])
+    return meta
 
 
 def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list[str],
@@ -954,7 +1033,7 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
     # 렌더 전에 오탈자·고유명사 검수(치환만, fail-open). TTS·자막·제목·태그가 모두 이 대본에서
     # 나가므로 여기서 한 번 잡으면 전부 같이 고쳐진다. 결과는 meta 에 남겨 포털에서 볼 수 있게 한다.
     meta["script_review"] = review_script(scenes, meta, job_id=job_id)
-    tts_stats: dict[str, int] = {}
+    tts_stats: dict[str, Any] = {}
     mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice,
                                                      portrait=portrait, tts_stats=tts_stats)
     meta["tts"] = tts_meta(voice, tts_stats)

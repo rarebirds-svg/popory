@@ -4,7 +4,7 @@
 import os
 import datetime
 
-from popory_content import names, options, pronunciation, runtime_info, tts, video
+from popory_content import gemini_tts, names, options, pronunciation, runtime_info, tts, video
 
 # 규칙 설명 + 그 규칙이 드러나는 입력 예시. 결과는 보고 시점에 실제 함수로 계산한다.
 # (라벨, 입력) — 한 입력이 여러 규칙을 건드려도 된다. 새 규칙을 tts.py 에 넣으면 여기에도 한 줄 추가.
@@ -91,6 +91,15 @@ def build_tts_config() -> dict:
             # 키 값은 절대 싣지 않는다. 설정 여부만.
             "api_key_set": bool(os.environ.get("GOOGLE_TTS_API_KEY")),
         },
+        # Gemini 음성(장면 단위 합성) — 과금이라 월 상한과 이번 달 사용액을 같이 보여 준다. 키 값은 싣지 않는다.
+        "gemini": {
+            "provider": "Gemini API (generateContent)",
+            "api_key_set": bool(os.environ.get("GEMINI_API_KEY")),
+            "fallback_voice": options.FALLBACK_VOICE,
+            "style": gemini_tts.STYLE,
+            "price_per_m_output_usd": gemini_tts.price_per_m(),
+            "usage": gemini_tts.usage(),
+        },
         "video_motion": {"rows": _motion_rows()},
         "voices": voices,
         "defaults": {
@@ -103,7 +112,7 @@ def build_tts_config() -> dict:
         },
         "speed": {
             "speaking_rate": _env_info("POPORY_TTS_SPEAKING_RATE", "1.0", tts.SPEAKING_RATE),
-            "note": "1.0 은 Neural2 기준값. Chirp3-HD 계열로 바꾸면 1.06 이 귀 튜닝값이다.",
+            "note": "1.0 은 Neural2 기준값(Gemini 남성의 폴백 음성). Chirp3-HD 는 1.06. Gemini 는 말속도 값을 받지 않는다.",
         },
         "pauses": {
             "comma_break_ms": _env_info("POPORY_TTS_COMMA_BREAK_MS", "175", tts.COMMA_BREAK_MS),
