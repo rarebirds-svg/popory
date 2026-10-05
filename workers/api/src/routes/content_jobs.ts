@@ -364,7 +364,8 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     if (!allowed) return c.text("not found", 404);
     const obj = await c.env.R2.get(`content/video/${id}.mp4`);
     if (!obj) return c.text("not found", 404);
-    return new Response(obj.body, { headers: { "content-type": "video/mp4" } });
+    // 같은 주소로 영상을 덮어쓰므로(재생성·재렌더) 브라우저가 예전 영상을 재사용하지 않게 한다.
+    return new Response(obj.body, { headers: { "content-type": "video/mp4", "cache-control": "private, no-cache" } });
   });
 
   app.put("/api/content/jobs/:id/thumbnail", requireService, async (c) => {

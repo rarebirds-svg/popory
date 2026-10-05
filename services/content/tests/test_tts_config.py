@@ -106,3 +106,15 @@ def test_motion_rows_flag_overrides(monkeypatch):
 def test_snapshot_stays_json_serializable_and_small():
     blob = json.dumps(tts_config.build_tts_config(), ensure_ascii=False)
     assert len(blob.encode()) < 20_000   # API 가 20KB 를 넘기면 스냅샷을 버린다
+
+
+def test_config_reports_gemini_and_subtitle_rows():
+    from popory_content.tts_config import build_tts_config
+    c = build_tts_config()
+    labels = {r["label"]: r for r in c["gemini"]["rows"]}
+    assert labels["요청 사이 목소리 맞추기"]["value"] == "켜짐"
+    assert labels["다시 합성 기준"]["env"] == "POPORY_GEMINI_TTS_RETRY_SEMITONES"
+    assert labels["월 비용 상한"]["value"] == "$9" and not labels["월 비용 상한"]["overridden"]
+    subs = {r["label"]: r for r in c["subtitles"]["rows"]}
+    assert subs["한 줄 길이"]["value"] == "동영상 30자 · 쇼츠 18자"
+    assert any(r["label"] == "이름 이니셜 → 알파벳 이름" and "이 에이치 카는" in r["spoken"] for r in c["normalization"])

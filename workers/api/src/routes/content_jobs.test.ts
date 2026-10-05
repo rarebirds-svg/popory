@@ -372,6 +372,7 @@ describe("video PUT/GET", () => {
     expect(put.status).toBe(200);
     const get = await SELF.fetch(`https://example.com/api/content/jobs/${id}/video`, { headers: { cookie: ck } });
     expect(get.status).toBe(200);
+    expect(get.headers.get("cache-control")).toBe("private, no-cache");   // 덮어쓴 영상을 브라우저가 재사용하지 않게
     expect(new Uint8Array(await get.arrayBuffer())).toEqual(bytes);
   });
 

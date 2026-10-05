@@ -27,6 +27,7 @@ from popory_content.options import parse_options, parse_shorts_options, SCENE_CO
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log
+from popory_content import runtime_info
 from popory_content.usage import cached_claude_usage
 from popory_content.tts_config import build_tts_config
 from popory_content.instagram_image_prompt import build_carousel_system_prompt, build_carousel_user_message
@@ -135,6 +136,7 @@ def run_once(client) -> bool:
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
             )
+            meta["worker_commit"] = runtime_info._short(runtime_info.LOADED_COMMIT)
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
@@ -153,6 +155,7 @@ def run_once(client) -> bool:
                 system_prompt_builder=build_shorts_system_prompt,
                 user_msg_builder=build_shorts_user_message,
             )
+            meta["worker_commit"] = runtime_info._short(runtime_info.LOADED_COMMIT)
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
@@ -255,7 +258,10 @@ def _rerender_video(client, job: dict, draft: str | None, portrait: bool) -> Non
     meta["scenes"] = scene_records(scenes)
     meta["rerender"] = {"at": int(time.time()), "reused_backgrounds": len(backgrounds),
                         "scenes": len(scenes)}
+    # 어느 코드로 렌더했는지 — 고친 뒤 다시 만들었는데 증상이 그대로면 먼저 이 값을 본다(pull·재시작 누락).
+    meta["worker_commit"] = runtime_info._short(runtime_info.LOADED_COMMIT)
     append_log(LOGS_DIR, {"worker": "content", "status": "rerender", "job": job_id,
+                          "commit": meta["worker_commit"],
                           "reused_backgrounds": len(backgrounds), "scenes": len(scenes),
                           "voice": meta["tts"].get("voice")})
     client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")

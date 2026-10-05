@@ -570,8 +570,8 @@ def _wrap_chunks(sentence: str, width: int) -> list[str]:
 
 # 한 문장 안 자막 줄 전환을 실제 숨에 맞출 때: 이보다 긴 무음을 숨으로 보고, 예상 위치에서 이만큼 안쪽만 찾는다.
 SNAP_MIN_PAUSE_MS = 80
-SNAP_LEAD_S = 0.08
-WHOLE_SNAP_MIN_PAUSE_MS = 200   # 장면 통째 오디오에서 문장 경계로 볼 숨(쉼표 숨보다 길다)   # 다음 줄은 말이 다시 시작되기 조금 전에 띄운다
+SNAP_LEAD_S = 0.08   # 다음 줄은 말이 다시 시작되기 조금 전에 띄운다
+WHOLE_SNAP_MIN_PAUSE_MS = 200   # 장면 통째 오디오에서 문장 경계로 볼 숨(쉼표 숨보다 길다)
 
 
 def _decode_pcm(path: Path, rate: int = 24000) -> "bytes | None":

@@ -75,6 +75,46 @@ def _motion_rows() -> list[dict]:
     ]
 
 
+def _row(label, value, default, env, note) -> dict:
+    """화면이 그대로 그리는 문자열 행(모션 표와 같은 형식)."""
+    raw = os.environ.get(env) if env else None
+    return {"label": label, "value": value, "default": default, "env": env,
+            "overridden": raw is not None and value != default, "note": note}
+
+
+def _gemini_rows() -> list[dict]:
+    """Gemini 합성·목소리 맞추기 설정. 값은 워커가 실제로 쓰는 모듈 상수."""
+    g = gemini_tts
+    return [
+        _row("월 비용 상한", f"${g.MONTHLY_USD_CAP:g}", "$9", "POPORY_GEMINI_TTS_MONTHLY_USD",
+             "이번 달 사용액 + 이번 영상 예상액이 이를 넘으면 그 영상 전체를 폴백 음성으로 만든다."),
+        _row("일 요청 상한", f"{g.DAILY_REQUEST_CAP}회", "90회", "POPORY_GEMINI_TTS_DAILY_REQUESTS",
+             "Gemini TTS 는 하루 요청 수 제한이 낮아 장면을 묶어 부른다(롱폼 2~3회·쇼츠 1회)."),
+        _row("한 요청 길이(묶음)", f"{g.CHUNK_SECONDS:g}초", "360초", "POPORY_GEMINI_TTS_CHUNK_SECONDS",
+             "연속한 장면을 이 길이까지 묶어 한 번에 합성한다. 출력 상한은 약 655초."),
+        _row("요청 사이 목소리 맞추기", _on_off(g.MATCH_ENABLED), "켜짐", "POPORY_GEMINI_TTS_MATCH",
+             "Gemini 는 요청마다 소리를 새로 만들어 음높이·밝기·말빠르기가 조금씩 다르다. 첫 챕터를 기준으로 이후 요청을 맞춘다."),
+        _row("다시 합성 기준", f"{g.RETRY_SEMITONES:g}반음", "0.7반음", "POPORY_GEMINI_TTS_RETRY_SEMITONES",
+             "기준보다 음높이가 이만큼 넘게 다르면 한 번 더 합성해 가까운 쪽을 고른 뒤 맞춘다."),
+        _row("다시 합성 횟수", f"{g.MATCH_RETRIES}회", "1회", "POPORY_GEMINI_TTS_MATCH_RETRIES",
+             "요청당 최대 재합성 횟수. 롱폼 1회 약 $0.07."),
+        _row("보정 상한", f"±{g.MAX_SHIFT_SEMITONES:g}반음 · ±{(g.MAX_TEMPO - 1) * 100:.0f}% · ±{g.MAX_TILT_DB:g}dB",
+             "±2반음 · ±8% · ±3dB", None, "음높이·말빠르기·밝기를 이 이상 비틀지 않는다(코드 상수)."),
+    ]
+
+
+def _subtitle_rows() -> list[dict]:
+    """번인 자막 줄바꿈·싱크 설정(코드 상수)."""
+    return [
+        _row("한 줄 길이", f"동영상 {video.SUB_WRAP_LANDSCAPE}자 · 쇼츠 {video.SUB_WRAP_PORTRAIT}자", "동영상 30자 · 쇼츠 18자",
+             None, "번인 자막은 항상 한 줄. 의미 단위(쉼표·연결어미 뒤 우선, 꾸밈말·숫자+단위·의존명사·이름 이니셜은 붙여서)로 끊는다."),
+        _row("줄 전환을 맞추는 숨", f"{video.SNAP_MIN_PAUSE_MS}ms 이상", "80ms 이상", None,
+             "한 문장이 여러 줄이면 다음 줄은 실제 숨에서, 말이 다시 시작되기 0.08초 전에 띄운다."),
+        _row("문장 경계로 보는 숨(통째 오디오)", f"{video.WHOLE_SNAP_MIN_PAUSE_MS}ms 이상", "200ms 이상", None,
+             "문장 분할에 실패해 장면 오디오를 통째로 쓸 때도 자막 경계를 이 길이 이상의 숨에 맞춘다."),
+    ]
+
+
 def build_tts_config() -> dict:
     """어드민 TTS 화면이 그대로 그리는 JSON. 키는 화면과의 계약이라 함부로 바꾸지 않는다."""
     voices = [
@@ -100,7 +140,9 @@ def build_tts_config() -> dict:
             "style": gemini_tts.STYLE,
             "price_per_m_output_usd": gemini_tts.price_per_m(),
             "usage": gemini_tts.usage(),
+            "rows": _gemini_rows(),
         },
+        "subtitles": {"rows": _subtitle_rows()},
         "video_motion": {"rows": _motion_rows()},
         "voices": voices,
         "defaults": {
