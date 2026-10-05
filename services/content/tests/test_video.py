@@ -1072,3 +1072,61 @@ def test_snap_chunk_cuts_lands_on_real_pause(tmp_path):
     gemini_tts.write_wav(a.tobytes(), 24000, wav)
     cuts = video._snap_chunk_cuts(wav, ["가나다라마", "바사라자차"], 2.5)
     assert cuts == pytest.approx([1.9 - video.SNAP_LEAD_S], abs=0.03)
+
+
+def test_render_video_gemini_splits_by_scene_before_resynthesizing(monkeypatch, tmp_path):
+    # 문장 경계를 못 찾아도 장면 경계(긴 숨)는 찾으면 같은 오디오를 장면별로 쓴다 — 다시 합성하면 장면마다
+    # 목소리가 달라진다(2026-10-05 드러커 영상 피드백).
+    from popory_content import video, gemini_tts
+    _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
+    calls = []
+
+    def synth(text, voice):
+        calls.append(text)
+        return _pcm_with_pauses(parts=(2.0, 2.0), pause=0.6), 24000   # 장면 사이 숨 하나뿐
+
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", synth)
+    stats = {}
+    scenes = [{"caption": "a", "narration": "하나입니다. 둘입니다."}, {"caption": "b", "narration": "셋입니다. 넷이죠."}]
+    video.render_video(scenes, job_id="gemini_scene_split", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert len(calls) == 1 and stats["gemini_requests"] == 1
+    assert "rechunked_scenes" not in stats and stats["split_fallback_scenes"] == 2
+    work = video.TMP / "video_gemini_scene_split"
+    assert (work / "g0.wav").exists() and (work / "g1.wav").exists()
+
+
+def test_render_video_gemini_matches_later_requests_to_first_chapter(monkeypatch, tmp_path):
+    from popory_content import video, gemini_tts
+    _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
+    calls = []
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", _fake_gemini(calls))
+    # 요청 순서대로 잰 목소리: 1번(기준) 120Hz, 2번 127Hz(약 1반음 높음 → 다시 합성), 3번 122Hz(가까움 → 채택)
+    f0s = iter([120.0, 127.0, 122.0, 120.0, 120.0])
+    monkeypatch.setattr(gemini_tts, "voice_profile",
+                        lambda pcm, rate, chars: {"f0": next(f0s), "tilt_db": -18.0, "cps": 7.0})
+    applied = []
+    monkeypatch.setattr(video, "_match_voice", lambda pcm, rate, af, work, tag: applied.append(af) or pcm)
+    narration = "가" * 180 + ". " + "나" * 6 + "?"
+    scenes = [{"caption": str(i), "narration": narration} for i in range(17)]
+    stats = {}
+    video.render_video(scenes, job_id="gemini_match", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert len(calls) == 3 and stats["gemini_requests"] == 3      # 2묶음 + 차이가 커서 한 번 더
+    assert calls[1] == calls[2]                                     # 같은 묶음을 다시 뽑았다
+    assert len(applied) == 1 and applied[0].startswith("asetrate=")  # 가까운 쪽(122Hz)을 120Hz 로 내림
+    vm = video.tts_meta("gemini-3.8-flash-tts/Iapetus", stats)["voice_match"]
+    assert vm[0]["reference"] is True and vm[0]["f0"] == 120.0
+    assert vm[1]["retried"] is True and vm[1]["f0"] == 122.0 and vm[1]["after_f0"] == 120.0
+
+
+def test_render_video_gemini_voice_match_can_be_disabled(monkeypatch, tmp_path):
+    from popory_content import video, gemini_tts
+    _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
+    monkeypatch.setattr(gemini_tts, "MATCH_ENABLED", False)
+    calls = []
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", _fake_gemini(calls))
+    monkeypatch.setattr(gemini_tts, "voice_profile", lambda *a: pytest.fail("끄면 재지 않는다"))
+    narration = "가" * 180 + ". " + "나" * 6 + "?"
+    stats = {}
+    video.render_video([{"caption": str(i), "narration": narration} for i in range(17)],
+                       job_id="gemini_nomatch", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert len(calls) == 2 and "voice_match" not in stats

@@ -1,10 +1,12 @@
 # 영상 생성 — claude 대본(generate_scenes) + macOS say + Pillow 텍스트카드 + ffmpeg 슬라이드쇼(render_video).
 import functools
+import math
 import os
 import re
 import shutil
 import subprocess
 import textwrap
+import wave
 import zlib
 from io import BytesIO
 from pathlib import Path
@@ -1061,13 +1063,29 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     return out, images_missing, images_total, cues
 
 
+def _match_voice(pcm: bytes, rate: int, af: str, work: Path, tag: str) -> bytes:
+    """ffmpeg 필터로 목소리를 기준에 맞춘 PCM. 실패하면 원본(맞추지 못해도 영상은 만든다)."""
+    src, dst = work / f"match_{tag}_in.wav", work / f"match_{tag}_out.wav"
+    try:
+        gemini_tts.write_wav(pcm, rate, src)
+        _run([FFMPEG_BIN, "-y", "-i", str(src), "-af", af, "-ar", str(rate), "-ac", "1",
+              "-c:a", "pcm_s16le", str(dst)])
+        with wave.open(str(dst), "rb") as w:
+            return w.readframes(w.getnframes())
+    except Exception:  # noqa: BLE001
+        return pcm
+
+
 def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
                         tts_stats: dict[str, Any]) -> "list[dict[str, Any] | None] | None":
     """장면 내레이션을 Gemini 로 합성해 장면별·문장별 WAV 조각으로 나눠 둔다.
 
-    목소리 톤은 요청마다 미세하게 달라지므로 연속한 장면을 묶어(롱폼 2요청·쇼츠 1요청) 한 번에 합성하고,
+    목소리는 요청마다 미세하게 달라지므로(화자 이름만 고정되고 소리는 매번 새로 생성된다) 연속한 장면을 묶어
+    (롱폼 2요청·쇼츠 1요청) 한 번에 합성하고, 둘째 요청부터는 첫 장면(챕터 1)의 음높이·밝기·말빠르기에 맞춘다
+    (gemini_tts.match_filter). 차이가 크면 한 번 더 합성해 가까운 쪽을 고른 뒤 맞춘다.
     묶음 오디오의 숨에서 문장 경계를 되찾아 장면별로 나눈다. 장면 사이는 빈 줄로 넘겨 모델이 문단 호흡을 둔다.
-    한 묶음의 경계를 확신하지 못하면 그 묶음만 장면 단위로 다시 합성한다.
+    문장 경계를 못 믿겠으면 같은 오디오를 장면 경계(긴 숨)로 먼저 나누고 장면 안에서 다시 시도한다 —
+    예전엔 장면마다 다시 합성해 챕터마다 목소리가 달라졌다. 그래도 안 될 때만 그 장면을 따로 합성한다.
     상한 초과가 예상되거나 합성이 실패하면 None(영상 전체를 무료 음성으로) — 이유는 tts_stats 에."""
     texts: list[str] = []
     weights: list[list[int]] = []
@@ -1084,6 +1102,9 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
         tts_stats["engine_fallback"] = reason
         return None
     out: list[dict[str, Any] | None] = [None] * len(scenes)
+    ref: "dict[str, Any] | None" = None
+    matches: list[dict[str, Any]] = []
+    requests_made = 0
 
     def save(i: int, pieces: "list[bytes]", rate: int) -> None:
         paths = []
@@ -1093,9 +1114,63 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
             paths.append(path)
         out[i] = {"segments": paths}
 
+    def save_whole(i: int, pcm: bytes, rate: int) -> None:
+        whole = gemini_tts.split_sentences(pcm, rate, [sum(weights[i])])
+        path = work / f"g{i}.wav"
+        gemini_tts.write_wav(whole[0] if whole else pcm, rate, path)
+        out[i] = {"whole": path, "weights": weights[i]}
+        tts_stats["split_fallback_scenes"] = tts_stats.get("split_fallback_scenes", 0) + 1
+
+    def synth(grp: list[int]) -> tuple[bytes, int]:
+        """한 요청 합성 + 첫 챕터 목소리에 맞추기."""
+        nonlocal ref, requests_made
+        text = "\n\n".join(texts[i] for i in grp)
+        chars = sum(sum(weights[i]) for i in grp)
+        pcm, rate = gemini_tts.synthesize_scene(text, voice)
+        requests_made += 1
+        if not gemini_tts.MATCH_ENABLED:
+            return pcm, rate
+        if ref is None:
+            # 기준 = 첫 장면(챕터 1). 묶음 앞쪽에서 첫 장면 글자 몫만큼만 잰다.
+            first = sum(weights[grp[0]])
+            ref = gemini_tts.voice_profile(gemini_tts.head_pcm(pcm, first / max(1, chars)), rate, first)
+            if ref is not None:
+                matches.append({"request": requests_made, "reference": True, "f0": round(ref["f0"], 1)})
+            return pcm, rate
+        prof = gemini_tts.voice_profile(pcm, rate, chars)
+        if prof is None:
+            return pcm, rate
+        retried = False
+        for _ in range(gemini_tts.MATCH_RETRIES):
+            if not gemini_tts.needs_retry(ref, prof):
+                break
+            try:
+                pcm2, rate2 = gemini_tts.synthesize_scene(text, voice)
+            except gemini_tts.GeminiTTSError:
+                break  # 다시 뽑기는 덤 — 실패해도 첫 결과를 맞춰 쓴다
+            requests_made += 1
+            retried = True
+            prof2 = gemini_tts.voice_profile(pcm2, rate2, chars)
+            if prof2 and gemini_tts.voice_distance(ref, prof2) < gemini_tts.voice_distance(ref, prof):
+                pcm, rate, prof = pcm2, rate2, prof2
+        record: dict[str, Any] = {"request": requests_made, "f0": round(prof["f0"], 1),
+                                  "shift_semitones": round(12 * math.log2(ref["f0"] / prof["f0"]), 2),
+                                  "retried": retried, "filters": []}
+        # 셸프 한 번으로는 밝기 차이가 7할 정도만 맞는다 — 다시 재서 남은 차이를 한 번 더 맞춘다.
+        for k in range(2):
+            af = gemini_tts.match_filter(ref, prof, rate, tilt_only=k > 0)
+            if not af:
+                break
+            pcm = _match_voice(pcm, rate, af, work, f"{requests_made}_{k}")
+            record["filters"].append(af)
+            prof = gemini_tts.voice_profile(pcm, rate, chars) or prof
+        record["after_f0"] = round(prof["f0"], 1)
+        matches.append(record)
+        return pcm, rate
+
     try:
         for grp in chunks:
-            pcm, rate = gemini_tts.synthesize_scene("\n\n".join(texts[i] for i in grp), voice)
+            pcm, rate = synth(grp)
             flat = [w for i in grp for w in weights[i]]
             ends, acc = set(), 0
             for i in grp[:-1]:
@@ -1108,23 +1183,33 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
                     save(i, pieces[pos:pos + len(weights[i])], rate)
                     pos += len(weights[i])
                 continue
-            # 묶음 경계를 못 믿겠으면 장면 단위로 다시 — 그래도 안 되면 장면 통째 + 발화량 비례 자막
+            # 문장 경계를 못 믿겠으면 같은 오디오를 장면 경계(문단의 긴 숨)로 먼저 나눈다 — 다시 합성하지 않는다.
+            scene_parts = (gemini_tts.split_sentences(pcm, rate, [sum(weights[i]) for i in grp],
+                                                      set(range(len(grp) - 1)))
+                           if len(grp) > 1 else [pcm])
+            if scene_parts and len(scene_parts) == len(grp):
+                for i, part in zip(grp, scene_parts):
+                    sent = gemini_tts.split_sentences(part, rate, weights[i])
+                    if sent and len(sent) == len(weights[i]):
+                        save(i, sent, rate)
+                    else:
+                        save_whole(i, part, rate)
+                continue
+            # 장면 경계도 못 찾으면 장면 단위로 다시 합성한다(이때도 첫 챕터 목소리에 맞춘다).
             tts_stats["rechunked_scenes"] = tts_stats.get("rechunked_scenes", 0) + len(grp)
             for i in grp:
-                pcm, rate = gemini_tts.synthesize_scene(texts[i], voice)
+                pcm, rate = synth([i])
                 pieces = gemini_tts.split_sentences(pcm, rate, weights[i])
                 if pieces and len(pieces) == len(weights[i]):
                     save(i, pieces, rate)
-                    continue
-                whole = gemini_tts.split_sentences(pcm, rate, [sum(weights[i])])
-                path = work / f"g{i}.wav"
-                gemini_tts.write_wav(whole[0] if whole else pcm, rate, path)
-                out[i] = {"whole": path, "weights": weights[i]}
-                tts_stats["split_fallback_scenes"] = tts_stats.get("split_fallback_scenes", 0) + 1
+                else:
+                    save_whole(i, pcm, rate)
     except gemini_tts.GeminiTTSError as e:
         tts_stats["engine_fallback"] = f"합성 실패 — {e}"
         return None
-    tts_stats["gemini_requests"] = len(chunks) + tts_stats.get("rechunked_scenes", 0)
+    tts_stats["gemini_requests"] = requests_made
+    if matches:
+        tts_stats["voice_match"] = matches
     return out
 
 
@@ -1151,6 +1236,8 @@ def tts_meta(voice: str, stats: "dict[str, Any]") -> dict[str, Any]:
     for key in ("split_fallback_scenes", "rechunked_scenes", "gemini_requests"):
         if stats.get(key):
             meta[key] = int(stats[key])
+    if stats.get("voice_match"):
+        meta["voice_match"] = stats["voice_match"]
     return meta
 
 
