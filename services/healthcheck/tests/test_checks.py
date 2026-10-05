@@ -422,6 +422,49 @@ def test_brief_run_catches_scan_abort(tmp_path):
     assert "스캔 중단" in msg
 
 
+def _done(**kw) -> str:
+    f = {"generated_ok": 7, "failed": "none", "limit_fail": "none", "auth_fail": "none", **kw}
+    tail = " ".join(f"{k}={v}" for k, v in f.items())
+    return '{"ts":"2026-10-05T09:40:00+09:00","cli":"run_daily","msg":"done dry_run=0 ' + tail + '"}'
+
+
+def test_brief_run_warns_on_publish_failure_even_when_generation_ok(tmp_path):
+    """메일이 꺼진 뒤로 포털 발행이 유일한 전달 경로다 — 생성 성공만 보고 ok 를 주면 안 된다."""
+    log = tmp_path / "d.log"
+    log.write_text(_done(publish_fail="naver,realestate"), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "포털 발행 실패" in msg and "naver,realestate" in msg
+
+
+def test_brief_run_ok_when_publish_fail_none(tmp_path):
+    log = tmp_path / "d.log"
+    log.write_text(_done(publish_fail="none"), encoding="utf-8")
+    assert checks.check_brief_run(str(log))[0] == "ok"
+
+
+def test_brief_run_publish_failure_cleared_by_later_retry(tmp_path):
+    """재시도가 재발행에 성공하면 마지막 done 이 publish_fail=none 이다."""
+    log = tmp_path / "d.log"
+    log.write_text(_done(publish_fail="naver") + "\n" + _done(generated_ok=1, publish_fail="none"), encoding="utf-8")
+    assert checks.check_brief_run(str(log))[0] == "ok"
+
+
+def test_brief_run_keeps_generation_cause_alongside_publish_failure(tmp_path):
+    log = tmp_path / "d.log"
+    log.write_text(_done(generated_ok=6, failed="geopolitics", publish_fail="naver"), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "geopolitics" in msg and "포털 발행 실패 — naver" in msg
+
+
+def test_brief_run_reads_done_line_without_publish_field(tmp_path):
+    """2026-10 전 로그(publish_fail 없음)도 그대로 읽는다."""
+    log = tmp_path / "d.log"
+    log.write_text(_DONE_OK, encoding="utf-8")
+    assert checks.check_brief_run(str(log))[0] == "ok"
+
+
 # run_daily.sh 4단계가 커스텀 주제 조회에 실패했을 때 남기는 줄.
 _CUSTOM_LOOKUP_FAIL = '{"ts":"2026-09-04T08:31:40+09:00","cli":"run_daily","msg":"custom_topics lookup failed exit=3"}'
 

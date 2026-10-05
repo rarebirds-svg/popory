@@ -92,6 +92,22 @@ describe("admin_brief_categories", () => {
     expect(body.items[0]).toMatchObject({ slug: "realestate", name: "부동산", delivery_mode: "standalone", enabled: true });
   });
 
+  it("GET 목록 — frontmatter 를 못 읽으면 delivery_mode 를 지어내지 않고 unknown", async () => {
+    mockGithub({
+      "contents/services/brief/categories?ref=main": () =>
+        Response.json([
+          { type: "dir", name: "broken", path: "services/brief/categories/broken", sha: "d1" },
+        ]),
+      "contents/services/brief/categories/broken/SKILL.md?ref=main": () =>
+        Response.json({ content: btoa(unescape(encodeURIComponent("---\nslug: broken\n---\n\n본문\n"))), sha: "f1", path: "services/brief/categories/broken/SKILL.md" }),
+    });
+    const ck = await makeAdminCookie();
+    const res = await SELF.fetch("https://example.com/api/admin/brief-categories", { headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const body = await res.json<{ items: Array<{ slug: string; delivery_mode: string; enabled: boolean }> }>();
+    expect(body.items[0]).toMatchObject({ slug: "broken", delivery_mode: "unknown", enabled: false });
+  });
+
   it("GET 단건 — frontmatter + body + sha", async () => {
     mockGithub({
       "contents/services/brief/categories/realestate/SKILL.md?ref=main": () =>

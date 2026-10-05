@@ -198,6 +198,8 @@ _CAUSE_MAX = 40
 _BRIEF_DONE = re.compile(
     r'done dry_run=\d+ generated_ok=(\d+) failed=([^\s"]+) limit_fail=([^\s"]+) auth_fail=([^\s"]+)'
 )
+# done 줄 끝의 포털 발행 실패 목록. 2026-10 전 로그에는 없다.
+_BRIEF_DONE_PUBLISH = re.compile(r'done dry_run=.* publish_fail=([^\s"]+)')
 # run_daily.sh 4단계가 커스텀 주제 조회에 실패·성공하면 남기는 줄. 빈 목록(주제 없음)도 성공이다.
 _BRIEF_CUSTOM_LOOKUP_FAIL = "custom_topics lookup failed"
 _BRIEF_CUSTOM_LOOKUP_OK = "custom_topics lookup ok"
@@ -271,13 +273,27 @@ def check_brief_run(log_path: str, mode: str = "pm", token_mode: bool = False) -
             text = f.read()
     except OSError:
         return ("warn", "오늘 브리핑 잡 미기동 — 로그 없음(launchd 로드 여부 확인)")
-    status, msg = _brief_run_verdict(text, mode)
+    status, msg = _brief_run_verdict(text, mode, token_mode)
+    # 메일이 꺼진 뒤로 포털 발행이 유일한 전달 경로다 — 생성이 다 됐어도 발행이 안 됐으면 경고.
+    pub = _last_publish_fail(text)
+    if pub:
+        note = f"포털 발행 실패 — {pub}, 생성본으로 자동 재발행 대기"
+        status, msg = ("warn", note) if status == "ok" else ("warn", f"{msg} · {note}")
     if text.rfind(_BRIEF_CUSTOM_LOOKUP_FAIL) > text.rfind(_BRIEF_CUSTOM_LOOKUP_OK):
         return ("warn", f"{msg} · 커스텀 주제 조회 실패 — 오늘 커스텀 주제 생략")
     return (status, msg)
 
 
-def _brief_run_verdict(text: str, mode: str) -> tuple[str, str]:
+def _last_publish_fail(text: str) -> str:
+    """마지막 done 줄의 publish_fail 목록. 없거나 none 이면 빈 문자열."""
+    done_lines = [line for line in text.splitlines() if "done dry_run=" in line]
+    if not done_lines:
+        return ""
+    m = _BRIEF_DONE_PUBLISH.search(done_lines[-1])
+    return m.group(1) if m and m.group(1) != "none" else ""
+
+
+def _brief_run_verdict(text: str, mode: str, token_mode: bool = False) -> tuple[str, str]:
     records = _brief_records(text)
     dones = _BRIEF_DONE.findall(text)
     if dones:

@@ -1,7 +1,7 @@
 <!-- services/brief: routine과 portal 사이의 메일 발송·publish 다리. 운영 가이드. -->
 # services/brief
 
-routine이 만든 부동산 이슈 브리핑 Markdown을 받아 (a) 구독자에게 메일 발송하고 (b) portal 공개 아카이브에 publish 한다. daily-brief 자산을 monorepo 안으로 흡수한 결과물.
+routine이 만든 부동산 이슈 브리핑 Markdown을 받아 (a) portal 공개 아카이브에 publish 하고 (b) 메일 스위치가 켜져 있으면 구독자에게 발송한다(2026-10 부터 기본 꺼짐, §2). daily-brief 자산을 monorepo 안으로 흡수한 결과물.
 
 설계. `../../docs/superpowers/specs/2026-05-28-popory-f1-brief-design.md`
 플랜. `../../docs/superpowers/plans/2026-05-28-popory-f1-brief.md`
@@ -49,6 +49,27 @@ POPORY_PORTAL_API_BASE=https://api.poporyfamily.com
 # Gemini 모델을 쓸 때만 필요 (claude 모델만 쓰면 없어도 된다).
 GEMINI_API_KEY=...
 ```
+
+### 메일 발송 스위치 (`BRIEF_MAIL_ENABLED`)
+
+2026-10 부터 브리핑은 포털 발행만 하고 메일은 보내지 않는다. 카테고리마다 `delivery_mode:
+portal_only` 로 돌려 두었지만, 그것만으로는 새 카테고리·SKILL.md 편집 하나로 메일이 다시
+나간다. 그래서 `run_daily.sh` 의 발송 단계(standalone·bundled) 자체를 이 스위치로 막는다.
+
+| 값 | 동작 |
+|----|------|
+| 미설정·`0` (기본) | 발송 단계를 건너뛴다. 메일 모드로 남은 카테고리가 있으면 `mail disabled … standalone=N bundled=M` 을 로그에 남긴다 |
+| `1` | 예전처럼 카테고리의 `delivery_mode` 대로 보낸다 (`portal_only` 는 여전히 안 보낸다) |
+
+메일을 다시 켜려면 `secrets/portal_endpoints.env` 에 `BRIEF_MAIL_ENABLED=1` 을 넣는다.
+
+### 포털 발행 실패 재시도
+
+메일이 꺼진 뒤로 포털 발행이 유일한 전달 경로다. `publish_to_portal.py` 가 실패하면
+`run_daily.sh` 가 그 카테고리를 `done … publish_fail=<slug>` 로 남기고 pending 에 올린다.
+재시도는 `BRIEF_PUBLISH_RETRY_DELAY`(기본 1800초) 뒤에 돌고, 생성은 다시 하지 않는다 —
+`/tmp/brief_pubfail_{slug}_{date}` 마커가 있으면 그날 생성본을 그대로 다시 발행한다.
+재시도 횟수(6회)를 다 쓰면 포기하고, 헬스체크가 "포털 발행 실패" 경고와 미발행 경보로 알린다.
 
 Gemini 키는 env 대신 `secrets/gemini_api_key` 파일로 둬도 된다. env 가 우선이고, 없으면 그
 파일을 읽는다 — content-worker 가 `generic_brief.py` 를 부를 때는 env 가 안 실리므로 파일

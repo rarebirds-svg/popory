@@ -73,7 +73,9 @@ export function mountAdminBriefCategories(app: Hono<{ Bindings: Env; Variables: 
           return {
             slug: d.name,
             name: parsed.fields?.name ?? d.name,
-            delivery_mode: parsed.fields?.delivery_mode ?? "bundled",
+            // frontmatter 를 못 읽으면 모드를 지어내지 않는다 — "bundled" 로 보이면 메일이 나가는
+            // 카테고리로 오해한다(2026-10 전 카테고리 portal_only 전환 후).
+            delivery_mode: parsed.fields?.delivery_mode ?? "unknown",
             enabled: parsed.fields?.enabled ?? false,
             sha: file.sha,
           };

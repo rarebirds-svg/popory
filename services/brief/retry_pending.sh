@@ -1,5 +1,5 @@
 #!/bin/bash
-# 세션 한도(exit 6)로 실패한 브리프 항목을 리셋 시각 이후 자동 재시도하는 launchd 진입점.
+# 한도(exit 6)·인증·포털 발행 실패로 남은 브리프 항목을 재시도 시각 이후 자동 재시도하는 launchd 진입점.
 
 set -u
 
@@ -110,7 +110,8 @@ REMAIN_CATS=""
 REMAIN_CUS=""
 AUTH_FAILED=0   # 인증 실패로 끝난 재시도 — pending 은 유지하되 retry_count 는 태우지 않는다
 
-# 1) 카테고리 재시도 — run_daily --only 정규식 1회 (bundled 보강 묶음 + standalone 자동)
+# 1) 카테고리 재시도 — run_daily --only 정규식 1회. 발행만 실패했던 카테고리는 run_daily 가
+#    생성본을 재사용해 다시 발행한다(pubfail 마커).
 if [ "${CATS}" != "-" ]; then
   REGEX=$(echo "${CATS}" | sed 's/,/|/g')
   OUT=$(bash "${BRIEF_DIR}/run_daily.sh" --now --only="(${REGEX})" "${DATE_OPT[@]}" 2>>"${LOG_FILE}")
@@ -140,6 +141,12 @@ if [ "${CATS}" != "-" ]; then
   if [ -n "${AUTH_CATS}" ]; then
     AUTH_FAILED=1
     REMAIN_CATS="${REMAIN_CATS:+${REMAIN_CATS},}${AUTH_CATS}"
+  fi
+  # 포털 발행 실패분 — 재시도해도 발행이 안 되면 남긴다. 횟수는 소모한다(401 처럼 사람이 고쳐야
+  # 하는 원인이면 MAX_RETRY 뒤 포기하고, 헬스체크의 미발행 경보가 사람을 부른다).
+  PUB_CATS=$(echo "${OUT}" | grep -o '__RUN_PUBLISH_FAIL_CATS__=.*' | head -1 | cut -d= -f2-)
+  if [ -n "${PUB_CATS}" ]; then
+    REMAIN_CATS="${REMAIN_CATS:+${REMAIN_CATS},}${PUB_CATS}"
   fi
   R=$(echo "${OUT}" | grep -o '__RUN_LIMIT_RESET__=[0-9]*' | head -1 | cut -d= -f2)
   [ -n "${R}" ] && [ "${R}" -gt "${NEW_RESET}" ] && NEW_RESET=${R}
