@@ -1,10 +1,16 @@
 #!/bin/bash
-# 매일 KST 08:00 launchd가 호출하는 entry script. 활성 카테고리 전부 generate·publish·발송.
+# 매일 KST 08:00 launchd가 호출하는 entry script. 활성 카테고리 전부 generate·포털 publish.
+# 메일 발송(4·5단계)은 BRIEF_MAIL_ENABLED=1 일 때만 돈다 — 2026-10 부터 꺼 둔 상태가 기본이다.
 
 set -u  # 미정의 변수 사용 시 즉시 실패. set -e는 안 씀 — 각 단계 결과를 개별 분기.
 
-BRIEF_DIR=/Users/daegong/projects/popory/services/brief
-VENV_PY=${BRIEF_DIR}/.venv/bin/python
+# 경로는 테스트가 env 로 바꿔 끼운다. 운영(launchd)은 기본값 그대로다.
+BRIEF_DIR=${BRIEF_DIR:-/Users/daegong/projects/popory/services/brief}
+VENV_PY=${BRIEF_VENV_PY:-${BRIEF_DIR}/.venv/bin/python}
+PENDING_DIR=${BRIEF_PENDING_DIR:-/tmp}
+# 포털 발행 실패 시 재시도까지 기다리는 시간(초). 401·5xx 는 금방 안 풀리는 경우가 많아
+# retry 잡의 10분 폴링마다 다시 두드리지 않게 한다.
+PUBLISH_RETRY_DELAY=${BRIEF_PUBLISH_RETRY_DELAY:-1800}
 
 DRY_RUN=0
 NOW=0
@@ -41,6 +47,11 @@ log() {
   echo "{\"ts\":\"$(TZ=Asia/Seoul date +%Y-%m-%dT%H:%M:%S+09:00)\",\"cli\":\"run_daily\",\"msg\":$1}" >> "${LOG_FILE}"
 }
 
+# 발행만 실패한 카테고리 표시 — 생성본(/tmp/brief_{slug}_{date}.md)과 같은 날짜로 묶인다.
+pubfail_marker() {
+  echo "/tmp/brief_pubfail_${1}_${DATE}"
+}
+
 # 08:00 기동 후 0~120분 랜덤 대기 → 실제 generate 시작이 08:00~10:00 사이에 분산됨
 # dry-run 또는 --now 시에는 대기 없이 즉시 실행
 if [ ${DRY_RUN} -eq 0 ] && [ ${NOW} -eq 0 ]; then
@@ -67,6 +78,12 @@ set -a
 # shellcheck disable=SC1091
 source "${BRIEF_DIR}/secrets/portal_endpoints.env"
 set +a
+
+# 메일 발송 스위치. 카테고리별 delivery_mode 만으로 막으면 새 카테고리(폼 기본값)·SKILL.md 편집
+# 실수 하나로 메일이 다시 나간다 — 발송 단계 자체를 여기서 한 번에 끈다. 다시 켜려면
+# portal_endpoints.env 에 BRIEF_MAIL_ENABLED=1 을 넣는다(그래도 portal_only 카테고리는 안 보낸다).
+MAIL_ENABLED=0
+[ "${BRIEF_MAIL_ENABLED:-0}" = "1" ] && MAIL_ENABLED=1
 
 # 장기 OAuth 토큰(설치돼 있으면)을 주입한다 — claude CLI 가 keychain 로그인보다 우선해 쓴다.
 if [ -f "${BRIEF_DIR}/../healthcheck/claude_token.sh" ]; then
@@ -116,6 +133,7 @@ LIMIT_FAIL_CUSTOM=""    # 한도로 실패한 커스텀 주제 id
 AUTH_FAIL_SLUGS=""      # LLM 인증 실패로 막힌 카테고리 — 사람이 고친 뒤 자동 재시도 대상
 AUTH_FAIL_PROVIDER=""   # 무엇을 고쳐야 하는지(claude=/login, gemini=API 키) — 알림 문구를 가른다
 LIMIT_RESET_MAX=0       # 수집한 reset epoch 중 최대값
+PUB_FAIL_SLUGS=""       # 생성은 됐는데 포털 발행이 실패한 카테고리 — 생성본으로 재발행 대상
 
 # 카테고리 목록을 배열로 적재
 while IFS=' ' read -r SLUG MODE; do
@@ -132,6 +150,16 @@ while [ $i -lt $CAT_TOTAL ]; do
   j=$i
   while [ $j -lt $CHUNK_END ]; do
     SLUG=${ALL_SLUGS[$j]}
+    # 앞선 실행에서 생성은 됐는데 발행만 실패한 카테고리는 그 생성본을 다시 발행한다. 다시 생성하면
+    # LLM 사용량을 또 쓰고, 발행 실패(401·5xx)는 생성과 무관해 새 본문이 필요 없다.
+    if [ -f "$(pubfail_marker "${SLUG}")" ] && [ -f "/tmp/brief_${SLUG}_${DATE}.md" ] \
+       && [ -f "/tmp/brief_${SLUG}_${DATE}.meta.json" ]; then
+      log "\"republish only category=${SLUG} — 생성본 재사용\""
+      : > "/tmp/brief_stdout_${SLUG}_${DATE}.tmp"
+      echo 0 > "/tmp/brief_exit_${SLUG}_${DATE}.tmp"
+      j=$((j + 1))
+      continue
+    fi
     (
       OUT=$("${VENV_PY}" "${BRIEF_DIR}/generate_brief.py" --category "${SLUG}" "${DATE_OPT[@]}" 2>&1)
       EXIT=$?
@@ -288,6 +316,14 @@ while IFS=' ' read -r SLUG MODE; do
     PUB_EXIT=$?
     echo "${PUB_OUT}" >> "${LOG_FILE}"
     log "\"publish exit=${PUB_EXIT} category=${SLUG}\""
+    # 메일이 꺼진 뒤로 포털 발행이 유일한 전달 경로다. 실패를 로그에만 남기면 done 이 failed=none
+    # 으로 끝나 pending·재시도 없이 그날 브리핑이 빠진다 — 따로 세어 재시도에 올린다.
+    if [ ${PUB_EXIT} -ne 0 ]; then
+      PUB_FAIL_SLUGS="${PUB_FAIL_SLUGS}${SLUG},"
+      touch "$(pubfail_marker "${SLUG}")"
+    else
+      rm -f "$(pubfail_marker "${SLUG}")"
+    fi
   else
     log "\"DRY publish category=${SLUG}\""
   fi
@@ -299,9 +335,14 @@ if [ ${GEN_OK_COUNT} -eq 0 ]; then
   log "\"all categories generate failed — 발송 skip, 종료부 pending 처리로 진행\""
 fi
 
+if [ ${MAIL_ENABLED} -eq 0 ] && [ $(( ${#STANDALONE_SLUGS[@]} + ${#BUNDLED_SLUGS[@]} )) -gt 0 ]; then
+  # delivery_mode 가 메일 모드로 남은 카테고리가 있다는 뜻 — 스위치가 막았음을 남겨 둔다.
+  log "\"mail disabled (BRIEF_MAIL_ENABLED!=1) — skip standalone=${#STANDALONE_SLUGS[@]} bundled=${#BUNDLED_SLUGS[@]}\""
+fi
+
 # 4) standalone 카테고리 발송 (카테고리별 1통씩)
 # bash 3.2(macOS 기본)는 set -u + 빈 배열 "${arr[@]}" 확장 시 unbound variable로 죽으므로 개수 가드.
-if [ ${#STANDALONE_SLUGS[@]} -gt 0 ]; then
+if [ ${MAIL_ENABLED} -eq 1 ] && [ ${#STANDALONE_SLUGS[@]} -gt 0 ]; then
 for SLUG in "${STANDALONE_SLUGS[@]}"; do
   CAT_META=$("${VENV_PY}" -c "from popory_brief.categories import load_category
 c = load_category('${SLUG}')
@@ -345,7 +386,7 @@ done
 fi
 
 # 5) bundled 카테고리 묶음 발송 (수신자별 1통)
-if [ ${#BUNDLED_SLUGS[@]} -gt 0 ]; then
+if [ ${MAIL_ENABLED} -eq 1 ] && [ ${#BUNDLED_SLUGS[@]} -gt 0 ]; then
   BUNDLED_SLUGS_CSV=$(IFS=,; echo "${BUNDLED_SLUGS[*]}")
   GEN_FAIL_CSV="${GEN_FAIL_SLUGS%,}"
   BUNDLE_PLAN=$("${VENV_PY}" "${BRIEF_DIR}/build_bundles.py" \
@@ -385,7 +426,15 @@ GEN_FAIL_CSV="${GEN_FAIL_SLUGS%,}"
 LIMIT_CAT_CSV="${LIMIT_FAIL_SLUGS%,}"
 LIMIT_CUS_CSV="${LIMIT_FAIL_CUSTOM%,}"
 AUTH_CAT_CSV="${AUTH_FAIL_SLUGS%,}"
-log "\"done dry_run=${DRY_RUN} generated_ok=${GEN_OK_COUNT} failed=${GEN_FAIL_CSV:-none} limit_fail=${LIMIT_CAT_CSV:-none} auth_fail=${AUTH_CAT_CSV:-none}\""
+PUB_CAT_CSV="${PUB_FAIL_SLUGS%,}"
+# 재시도 시각. 발행 실패가 있으면 최소 PUBLISH_RETRY_DELAY 뒤 — 한도 리셋이 더 늦으면 그쪽.
+RETRY_AT=${LIMIT_RESET_MAX}
+if [ -n "${PUB_CAT_CSV}" ]; then
+  PUB_RETRY_AT=$(( $(date +%s) + PUBLISH_RETRY_DELAY ))
+  [ ${PUB_RETRY_AT} -gt ${RETRY_AT} ] && RETRY_AT=${PUB_RETRY_AT}
+fi
+# publish_fail 은 맨 끝에 덧붙인다 — 헬스체크의 done 파서가 앞 필드 순서에 기대고 있다.
+log "\"done dry_run=${DRY_RUN} generated_ok=${GEN_OK_COUNT} failed=${GEN_FAIL_CSV:-none} limit_fail=${LIMIT_CAT_CSV:-none} auth_fail=${AUTH_CAT_CSV:-none} publish_fail=${PUB_CAT_CSV:-none}\""
 
 # 인증 실패는 다음 정기 점검(09:00/21:00)까지 기다리면 그날 브리핑이 통째로 날아간다.
 # 사람이 고쳐야만 풀리므로 즉시 알린다. 하루 1회만(--once-key).
@@ -406,30 +455,36 @@ fi
 # 복구 루프가 죽는다(2026-09-04: /login 전까지 9.5시간 침묵).
 echo "__RUN_LIMIT_FAIL_CATS__=${LIMIT_CAT_CSV}"
 echo "__RUN_AUTH_FAIL_CATS__=${AUTH_CAT_CSV}"
-echo "__RUN_LIMIT_RESET__=${LIMIT_RESET_MAX}"
+echo "__RUN_PUBLISH_FAIL_CATS__=${PUB_CAT_CSV}"
+echo "__RUN_LIMIT_RESET__=${RETRY_AT}"
 
 # 정규(전체) 실행에서만 pending 마커 관리. --only(재시도) 모드는 retry_pending.sh가 전담.
 if [ -z "${ONLY_SLUG}" ] && [ ${DRY_RUN} -eq 0 ]; then
-  PENDING_FILE="/tmp/brief_pending_${DATE}.json"
+  PENDING_FILE="${PENDING_DIR}/brief_pending_${DATE}.json"
   # 인증 실패분도 같은 pending 에 싣는다. reset_at 게이팅은 통과시키고(0),
   # retry_pending.sh 가 실행 직전 인증을 프로브해 막는다 — /login 하면 그때 자동 재개된다.
   RETRY_CAT_CSV="${LIMIT_CAT_CSV}"
   if [ -n "${AUTH_CAT_CSV}" ]; then
     RETRY_CAT_CSV="${RETRY_CAT_CSV:+${RETRY_CAT_CSV},}${AUTH_CAT_CSV}"
   fi
+  # 발행 실패분도 싣는다 — 재시도의 run_daily 가 pubfail 마커를 보고 생성 없이 재발행한다.
+  if [ -n "${PUB_CAT_CSV}" ]; then
+    RETRY_CAT_CSV="${RETRY_CAT_CSV:+${RETRY_CAT_CSV},}${PUB_CAT_CSV}"
+  fi
   if [ -n "${RETRY_CAT_CSV}" ] || [ -n "${LIMIT_CUS_CSV}" ]; then
     "${VENV_PY}" "${BRIEF_DIR}/write_pending.py" --file "${PENDING_FILE}" \
-      --date "${DATE}" --reset-at "${LIMIT_RESET_MAX}" \
+      --date "${DATE}" --reset-at "${RETRY_AT}" \
       --categories "${RETRY_CAT_CSV}" --custom "${LIMIT_CUS_CSV}" >> "${LOG_FILE}" 2>&1
-    log "\"pending written cats=${RETRY_CAT_CSV:-none} custom=${LIMIT_CUS_CSV:-none} reset_at=${LIMIT_RESET_MAX}\""
+    log "\"pending written cats=${RETRY_CAT_CSV:-none} custom=${LIMIT_CUS_CSV:-none} reset_at=${RETRY_AT}\""
   elif [ -f "${PENDING_FILE}" ]; then
     rm -f "${PENDING_FILE}"
-    log "\"pending cleared (no limit failures)\""
+    log "\"pending cleared (no retryable failures)\""
   fi
 fi
 
 find /tmp -maxdepth 1 -name 'brief_*.md' -mtime +7 -delete 2>/dev/null
 find /tmp -maxdepth 1 -name 'brief_*.meta.json' -mtime +7 -delete 2>/dev/null
 find /tmp -maxdepth 1 -name 'bundle_*.md' -mtime +7 -delete 2>/dev/null
+find /tmp -maxdepth 1 -name 'brief_pubfail_*' -mtime +7 -delete 2>/dev/null
 
 exit 0

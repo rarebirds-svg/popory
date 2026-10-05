@@ -10,7 +10,13 @@ const STATUS: Record<string, string> = {
   publishing: "등록 중",
   skipped: "건너뜀",
 };
-const DELIVERY: Record<string, string> = { standalone: "단독", bundled: "묶음" };
+// unknown 은 워커가 SKILL.md frontmatter 를 못 읽었을 때 준다 — 모드를 지어내지 않고 확인을 요구한다.
+const DELIVERY: Record<string, string> = {
+  standalone: "단독",
+  bundled: "묶음",
+  portal_only: "포털만",
+  unknown: "확인 필요",
+};
 const SERVICE: Record<string, string> = { content: "콘텐츠", brief: "브리핑" };
 const PLATFORM: Record<string, string> = {
   "naver-blog": "블로그",

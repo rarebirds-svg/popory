@@ -14,7 +14,7 @@ export const runtime = "edge";
 interface CategoryRow {
   slug: string;
   name: string;
-  delivery_mode: "standalone" | "bundled";
+  delivery_mode: "standalone" | "bundled" | "portal_only" | "unknown";
   enabled: boolean;
   sha: string;
 }

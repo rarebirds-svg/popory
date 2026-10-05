@@ -133,3 +133,28 @@ def test_older_than_yesterday_is_ignored(env):
     _write_pending(env, _day(-2), reset_at=0)
 
     assert _run(env) == []
+
+
+def test_publish_failure_stays_pending_and_burns_a_retry(env):
+    """발행만 실패한 카테고리는 재시도가 생성본을 재발행한다 — 그래도 실패하면 pending 에 남는다."""
+    _stub_run_daily(env["brief"], env["calls"],
+                    "echo '__RUN_LIMIT_FAIL_CATS__='\n"
+                    "echo '__RUN_AUTH_FAIL_CATS__='\n"
+                    "echo '__RUN_PUBLISH_FAIL_CATS__=naver'\n"
+                    "echo '__RUN_LIMIT_RESET__=0'\n")
+    path = _write_pending(env, _day(0), 0, cats=("naver",))
+    _run(env)
+    d = json.loads(path.read_text())
+    assert d["categories"] == ["naver"]
+    assert d["retry_count"] == 1
+
+
+def test_publish_recovered_clears_pending(env):
+    _stub_run_daily(env["brief"], env["calls"],
+                    "echo '__RUN_LIMIT_FAIL_CATS__='\n"
+                    "echo '__RUN_AUTH_FAIL_CATS__='\n"
+                    "echo '__RUN_PUBLISH_FAIL_CATS__='\n"
+                    "echo '__RUN_LIMIT_RESET__=0'\n")
+    path = _write_pending(env, _day(0), 0, cats=("naver",))
+    _run(env)
+    assert not path.exists()

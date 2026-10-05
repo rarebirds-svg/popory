@@ -129,9 +129,9 @@ export function EditForm({ slug, initialFields, initialBody, initialSha }: Props
           onChange={(e) => setDeliveryMode(e.target.value as "standalone" | "bundled" | "portal_only")}
           className={INPUT}
         >
-          <option value="standalone">standalone (카테고리당 1통)</option>
-          <option value="bundled">bundled (수신자별 묶음 1통)</option>
           <option value="portal_only">portal_only (메일 없이 포털 발행만)</option>
+          <option value="standalone">standalone (카테고리당 1통 — 메일 스위치가 켜져 있을 때만)</option>
+          <option value="bundled">bundled (수신자별 묶음 1통 — 메일 스위치가 켜져 있을 때만)</option>
         </select>
       </Field>
 
