@@ -42,6 +42,15 @@ type ContentJobRow = {
   meta_json: string | null; error: string | null; created_at: number; updated_at: number;
 };
 
+function isRerender(paramsJson: string | null | undefined): boolean {
+  if (!paramsJson) return false;
+  try {
+    return (JSON.parse(paramsJson) as { rerender?: unknown }).rerender === true;
+  } catch {
+    return false;
+  }
+}
+
 export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) {
   app.post("/api/content/jobs", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
@@ -185,8 +194,34 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
     if (row.status !== "review" && row.status !== "failed") return c.text("not regeneratable", 409);
     const now = Math.floor(Date.now() / 1000);
     // 재생성하면 직전 업로드는 옛 영상 기준이므로 업로드 상태도 리셋한다(새 영상 재업로드 가능).
+    // '다시 렌더링' 표시가 남아 있으면 워커가 대본을 새로 쓰지 않으므로 지운다.
     await c.env.DB.prepare(
       "UPDATE content_jobs SET status='queued', error=NULL, " +
+        "params_json=CASE WHEN params_json IS NULL THEN NULL ELSE json_remove(params_json, '$.rerender') END, " +
+        "youtube_status=NULL, youtube_video_id=NULL, youtube_error=NULL, " +
+        "instagram_status=NULL, instagram_media_id=NULL, instagram_error=NULL, " +
+        "facebook_status=NULL, facebook_video_id=NULL, facebook_error=NULL, " +
+        "updated_at=? WHERE id=?",
+    ).bind(now, row.id).run();
+    return c.json({ ok: true });
+  });
+
+  // 대본(과 남아 있는 배경)은 그대로 두고 음성·자막만 다시 입혀 영상을 다시 만든다. 대본은 이미 검토한
+  // 것이라 새로 쓰지 않는다 — params_json 의 rerender 표시를 보고 워커가 렌더 경로만 탄다.
+  app.post("/api/content/jobs/:id/rerender", async (c) => {
+    const unauth = requireAuth(c); if (unauth) return unauth;
+    const u = c.get("user")!;
+    const row = await c.env.DB.prepare("SELECT id, owner_sub, platform, status, draft_r2_key FROM content_jobs WHERE id=?")
+      .bind(c.req.param("id")).first<{ id: string; owner_sub: string; platform: string; status: string; draft_r2_key: string | null }>();
+    if (!row || row.owner_sub !== u.sub) return c.text("not found", 404);
+    if (!["youtube", "shorts"].includes(row.platform)) return c.text("not rerenderable", 409);
+    // failed 도 받는다 — 재렌더가 실패하면 failed 로 남는데, 대본은 멀쩡하니 다시 눌러 볼 수 있어야 한다.
+    if (!["review", "done", "failed"].includes(row.status)) return c.text("not rerenderable", 409);
+    if (!row.draft_r2_key) return c.text("no script", 409);
+    const now = Math.floor(Date.now() / 1000);
+    await c.env.DB.prepare(
+      "UPDATE content_jobs SET status='queued', error=NULL, " +
+        "params_json=json_set(COALESCE(params_json, '{}'), '$.rerender', json('true')), " +
         "youtube_status=NULL, youtube_video_id=NULL, youtube_error=NULL, " +
         "instagram_status=NULL, instagram_media_id=NULL, instagram_error=NULL, " +
         "facebook_status=NULL, facebook_video_id=NULL, facebook_error=NULL, " +
@@ -251,7 +286,13 @@ export function mountContentJobs(app: Hono<{ Bindings: Env; Variables: Vars }>) 
       const obj = await c.env.R2.get(`content/style/${job!.style_profile_id}/samples.json`);
       if (obj) styleSamples = JSON.parse(await obj.text());
     }
-    return c.json({ job, sources, style_samples: styleSamples });
+    // 다시 렌더링하는 잡은 대본을 새로 쓰지 않으므로 저장된 대본을 함께 넘긴다.
+    let draft: string | null = null;
+    if (isRerender(job!.params_json) && job!.draft_r2_key) {
+      const obj = await c.env.R2.get(job!.draft_r2_key);
+      if (obj) draft = await obj.text();
+    }
+    return c.json({ job, sources, style_samples: styleSamples, ...(draft !== null ? { draft } : {}) });
   });
 
   app.patch("/api/content/jobs/:id/result", requireService, async (c) => {
