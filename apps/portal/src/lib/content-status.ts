@@ -127,3 +127,41 @@ export function rollup(jobs: JobView[]): { label: string; tone: Tone } | null {
   if (done) return { label: `완료 ${done}/${jobs.length}`, tone: "green" };
   return { label: "시작 전", tone: "muted" };
 }
+
+// 톤 → 상태 글자 색. 주제 카드의 상태는 테두리·배경 없이 점 + 글자로만 그린다 — 테두리 알약 모양은
+// 바로 아래 '검토 · 업로드 →' 같은 버튼과 생김새가 같아 눌리는 것처럼 보였다(2026-10-05 피드백).
+export const TONE_FG: Record<Tone, string> = {
+  muted: "text-popory-muted",
+  yellow: "text-yellow-700 dark:text-yellow-300",
+  blue: "text-blue-700 dark:text-blue-300",
+  purple: "text-purple-700 dark:text-purple-300",
+  green: "text-green-700 dark:text-green-300",
+  red: "text-red-700 dark:text-red-300",
+};
+
+function isRerender(paramsJson: string | null | undefined): boolean {
+  if (!paramsJson) return false;
+  try {
+    return (JSON.parse(paramsJson) as { rerender?: unknown }).rerender === true;
+  } catch {
+    return false;
+  }
+}
+
+// 생성에 보통 걸리는 시간 — 진행 중 안내 문구. 영상은 장면 인코딩이 대부분이라 글보다 훨씬 길다
+// (10분 롱폼은 렌더만 수십 분). '보통 2~5분' 을 영상에도 띄워 정상 진행을 멈춘 것으로 오해했다.
+export function expectedDuration(platform: string, paramsJson?: string | null): string {
+  if (platform === "youtube") return isRerender(paramsJson) ? "보통 30~50분" : "보통 40분~1시간";
+  if (platform === "shorts") return "보통 10~20분";
+  return "보통 2~5분";
+}
+
+// 지금 단계에 들어선 지 얼마나 됐는지 — queued 는 대기 시작, running 은 워커가 가져간 시각(updated_at)부터.
+export function elapsedLabel(since: number, now: number = Math.floor(Date.now() / 1000)): string {
+  const min = Math.max(0, Math.floor((now - since) / 60));
+  if (min < 1) return "방금 시작";
+  if (min < 60) return `${min}분째`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h}시간 ${m}분째` : `${h}시간째`;
+}
