@@ -1,4 +1,5 @@
-// admin · TTS 설정 조회(읽기 전용). 유튜브 동영상·쇼츠 내레이션의 속도·쉼·발음 처리와 영상 모션·전환을 한눈에 본다.
+// admin · TTS 설정 조회(읽기 전용). 유튜브 동영상·쇼츠 내레이션의 엔진(Gemini·폴백)·비용, 속도·쉼·발음 처리,
+// 자막 줄바꿈·싱크, 영상 모션·전환을 한눈에 본다.
 // 값은 포털 상수가 아니라 **워커가 보고한 유효값**이다 — 맥미니 env 로 덮어쓴 값까지 맞아야 해서 복제하지 않는다.
 import { headers } from "next/headers";
 import { API_BASE } from "@/lib/env";
@@ -20,8 +21,14 @@ interface TtsConfig {
   speed: { speaking_rate: Tunable; note: string };
   pauses: { comma_break_ms: Tunable; sentence_gap_s: Tunable; chapter_gap_s: Tunable; question_gap_s: Tunable; crossfade_s: Tunable };
   voice_fx: { deepen_semitones: Tunable; enabled: boolean };
-  // 구버전 워커는 이 키를 보내지 않는다 — 없으면 섹션을 안내문으로 대신한다.
+  // 구버전 워커는 이 키들을 보내지 않는다 — 없으면 섹션을 안내문으로 대신한다.
   video_motion?: { rows: MotionRow[] };
+  gemini?: {
+    provider: string; api_key_set: boolean; fallback_voice: string; style: string; price_per_m_output_usd: number;
+    usage: { month: string; month_usd: number; month_seconds: number; day: string; day_requests: number; monthly_cap_usd: number; daily_request_cap: number };
+    rows?: MotionRow[];
+  };
+  subtitles?: { rows: MotionRow[] };
   normalization: { label: string; input: string; spoken: string }[];
   name_fixes: { wrong: string; right: string }[];
   pronunciation_dictionary: { exists: boolean; entries?: { term: string; reading: string; ignore_case: boolean; note?: string }[] };
@@ -90,13 +97,58 @@ export default async function TtsPage() {
           <section className="mt-6">
             <h2 className="text-base font-semibold">엔진</h2>
             <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
-              <dt className="text-popory-muted">서비스</dt><dd>{c.engine.provider}</dd>
-              <dt className="text-popory-muted">언어 · 형식</dt><dd>{c.engine.language} · {c.engine.encoding}</dd>
-              <dt className="text-popory-muted">API 키</dt>
+              <dt className="text-popory-muted">기본 남성 음성</dt>
+              <dd>{c.gemini
+                ? <>{c.gemini.provider} — <code className={CODE}>{c.voices.find((v) => v.key === "male")?.name ?? "—"}</code></>
+                : c.engine.provider}</dd>
+              {c.gemini && (
+                <>
+                  <dt className="text-popory-muted">Gemini API 키</dt>
+                  <dd>{c.gemini.api_key_set
+                    ? <Badge intent="success">설정됨</Badge>
+                    : <Badge intent="danger">없음 — 모든 영상이 폴백 음성으로 만들어짐</Badge>}</dd>
+                  <dt className="text-popory-muted">폴백 음성</dt>
+                  <dd><code className={CODE}>{c.gemini.fallback_voice}</code> ({c.engine.provider}) — Gemini 가 실패하거나 상한을 넘으면 <strong>영상 전체</strong>를 이 음성으로</dd>
+                </>
+              )}
+              <dt className="text-popory-muted">Cloud TTS · 언어 · 형식</dt><dd>{c.engine.language} · {c.engine.encoding} (여성 음성·폴백)</dd>
+              <dt className="text-popory-muted">Cloud TTS API 키</dt>
               <dd>{c.engine.api_key_set
                 ? <Badge intent="success">설정됨</Badge>
                 : <Badge intent="danger">없음 — 합성 실패 시 macOS say 폴백</Badge>}</dd>
             </dl>
+          </section>
+
+          <section className="mt-8">
+            <h2 className="text-base font-semibold">Gemini 음성 · 비용</h2>
+            {c.gemini ? (
+              <>
+                <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+                  <dt className="text-popory-muted">이번 달 사용액 ({c.gemini.usage.month})</dt>
+                  <dd>
+                    <strong>${c.gemini.usage.month_usd.toFixed(2)}</strong> / ${c.gemini.usage.monthly_cap_usd}{" "}
+                    <span className="text-popory-muted">· 합성 {Math.round(c.gemini.usage.month_seconds / 60)}분</span>{" "}
+                    {c.gemini.usage.month_usd >= c.gemini.usage.monthly_cap_usd * 0.8 && <Badge intent="warn">상한 임박</Badge>}
+                  </dd>
+                  <dt className="text-popory-muted">오늘 요청</dt>
+                  <dd><strong>{c.gemini.usage.day_requests}</strong> / {c.gemini.usage.daily_request_cap}회</dd>
+                  <dt className="text-popory-muted">출력 단가</dt>
+                  <dd>${c.gemini.price_per_m_output_usd} / 1M 오디오 토큰 (초당 25토큰 · 10분 영상 약 ${(600 * 25 * c.gemini.price_per_m_output_usd / 1e6).toFixed(2)})</dd>
+                </dl>
+                {c.gemini.rows && (
+                  <RowsTable rows={c.gemini.rows} />
+                )}
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-sm text-popory-muted">낭독 연출 지시(모든 요청에 붙는 문장)</summary>
+                  <pre className={`${CODE} mt-2 whitespace-pre-wrap rounded bg-popory-bg p-3`}>{c.gemini.style}</pre>
+                </details>
+                <p className="mt-2 text-xs text-popory-muted">
+                  영상마다 실제로 쓴 음성·요청 수·목소리 보정 기록은 작업 meta 의 <code className={CODE}>tts</code>(<code className={CODE}>voice_match</code>)에 남습니다.
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-popory-muted">워커가 Gemini 설정을 아직 보고하지 않았습니다 — 새 코드로 재시작되면 표시됩니다.</p>
+            )}
           </section>
 
           <section className="mt-8">
@@ -108,7 +160,7 @@ export default async function TtsPage() {
             <Table head={["항목", "현재값", "기본값", "조정", "설명"]}>
               <TunableRow label="말속도" t={c.speed.speaking_rate} unit="배" note={c.speed.note} />
               <TunableRow label="쉼표 뒤 호흡" t={c.pauses.comma_break_ms} unit="ms"
-                note="쉼표마다 SSML <break> 로 넣는 무음. 한 글자 나열 항목(밥, 꽃…)에는 넣지 않는다. 0 이면 끔." />
+                note="Cloud TTS(여성·폴백 음성) 전용 — 쉼표마다 SSML <break> 로 넣는 무음. 한 글자 나열 항목(밥, 꽃…)에는 넣지 않는다. 0 이면 끔. Gemini 는 쉼을 스스로 둔다." />
               <TunableRow label="문장 사이 쉼" t={c.pauses.sentence_gap_s} unit="초" note="문장별 TTS 클립 사이 무음. 자막 타이밍이 이 값을 그대로 따른다." />
               <TunableRow label="질문 뒤 쉼" t={c.pauses.question_gap_s} unit="초" note="물음표로 끝난 문장 뒤. 시청자가 생각할 틈을 준다." />
               <TunableRow label="챕터 경계 쉼" t={c.pauses.chapter_gap_s} unit="초" note="헤드라인이 바뀌는 장면 경계. 문장 사이 쉼의 2배." />
@@ -126,24 +178,26 @@ export default async function TtsPage() {
                   장면 이미지의 줌·패닝입니다. 동영상과 쇼츠는 같은 렌더 경로를 쓰고 모션 스위치만 따로입니다.
                   <Badge intent="warn">변경됨</Badge> 은 환경변수로 기본값에서 바꾼 항목입니다.
                 </p>
-                <Table head={["항목", "현재값", "기본값", "조정", "설명"]}>
-                  {c.video_motion.rows.map((r) => (
-                    <tr key={r.label} className="border-b border-popory-border align-top">
-                      <td className="py-2 pr-4 whitespace-nowrap">{r.label}</td>
-                      <td className="py-2 pr-4 whitespace-nowrap"><strong>{r.value}</strong>{" "}{r.overridden && <Badge intent="warn">변경됨</Badge>}</td>
-                      <td className="py-2 pr-4 whitespace-nowrap text-popory-muted">{r.default}</td>
-                      <td className="py-2 pr-4">
-                        {r.env ? <code className={CODE}>{r.env}</code> : <span className="text-xs text-popory-muted">코드 상수</span>}
-                      </td>
-                      <td className="py-2 pr-4 text-popory-muted">{r.note}</td>
-                    </tr>
-                  ))}
-                </Table>
+                <RowsTable rows={c.video_motion.rows} />
               </>
             ) : (
               <p className="mt-2 text-sm text-popory-muted">
                 워커가 모션 설정을 아직 보고하지 않았습니다 — 새 코드로 재시작되면 표시됩니다.
               </p>
+            )}
+          </section>
+
+          <section className="mt-8">
+            <h2 className="text-base font-semibold">자막 줄바꿈 · 싱크</h2>
+            {c.subtitles ? (
+              <>
+                <p className="mt-1 text-xs text-popory-muted">
+                  화면에 굽는 자막의 끊는 기준과 말소리에 맞추는 기준입니다. 번역 자막(SRT)은 문장 단위로 따로 만듭니다.
+                </p>
+                <RowsTable rows={c.subtitles.rows} />
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-popory-muted">워커가 자막 설정을 아직 보고하지 않았습니다 — 새 코드로 재시작되면 표시됩니다.</p>
             )}
           </section>
 
@@ -163,7 +217,7 @@ export default async function TtsPage() {
               ))}
             </Table>
             <p className="mt-2 text-xs text-popory-muted">
-              말속도는 계열과 짝이 맞아야 합니다 — Neural2 는 1.0, Chirp3-HD 는 1.06 이 귀 튜닝값입니다.
+              말속도는 계열과 짝이 맞아야 합니다 — Neural2 는 1.0, Chirp3-HD 는 1.06 이 귀 튜닝값이고, Gemini 는 말속도 값 대신 연출 지시로 정합니다.
               현재 기본 음성 계열: <strong>{c.voices.find((v) => v.key === c.defaults.longform.voice)?.family ?? "—"}</strong>.
             </p>
           </section>
@@ -249,6 +303,24 @@ export default async function TtsPage() {
 function fmt(n: number, def: string | undefined): string {
   if (def === undefined) return String(n);          // 기본값 정보가 없으면(코드 상수) 반올림하지 않는다
   return n.toFixed(def.split(".")[1]?.length ?? 0);
+}
+
+function RowsTable({ rows }: { rows: MotionRow[] }) {
+  return (
+    <Table head={["항목", "현재값", "기본값", "조정", "설명"]}>
+      {rows.map((r) => (
+        <tr key={r.label} className="border-b border-popory-border align-top">
+          <td className="py-2 pr-4 whitespace-nowrap">{r.label}</td>
+          <td className="py-2 pr-4 whitespace-nowrap"><strong>{r.value}</strong>{" "}{r.overridden && <Badge intent="warn">변경됨</Badge>}</td>
+          <td className="py-2 pr-4 whitespace-nowrap text-popory-muted">{r.default}</td>
+          <td className="py-2 pr-4">
+            {r.env ? <code className={CODE}>{r.env}</code> : <span className="text-xs text-popory-muted">코드 상수</span>}
+          </td>
+          <td className="py-2 pr-4 text-popory-muted">{r.note}</td>
+        </tr>
+      ))}
+    </Table>
+  );
 }
 
 function TunableRow({ label, t, unit, note }: { label: string; t: Tunable; unit: string; note: string }) {

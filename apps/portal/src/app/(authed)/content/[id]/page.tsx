@@ -197,7 +197,8 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                 </details>
               );
             })()}
-            <video controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video`} />
+            {/* 재생성·재렌더해도 주소가 같으면 브라우저가 예전 영상을 그대로 보여 준다 — 갱신 시각을 붙여 새로 받게 한다 */}
+            <video key={job.updated_at} controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video?v=${job.updated_at}`} />
             <div className="flex flex-wrap items-center gap-2">
               <RegenerateButton jobId={job.id} />
               <RerenderButton jobId={job.id} />

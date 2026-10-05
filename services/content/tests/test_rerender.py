@@ -137,6 +137,7 @@ def test_run_once_rerenders_with_saved_script_and_old_backgrounds(rerender_env):
     assert "images_missing" not in meta                     # 이전 렌더의 누락 기록은 지운다
     assert meta["tts"]["voice"] == "gemini-3.8-flash-tts/Iapetus"
     assert meta["rerender"]["reused_backgrounds"] == 2
+    assert meta["worker_commit"] == worker.runtime_info._short(worker.runtime_info.LOADED_COMMIT)
     assert [s["caption"] for s in meta["scenes"]] == ["성과는 밖에 있다", "강점에 집중하라"]
 
 
