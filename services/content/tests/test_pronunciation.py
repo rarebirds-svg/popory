@@ -93,3 +93,19 @@ def test_aa_credit_ratings_are_not_read_as_the_organization(text):
 def test_aa_group_is_read_even_next_to_a_particle_or_comma():
     assert spoken_text("AA, 즉 모임") == "에이에이, 즉 모임"
     assert spoken_text("AA가 시작됐다") == "에이에이가 시작됐다"
+
+
+def test_read_initials_spells_name_initials():
+    from popory_content.pronunciation import read_initials
+    assert read_initials("E.H. 카는") == "이 에이치 카는"
+    assert read_initials("피터 F. 드러커") == "피터 에프 드러커"
+    assert read_initials("J.R.R. 톨킨과 C. S. 루이스") == "제이 알 알 톨킨과 씨 에스 루이스"
+    assert read_initials("J.K. Rowling") == "제이 케이 Rowling"
+    # 이니셜이 아니면 그대로 — 약어(CEO.)·문장 끝 대문자 뒤 영문 소문자·숫자
+    assert read_initials("그는 CEO. 그리고") == "그는 CEO. 그리고"
+    assert read_initials("A. 1번") == "A. 1번"
+
+
+def test_spoken_text_reads_initials_without_sentence_break():
+    from popory_content.tts import spoken_text
+    assert spoken_text("E.H. 카는 말했습니다.") == "이 에이치 카는 말했습니다."

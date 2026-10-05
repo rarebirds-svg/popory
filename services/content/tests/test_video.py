@@ -1130,3 +1130,42 @@ def test_render_video_gemini_voice_match_can_be_disabled(monkeypatch, tmp_path):
     video.render_video([{"caption": str(i), "narration": narration} for i in range(17)],
                        job_id="gemini_nomatch", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
     assert len(calls) == 2 and "voice_match" not in stats
+
+
+def test_split_keeps_name_initials_in_one_sentence():
+    # E.H. 카 영상(2026-10-05): 이니셜 마침표에서 끊겨 "E." "H." 가 따로 자막·문장이 되고 싱크가 밀렸다
+    assert _split_sentences("E.H. 카는 역사를 물었습니다. 답은 대화였죠.") == [
+        "E.H. 카는 역사를 물었습니다.", "답은 대화였죠."]
+    assert _split_sentences("피터 F. 드러커와 J.R.R. 톨킨, C. S. 루이스입니다.") == [
+        "피터 F. 드러커와 J.R.R. 톨킨, C. S. 루이스입니다."]
+    # 이니셜이 아닌 마침표는 그대로 끊는다(앞이 단어·숫자)
+    assert _split_sentences("그는 CEO. 그리고 작가.") == ["그는 CEO.", "그리고 작가."]
+
+
+def test_wrap_does_not_split_initials_from_name():
+    from popory_content.video import _wrap_chunks
+    for sentence in ("E.H. 카는 역사란 현재와 과거 사이의 끊임없는 대화라고 말했습니다.",
+                     "경영학의 아버지로 불리는 피터 F. 드러커는 지식 노동자라는 말을 처음 썼습니다."):
+        chunks = _wrap_chunks(sentence, 30)
+        assert not any(c.endswith(("E.H.", "F.")) for c in chunks), chunks
+        assert not any(c.startswith(("F.", "카는", "드러커는")) for c in chunks), chunks
+
+
+def test_whole_scene_subtitles_snap_to_sentence_pauses(monkeypatch, tmp_path):
+    # 문장 경계를 못 찾아 장면 통째로 쓰는 경우에도 자막 경계는 발화량 비례가 아니라 문장 사이 숨에 맞춘다.
+    from popory_content import video, gemini_tts
+    _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
+    monkeypatch.setattr(gemini_tts, "synthesize_scene",
+                        lambda text, voice: (_pcm_with_pauses(parts=(2.0, 2.0), pause=0.6), 24000))
+    seen = []
+
+    def snap(audio, chunks, dur, min_pause_ms=video.SNAP_MIN_PAUSE_MS):
+        seen.append((len(chunks), min_pause_ms))
+        return [0.7] if len(chunks) == 2 else None
+
+    monkeypatch.setattr(video, "_snap_chunk_cuts", snap)
+    scenes = [{"caption": "a", "narration": "하나입니다. 둘입니다."}, {"caption": "b", "narration": "셋입니다. 넷이죠."}]
+    _, _, _, cues = video.render_video(scenes, job_id="whole_snap", voice="gemini-3.8-flash-tts/Iapetus")
+    assert (2, video.WHOLE_SNAP_MIN_PAUSE_MS) in seen
+    first = [c for c in cues if c[2] in ("하나입니다.", "둘입니다.")]
+    assert first[0][1] == pytest.approx(0.7) and first[1][0] == pytest.approx(0.7)

@@ -345,6 +345,13 @@ _CLOSERS_AMBIGUOUS = "\"'"                    # 직선 따옴표는 여는지 �
 _QUOTATIVE = re.compile(r"\s*(?:이?라고|이?라는|이?라며|이?라면서)")
 
 
+def _is_initial(text: str, dot: int) -> bool:
+    """text[dot] 의 마침표가 대문자 한 글자 바로 뒤(앞은 글자가 아님)인가 — E. / H. / F. 같은 이니셜.
+    한국어 내레이션이 영문 대문자 한 글자로 문장을 끝내는 일은 드물어("플랜 B." 정도) 이니셜로 본다."""
+    return (dot >= 1 and "A" <= text[dot - 1] <= "Z"
+            and (dot < 2 or not text[dot - 2].isalpha()))
+
+
 def _split_sentences(text: str) -> list[str]:
     """내레이션을 문장 단위로 분할(., ?, ! 뒤에서 끊음). 뒤가 숫자면 소수점이므로 끊지 않는다
     — 6.25 가 "6." / "25" 로 갈리면 문장별 합성이라 tts 의 소수→한글 변환이 점을 흘린다.
@@ -362,6 +369,10 @@ def _split_sentences(text: str) -> list[str]:
             continue                                         # 6.25 같은 소수점
         # "A vs. B" 의 마침표는 문장 끝이 아니다 — 끊으면 클립이 둘로 갈라지고 0.7초 정적이 들어간다(발음 사전의 vs. 과 짝).
         if m.group() == "." and text[max(0, m.start() - 2):end] in ("vs.", "Vs.", "VS."):
+            continue
+        # 이름 이니셜(E.H. 카·피터 F. 드러커)의 마침표도 문장 끝이 아니다 — 끊으면 "E." "H." 가 따로 자막·클립이
+        # 되고, 합성 오디오의 문장 경계 수가 어긋나 장면 전체 자막 싱크가 밀렸다(2026-10-05 E.H. 카 영상).
+        if m.group() == "." and _is_initial(text, m.start()):
             continue
         closers_from = end
         while end < len(text):
@@ -497,11 +508,17 @@ _ADNOMINAL_END = re.compile(
     r"어떤|모든|이런|그런|저런|[한된할될던])$")
 # 이 말 앞에서는 끊지 않는다 — 의존명사(할 | 수), 숫자 뒤 단위(140억 | 달러)
 _BOUND_START = re.compile(r"^(?:것|수|때|데|줄|뿐|만큼|거|바|듯|채|적|중|등)(?:$|[이은는을를도만에의과와가,.?!])")
+_INITIALS_TOKEN = re.compile(r"^(?:[A-Z]\.)+$")             # E.H. · F. — 이름 이니셜(뒤 이름과 한 줄에)
 _NUMBER_END = re.compile(r"\d[\d,.]*(?:천|만|억|조)?$")    # 1,800만 · 140억 · 29.2
 _UNIT_START = re.compile(r"^(?:달러|원|년|개|명|퍼센트|%|억|만|조|살|시간|분|초|번|권|가지|배)")
 
 
 def _break_cost(prev: str, nxt: str) -> int:
+    # 이니셜 뒤는 마침표로 끝나도 끊을 자리가 아니다 — "E.H. | 카는" 으로 이름이 두 줄에 갈렸다.
+    if _INITIALS_TOKEN.match(prev):
+        return 9
+    if _INITIALS_TOKEN.match(nxt):
+        return 7                                           # "피터 | F. 드러커" 도 이름 사이
     if _BREAK_AFTER_PUNCT.search(prev):
         return 0
     if _BOUND_START.match(nxt) or (_NUMBER_END.search(prev) and _UNIT_START.match(nxt)):
@@ -553,7 +570,8 @@ def _wrap_chunks(sentence: str, width: int) -> list[str]:
 
 # 한 문장 안 자막 줄 전환을 실제 숨에 맞출 때: 이보다 긴 무음을 숨으로 보고, 예상 위치에서 이만큼 안쪽만 찾는다.
 SNAP_MIN_PAUSE_MS = 80
-SNAP_LEAD_S = 0.08   # 다음 줄은 말이 다시 시작되기 조금 전에 띄운다
+SNAP_LEAD_S = 0.08
+WHOLE_SNAP_MIN_PAUSE_MS = 200   # 장면 통째 오디오에서 문장 경계로 볼 숨(쉼표 숨보다 길다)   # 다음 줄은 말이 다시 시작되기 조금 전에 띄운다
 
 
 def _decode_pcm(path: Path, rate: int = 24000) -> "bytes | None":
@@ -565,13 +583,15 @@ def _decode_pcm(path: Path, rate: int = 24000) -> "bytes | None":
         return None
 
 
-def _snap_chunk_cuts(audio: Path, chunks: list[str], speech_dur: float) -> "list[float] | None":
+def _snap_chunk_cuts(audio: Path, chunks: list[str], speech_dur: float,
+                     min_pause_ms: int = SNAP_MIN_PAUSE_MS) -> "list[float] | None":
     """문장 오디오에서 자막 줄 사이 전환 시점(문장 시작 기준 초)을 숨 위치로 맞춘다.
-    예상 위치(발화량 비례) 근처에 숨이 없으면 그 경계는 예상 위치 그대로 둔다."""
+    예상 위치(발화량 비례) 근처에 숨이 없으면 그 경계는 예상 위치 그대로 둔다.
+    장면 통째 오디오의 문장 경계를 찾을 때도 쓴다(chunks=문장, min_pause_ms 를 문장 숨 길이로)."""
     pcm = _decode_pcm(audio)
     if not pcm:
         return None
-    pauses = gemini_tts.pause_spans(pcm, 24000, SNAP_MIN_PAUSE_MS)
+    pauses = gemini_tts.pause_spans(pcm, 24000, min_pause_ms)
     weights = [max(1, len(spoken_text(c))) for c in chunks]
     total = sum(weights)
     tol = max(0.5, 0.3 * speech_dur / len(chunks))
@@ -967,6 +987,12 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             w = [max(1, x) for x in pre["weights"]]
             seg_durs = [total * x / sum(w) for x in w]
             gaps = [0.0] * (len(sentences) - 1)
+            # 발화량 비례만으로는 장면 뒤로 갈수록 자막이 말과 어긋난다 — 문장 사이 숨에 경계를 맞춘다.
+            cuts = (_snap_chunk_cuts(audio, sentences, total, WHOLE_SNAP_MIN_PAUSE_MS)
+                    if len(sentences) > 1 else None)
+            if cuts and len(cuts) == len(sentences) - 1:
+                bounds = [0.0, *cuts, total]
+                seg_durs = [max(0.05, bounds[k + 1] - bounds[k]) for k in range(len(sentences))]
         else:
             for j, sent in enumerate(sentences):
                 # 내레이션이 빈 장면만 여기로 온다면 Gemini 이름을 Cloud TTS 에 보내지 않는다.

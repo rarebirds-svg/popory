@@ -62,3 +62,24 @@ def apply_pronunciations(text: str) -> str:
     for pat, reading in _PATTERNS:
         text = pat.sub(reading, text)
     return text
+
+
+# --- 사람 이름 이니셜(E.H. 카·피터 F. 드러커·J.R.R. 톨킨) ---
+# 사전 항목이 아니라 규칙이다 — 대문자 한 글자 + 마침표가 이름(한글, 또는 영문 대문자로 시작하는 단어) 앞에 오면
+# 이니셜로 보고 알파벳 이름으로 읽는다("이 에이치 카"). 마침표를 남기면 TTS 가 문장 끝으로 읽어 이름 중간에서
+# 끊긴 억양·숨이 생기고, 문장 분리(video._split_sentences)와 자막 싱크도 함께 어긋났다(2026-10-05 E.H. 카 영상).
+LETTER_NAMES = {
+    "A": "에이", "B": "비", "C": "씨", "D": "디", "E": "이", "F": "에프", "G": "지", "H": "에이치",
+    "I": "아이", "J": "제이", "K": "케이", "L": "엘", "M": "엠", "N": "엔", "O": "오", "P": "피",
+    "Q": "큐", "R": "알", "S": "에스", "T": "티", "U": "유", "V": "브이", "W": "더블유", "X": "엑스",
+    "Y": "와이", "Z": "제트",
+}
+_INITIALS = re.compile(r"(?<![A-Za-z.])((?:[A-Z]\.\s?){1,4})(?=\s*(?:[가-힣]|[A-Z][a-z]))")
+
+
+def read_initials(text: str) -> str:
+    """"E.H. 카는" → "이 에이치 카는". 이니셜이 아니면 그대로."""
+    if not text:
+        return text
+    return _INITIALS.sub(lambda m: " ".join(LETTER_NAMES[c] for c in re.findall(r"[A-Z]", m.group(1))) + " ",
+                         text).replace("  ", " ")
