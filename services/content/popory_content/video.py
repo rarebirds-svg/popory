@@ -480,17 +480,124 @@ SUB_Y_LANDSCAPE = 175
 SUB_Y_PORTRAIT = PORTRAIT_UI_SAFE_BOTTOM + SUB_LINE_H_PORTRAIT + SUB_GAP_PORTRAIT  # 500
 
 
+# 자막 줄을 어디서 끊을지 — 한국어 의미 단위. 뒤 어절 앞에서 끊을 때의 비용(낮을수록 자연스럽다).
+_BREAK_AFTER_PUNCT = re.compile(r"[,.?!…:;]$")
+_CONNECTIVE_END = re.compile(
+    r"(?:고|며|면서|지만|는데|은데|인데|니까|으니|므로|어서|아서|해서|여서|라서|거나|든지|도록|려고|"
+    r"면|으면|자마자|다가|듯이|듯|으며|이며|이고|이지만|이라서|이면|더니|는데도|지만도|게|아니라|이라|이요)$")
+_PARTICLE_END = re.compile(
+    r"(?:은|는|이|가|을|를|에|에서|에게|께|으로|로|와|과|도|만|까지|부터|처럼|보다|마다|이나|나|"
+    r"에도|에는|에서는|으로는|로는|과는|와는|이란|란|조차|마저|밖에)$")
+# 꾸밈말(관형형·관형격) 뒤에서 끊으면 꾸밈을 받는 말과 갈라진다 — "하는 | 것", "부자의 | 습관"
+_ADNOMINAL_END = re.compile(
+    r"(?:의|하는|되는|있는|없는|않는|라는|다는|이라는|같은|많은|적은|작은|좋은|큰|새로운|어려운|쉬운|다른|"
+    r"어떤|모든|이런|그런|저런|[한된할될던])$")
+# 이 말 앞에서는 끊지 않는다 — 의존명사(할 | 수), 숫자 뒤 단위(140억 | 달러)
+_BOUND_START = re.compile(r"^(?:것|수|때|데|줄|뿐|만큼|거|바|듯|채|적|중|등)(?:$|[이은는을를도만에의과와가,.?!])")
+_NUMBER_END = re.compile(r"\d[\d,.]*(?:천|만|억|조)?$")    # 1,800만 · 140억 · 29.2
+_UNIT_START = re.compile(r"^(?:달러|원|년|개|명|퍼센트|%|억|만|조|살|시간|분|초|번|권|가지|배)")
+
+
+def _break_cost(prev: str, nxt: str) -> int:
+    if _BREAK_AFTER_PUNCT.search(prev):
+        return 0
+    if _BOUND_START.match(nxt) or (_NUMBER_END.search(prev) and _UNIT_START.match(nxt)):
+        return 9
+    if _ADNOMINAL_END.search(prev):
+        return 7
+    if _CONNECTIVE_END.search(prev):
+        return 1
+    if _PARTICLE_END.search(prev):
+        return 3
+    return 5
+
+
 def _wrap_chunks(sentence: str, width: int) -> list[str]:
-    """자막을 한 줄에 들어가는 조각으로 쪼갠다(어절 경계 유지). 짧은 문장은 한 조각 그대로."""
-    return textwrap.wrap(sentence, width=width) or [sentence.strip() or " "]
+    """자막을 한 줄에 들어가는 조각으로 쪼갠다 — 어절 경계에서, 의미가 끊기는 곳(쉼표·연결어미·조사 뒤)을
+    골라. 꾸밈말과 꾸밈받는 말, 숫자와 단위, '할 수' 같은 의존명사는 한 줄에 둔다. 조각 수는 최소로,
+    너무 짧은 조각은 피한다(DP). 짧은 문장은 한 조각 그대로."""
+    words = sentence.split()
+    if not words:
+        return [sentence.strip() or " "]
+    n = len(words)
+    inf = float("inf")
+    best = [0.0] + [inf] * n
+    back = [0] * (n + 1)
+    for i in range(1, n + 1):
+        for j in range(i - 1, -1, -1):
+            line = " ".join(words[j:i])
+            if len(line) > width and i - j > 1:
+                break
+            if best[j] == inf:
+                continue
+            cost = 3.0                                     # 조각이 늘수록 손해
+            if i < n:
+                cost += 2 * _break_cost(words[i - 1], words[i])
+                cost += 4 * ((width - len(line)) / width) ** 2   # 덜 찬 줄은 손해(균형)
+                if len(line) < width * 0.3:
+                    cost += 6                              # 너무 짧은 앞 조각
+            elif j > 0 and len(line) < width * 0.35:
+                cost += 6                                  # 너무 짧은 꼬리 조각
+            if best[j] + cost < best[i]:
+                best[i], back[i] = best[j] + cost, j
+    chunks: list[str] = []
+    i = n
+    while i > 0:
+        chunks.append(" ".join(words[back[i]:i]))
+        i = back[i]
+    return chunks[::-1]
+
+
+# 한 문장 안 자막 줄 전환을 실제 숨에 맞출 때: 이보다 긴 무음을 숨으로 보고, 예상 위치에서 이만큼 안쪽만 찾는다.
+SNAP_MIN_PAUSE_MS = 80
+SNAP_LEAD_S = 0.08   # 다음 줄은 말이 다시 시작되기 조금 전에 띄운다
+
+
+def _decode_pcm(path: Path, rate: int = 24000) -> "bytes | None":
+    try:
+        r = subprocess.run([FFMPEG_BIN, "-v", "error", "-i", str(path), "-f", "s16le", "-ac", "1",
+                            "-ar", str(rate), "-"], capture_output=True, check=True, timeout=60)
+        return r.stdout
+    except Exception:  # noqa: BLE001 — 맞추기 실패는 글자 수 비례로 물러선다
+        return None
+
+
+def _snap_chunk_cuts(audio: Path, chunks: list[str], speech_dur: float) -> "list[float] | None":
+    """문장 오디오에서 자막 줄 사이 전환 시점(문장 시작 기준 초)을 숨 위치로 맞춘다.
+    예상 위치(발화량 비례) 근처에 숨이 없으면 그 경계는 예상 위치 그대로 둔다."""
+    pcm = _decode_pcm(audio)
+    if not pcm:
+        return None
+    pauses = gemini_tts.pause_spans(pcm, 24000, SNAP_MIN_PAUSE_MS)
+    weights = [max(1, len(spoken_text(c))) for c in chunks]
+    total = sum(weights)
+    tol = max(0.5, 0.3 * speech_dur / len(chunks))
+    cuts: list[float] = []
+    acc, last = 0, 0.0
+    for wgt in weights[:-1]:
+        acc += wgt
+        expected = speech_dur * acc / total
+        near = [(a, b) for a, b in pauses if last < (a + b) / 2 < speech_dur and abs((a + b) / 2 - expected) <= tol]
+        if near:
+            a, b = min(near, key=lambda p: abs((p[0] + p[1]) / 2 - expected))
+            cut = max(a, b - SNAP_LEAD_S)
+        else:
+            cut = expected
+        cut = max(cut, last + 0.05)
+        cuts.append(cut)
+        last = cut
+    return cuts
 
 
 def _chunk_spans(chunks: list[str], start: float, speech_dur: float,
-                 end: float) -> list[tuple[float, float]]:
+                 end: float, cuts: "list[float] | None" = None) -> list[tuple[float, float]]:
     """조각별 자막 [start,end]. 문장 안에서는 발화 길이를 실측할 수 없으므로(TTS는 문장 단위로
     합성한다) 길이 비례로 나누되, 원문이 아니라 TTS 정규화 텍스트 길이를 쓴다 — '1,700'은
     5글자지만 '천칠백'으로 읽히므로 원문 글자수로 나누면 그 조각이 과대평가된다.
     마지막 조각은 문장 뒤 무음(SENTENCE_GAP)까지 유지해 자막이 깜빡이지 않게 한다."""
+    if cuts is not None and len(cuts) == len(chunks) - 1:
+        bounds = [start, *(start + c for c in cuts), end]
+        return [(bounds[i], bounds[i + 1]) for i in range(len(chunks))]
     weights = [max(1, len(spoken_text(c))) for c in chunks]
     total = sum(weights)
     spans: list[tuple[float, float]] = []
@@ -905,7 +1012,10 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         n = 0
         for k, (st, en) in enumerate(spans):
             chunks = _wrap_chunks(sentences[k], sub_wrap)
-            for chunk, (cst, cen) in zip(chunks, _chunk_spans(chunks, st, seg_durs[k], en)):
+            # 줄이 여럿이면 전환 시점을 그 문장 오디오의 실제 숨에 맞춘다(문장별 조각이 있을 때만).
+            cuts = (_snap_chunk_cuts(seg_audios[k], chunks, seg_durs[k])
+                    if len(chunks) > 1 and k < len(seg_audios) else None)
+            for chunk, (cst, cen) in zip(chunks, _chunk_spans(chunks, st, seg_durs[k], en, cuts)):
                 sub_png = work / f"sub_{i}_{n}.png"
                 _render_subtitle_png(chunk, sub_png, portrait=portrait)
                 inputs += ["-loop", "1", "-i", str(sub_png)]
@@ -952,8 +1062,12 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
 
 def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
                         tts_stats: dict[str, Any]) -> "list[dict[str, Any] | None] | None":
-    """모든 장면 내레이션을 Gemini 로 장면 단위 합성해 문장별 WAV 조각으로 나눠 둔다.
-    상한 초과가 예상되거나 한 장면이라도 실패하면 None(영상 전체를 무료 음성으로) — 이유는 tts_stats 에."""
+    """장면 내레이션을 Gemini 로 합성해 장면별·문장별 WAV 조각으로 나눠 둔다.
+
+    목소리 톤은 요청마다 미세하게 달라지므로 연속한 장면을 묶어(롱폼 2요청·쇼츠 1요청) 한 번에 합성하고,
+    묶음 오디오의 숨에서 문장 경계를 되찾아 장면별로 나눈다. 장면 사이는 빈 줄로 넘겨 모델이 문단 호흡을 둔다.
+    한 묶음의 경계를 확신하지 못하면 그 묶음만 장면 단위로 다시 합성한다.
+    상한 초과가 예상되거나 합성이 실패하면 None(영상 전체를 무료 음성으로) — 이유는 tts_stats 에."""
     texts: list[str] = []
     weights: list[list[int]] = []
     for sc in scenes:
@@ -961,33 +1075,55 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
         spoken = [spoken_text(s) for s in (_split_sentences(narration) or [narration])]
         texts.append(" ".join(spoken).strip())
         weights.append([len(s) for s in spoken])
-    reason = gemini_tts.budget_block_reason([t for t in texts if t])
+    live = [i for i, t in enumerate(texts) if t]
+    chunks = [[live[k] for k in grp] for grp in
+              gemini_tts.plan_chunks([gemini_tts.estimate_seconds([texts[i]]) for i in live])]
+    reason = gemini_tts.budget_block_reason(["\n\n".join(texts[i] for i in grp) for grp in chunks])
     if reason:
         tts_stats["engine_fallback"] = reason
         return None
-    out: list[dict[str, Any] | None] = []
-    for i, (text, w) in enumerate(zip(texts, weights)):
-        if not text:
-            out.append(None)
-            continue
-        try:
-            pcm, rate = gemini_tts.synthesize_scene(text, voice)
-        except gemini_tts.GeminiTTSError as e:
-            tts_stats["engine_fallback"] = f"장면 {i + 1} 합성 실패 — {e}"
-            return None
-        pieces = gemini_tts.split_sentences(pcm, rate, w)
-        if pieces and len(pieces) == len(w):
-            paths = []
-            for j, piece in enumerate(pieces):
-                path = work / f"g{i}_{j}.wav"
-                gemini_tts.write_wav(piece, rate, path)
-                paths.append(path)
-            out.append({"segments": paths})
-        else:
-            path = work / f"g{i}.wav"
-            gemini_tts.write_wav(pcm, rate, path)
-            out.append({"whole": path, "weights": w})
-            tts_stats["split_fallback_scenes"] = tts_stats.get("split_fallback_scenes", 0) + 1
+    out: list[dict[str, Any] | None] = [None] * len(scenes)
+
+    def save(i: int, pieces: "list[bytes]", rate: int) -> None:
+        paths = []
+        for j, piece in enumerate(pieces):
+            path = work / f"g{i}_{j}.wav"
+            gemini_tts.write_wav(piece, rate, path)
+            paths.append(path)
+        out[i] = {"segments": paths}
+
+    try:
+        for grp in chunks:
+            pcm, rate = gemini_tts.synthesize_scene("\n\n".join(texts[i] for i in grp), voice)
+            flat = [w for i in grp for w in weights[i]]
+            ends, acc = set(), 0
+            for i in grp[:-1]:
+                acc += len(weights[i])
+                ends.add(acc - 1)
+            pieces = gemini_tts.split_sentences(pcm, rate, flat, ends)
+            if pieces and len(pieces) == len(flat):
+                pos = 0
+                for i in grp:
+                    save(i, pieces[pos:pos + len(weights[i])], rate)
+                    pos += len(weights[i])
+                continue
+            # 묶음 경계를 못 믿겠으면 장면 단위로 다시 — 그래도 안 되면 장면 통째 + 발화량 비례 자막
+            tts_stats["rechunked_scenes"] = tts_stats.get("rechunked_scenes", 0) + len(grp)
+            for i in grp:
+                pcm, rate = gemini_tts.synthesize_scene(texts[i], voice)
+                pieces = gemini_tts.split_sentences(pcm, rate, weights[i])
+                if pieces and len(pieces) == len(weights[i]):
+                    save(i, pieces, rate)
+                    continue
+                whole = gemini_tts.split_sentences(pcm, rate, [sum(weights[i])])
+                path = work / f"g{i}.wav"
+                gemini_tts.write_wav(whole[0] if whole else pcm, rate, path)
+                out[i] = {"whole": path, "weights": weights[i]}
+                tts_stats["split_fallback_scenes"] = tts_stats.get("split_fallback_scenes", 0) + 1
+    except gemini_tts.GeminiTTSError as e:
+        tts_stats["engine_fallback"] = f"합성 실패 — {e}"
+        return None
+    tts_stats["gemini_requests"] = len(chunks) + tts_stats.get("rechunked_scenes", 0)
     return out
 
 
@@ -1011,8 +1147,9 @@ def tts_meta(voice: str, stats: "dict[str, Any]") -> dict[str, Any]:
         meta["requested_voice"] = voice
     if stats.get("engine_fallback"):
         meta["engine_fallback"] = str(stats["engine_fallback"])
-    if stats.get("split_fallback_scenes"):
-        meta["split_fallback_scenes"] = int(stats["split_fallback_scenes"])
+    for key in ("split_fallback_scenes", "rechunked_scenes", "gemini_requests"):
+        if stats.get(key):
+            meta[key] = int(stats[key])
     return meta
 
 
