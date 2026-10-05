@@ -5,7 +5,7 @@ import re
 
 import requests
 
-from popory_content.pronunciation import apply_pronunciations
+from popory_content.pronunciation import apply_pronunciations, read_initials
 
 TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
 LANGUAGE = "ko-KR"
@@ -227,6 +227,7 @@ def _prep_text(text: str) -> str:
     제거/정규화하고, 문장은 공백으로 잇는다. 문장 사이 호흡은 video.py의 무음 갭이
     담당하므로 pause 토큰은 넣지 않는다(markup→ssml 전환)."""
     text = apply_pronunciations(text)             # 발음 사전 — "&" 를 "앤" 으로 바꾸는 정규화보다 먼저(S&P → 에스앤피)
+    text = read_initials(text)                    # 이름 이니셜 E.H. → 이 에이치 — 마침표를 문장 끝으로 읽지 않게
     text = text.replace("[", "").replace("]", "")
     text = _GROUP_COMMA.sub("", text)             # 천 단위 콤마 제거(1,700 → 1700)
     text = _normalize_for_tts(text)               # 특수문자 → 자연 운율(대시·말줄임표·따옴표 등)
