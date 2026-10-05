@@ -16,6 +16,7 @@ from popory_content.generate import run_claude_cli, model_for
 from popory_content.hook_check import check_hook
 from popory_content.script_review import review_script
 from popory_content.subtitles import scene_offsets, Cue
+from popory_content.rerender import scene_records
 from popory_content import gemini_tts
 from popory_content import tts as _tts
 from popory_content.options import FALLBACK_VOICE
@@ -1174,4 +1175,6 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
     mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice,
                                                      portrait=portrait, tts_stats=tts_stats)
     meta["tts"] = tts_meta(voice, tts_stats)
+    # 대본만 두고 음성·자막을 다시 만들 때(재렌더) 배경·카드를 되살릴 수 있게 장면 정보를 남긴다.
+    meta["scenes"] = scene_records(scenes)
     return mp4, scenes, meta, img_missing, img_total, cues

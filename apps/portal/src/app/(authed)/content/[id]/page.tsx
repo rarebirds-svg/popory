@@ -9,6 +9,7 @@ import { DraftEditor } from "./DraftEditor";
 import { AutoRefresh } from "./AutoRefresh";
 import { RetryButton } from "./RetryButton";
 import { RegenerateButton } from "./RegenerateButton";
+import { RerenderButton } from "./RerenderButton";
 import { YoutubeUpload } from "./YoutubeUpload";
 import { CarouselPreview } from "./CarouselPreview";
 import { InstagramUpload } from "./InstagramUpload";
@@ -137,6 +138,10 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                 )}
               </div>
               <RetryButton jobId={job.id} />
+              {/* 대본이 남은 영상 작업은 대본을 버리지 않고 렌더만 다시 해 볼 수 있다 */}
+              {(job.platform === "youtube" || job.platform === "shorts") && job.draft && (
+                <div className="mt-2"><RerenderButton jobId={job.id} /></div>
+              )}
             </div>
           );
         })()}
@@ -190,7 +195,10 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
               );
             })()}
             <video controls className="w-full rounded-md border border-popory-border bg-black" src={`${API_BASE}/api/content/jobs/${job.id}/video`} />
-            <RegenerateButton jobId={job.id} />
+            <div className="flex flex-wrap items-center gap-2">
+              <RegenerateButton jobId={job.id} />
+              <RerenderButton jobId={job.id} />
+            </div>
             {showYtUpload && (
               <YoutubeUpload jobId={job.id} connected={ytConnected} initialStatus={job.youtube_status} initialVideoId={job.youtube_video_id} initialError={job.youtube_error} />
             )}

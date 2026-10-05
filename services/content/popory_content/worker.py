@@ -17,7 +17,9 @@ from popory_content.generate import (generate, GenerateError, generate_youtube_p
                                      set_model_overrides, model_for, is_usage_limit,
                                      usage_limited)
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
-from popory_content.video import make_video, VideoError, render_thumbnail, TMP
+from popory_content.video import make_video, VideoError, render_thumbnail, render_video, tts_meta, TMP
+from popory_content.rerender import (parse_script, load_backgrounds, build_scenes, scene_records,
+                                     image_fetcher as rerender_fetcher)
 from popory_content.subtitles import to_srt
 from popory_content.translate import translate_lines
 from popory_content.youtube_upload import upload, upload_caption, set_thumbnail
@@ -121,7 +123,9 @@ def run_once(client) -> bool:
     job_id = job["id"]
     platform = job.get("platform", "naver-blog")
     try:
-        if platform == "youtube":
+        if platform in ("youtube", "shorts") and _is_rerender(job):
+            _rerender_video(client, job, data.get("draft"), portrait=platform == "shorts")
+        elif platform == "youtube":
             opts = parse_options(job.get("params_json"))
             anchor = StyleAnchor(IMAGE_STYLE_ANCHOR)  # 작업마다 새로 — 톤이 작업 밖으로 새지 않게
             mp4, scenes, meta, img_missing, img_total, cues = make_video(
@@ -209,6 +213,54 @@ def run_once(client) -> bool:
             _notify_auth_failure()
             sys.exit(1)
     return True
+
+
+def _json_obj(raw) -> dict:
+    try:
+        data = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _is_rerender(job: dict) -> bool:
+    """포털의 '음성·자막만 다시 만들기' 표시. API 가 params_json.rerender 에 남긴다."""
+    return _json_obj(job.get("params_json")).get("rerender") is True
+
+
+def _rerender_video(client, job: dict, draft: str | None, portrait: bool) -> None:
+    """저장된 대본은 그대로 두고 지금의 TTS 로 음성·자막·영상만 다시 만든다.
+
+    대본 생성·오탈자 검수·후크 판정·썸네일은 건너뛴다(그대로 둔다). 배경은 맥미니에 남은 이전 렌더
+    파일을 다시 쓰고, 없으면 meta.scenes 의 이미지 프롬프트로 새로 만든다(rerender.build_scenes)."""
+    job_id = job["id"]
+    opts = (parse_shorts_options if portrait else parse_options)(job.get("params_json"))
+    meta = _json_obj(job.get("meta_json"))
+    for key in ("images_missing", "images_total"):  # _finalize_video 가 이번 렌더 기준으로 다시 단다
+        meta.pop(key, None)
+    script = parse_script(draft)
+    backgrounds = load_backgrounds(TMP / f"video_{job_id}", len(script))
+    scenes = build_scenes(script, meta, backgrounds)
+    anchor = StyleAnchor(IMAGE_STYLE_ANCHOR)
+    if backgrounds:
+        # 일부 장면만 새로 그려야 할 때 남은 배경의 톤을 따르게 한다.
+        anchor.adopt(backgrounds[min(backgrounds)])
+    shape = "portrait" if portrait else "landscape"
+    fetch = rerender_fetcher(backgrounds, lambda p: _safe_image(client, p, job_id, anchor, shape))
+    voice = VOICE[opts["voice"]]
+    tts_stats: dict = {}
+    mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=fetch, voice=voice,
+                                                     portrait=portrait, tts_stats=tts_stats)
+    meta["tts"] = tts_meta(voice, tts_stats)
+    meta["scenes"] = scene_records(scenes)
+    meta["rerender"] = {"at": int(time.time()), "reused_backgrounds": len(backgrounds),
+                        "scenes": len(scenes)}
+    append_log(LOGS_DIR, {"worker": "content", "status": "rerender", "job": job_id,
+                          "reused_backgrounds": len(backgrounds), "scenes": len(scenes),
+                          "voice": meta["tts"].get("voice")})
+    client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
+    _store_subtitles(client, job_id, cues)
+    _finalize_video(client, job_id, draft, meta, img_missing, img_total)
 
 
 def _log_seo_review(job_id: str, meta: dict) -> None:

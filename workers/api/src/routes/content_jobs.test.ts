@@ -746,3 +746,91 @@ describe("POST /api/content/jobs/service-create", () => {
     expect(job?.category_id).toBe("c1");
   });
 });
+
+describe("POST /api/content/jobs/:id/rerender", () => {
+  async function makeVideoJob(ck: string, platform = "youtube", status = "review", withDraft = true) {
+    const r = await SELF.fetch("https://example.com/api/content/jobs", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "프로페셔널의 조건", platform, options: { length: "10", voice: "male" } }),
+    });
+    const { id } = await r.json<{ id: string }>();
+    const key = withDraft ? `content/draft/${id}` : null;
+    if (key) await env.R2.put(key, "[장면 하나]\n첫 문장입니다.");
+    await env.DB.prepare("UPDATE content_jobs SET status=?, draft_r2_key=?, youtube_status='done', youtube_video_id='vid_old' WHERE id=?")
+      .bind(status, key, id).run();
+    return id;
+  }
+
+  it("대본을 그대로 두고 queued 로 되돌리며 rerender 표시·업로드 리셋", async () => {
+    const ck = await userCookie();
+    const id = await makeVideoJob(ck);
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/rerender`, { method: "POST", headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const job = await env.DB.prepare("SELECT status, params_json, youtube_status, youtube_video_id, draft_r2_key FROM content_jobs WHERE id=?")
+      .bind(id).first<{ status: string; params_json: string; youtube_status: string | null; youtube_video_id: string | null; draft_r2_key: string }>();
+    expect(job?.status).toBe("queued");
+    expect(JSON.parse(job!.params_json)).toEqual({ length: "10", voice: "male", rerender: true });   // 기존 옵션 유지
+    expect(job?.youtube_status).toBeNull();
+    expect(job?.youtube_video_id).toBeNull();
+    expect(job?.draft_r2_key).toBe(`content/draft/${id}`);          // 대본은 그대로
+  });
+
+  it("claim 이 저장된 대본을 함께 넘긴다", async () => {
+    const ck = await userCookie();
+    const id = await makeVideoJob(ck, "shorts");
+    await SELF.fetch(`https://example.com/api/content/jobs/${id}/rerender`, { method: "POST", headers: { cookie: ck } });
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    const body = await res.json<{ job: { id: string }; draft?: string }>();
+    expect(body.job.id).toBe(id);
+    expect(body.draft).toBe("[장면 하나]\n첫 문장입니다.");
+  });
+
+  it("일반 생성 잡의 claim 에는 대본이 없다", async () => {
+    const ck = await userCookie();
+    await SELF.fetch("https://example.com/api/content/jobs", { method: "POST", headers: { cookie: ck, "content-type": "application/json" }, body: JSON.stringify({ topic: "t", platform: "youtube" }) });
+    const token = await workerToken();
+    const res = await SELF.fetch("https://example.com/api/content/jobs/claim", { method: "POST", headers: { authorization: `Bearer ${token}` } });
+    const body = await res.json<{ draft?: string }>();
+    expect(body.draft).toBeUndefined();
+  });
+
+  it("재생성은 rerender 표시를 지워 대본을 새로 쓰게 한다", async () => {
+    const ck = await userCookie();
+    const id = await makeVideoJob(ck);
+    await SELF.fetch(`https://example.com/api/content/jobs/${id}/rerender`, { method: "POST", headers: { cookie: ck } });
+    await env.DB.prepare("UPDATE content_jobs SET status='review' WHERE id=?").bind(id).run();
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/regenerate`, { method: "POST", headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const job = await env.DB.prepare("SELECT params_json FROM content_jobs WHERE id=?").bind(id).first<{ params_json: string }>();
+    expect(JSON.parse(job!.params_json)).toEqual({ length: "10", voice: "male" });
+  });
+
+  it("대본이 없거나, 영상이 아니거나, 진행 중이면 409", async () => {
+    const ck = await userCookie();
+    const noDraft = await makeVideoJob(ck, "youtube", "review", false);
+    const blog = await makeVideoJob(ck, "naver-blog", "review");
+    const running = await makeVideoJob(ck, "youtube", "running");
+    for (const id of [noDraft, blog, running]) {
+      const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/rerender`, { method: "POST", headers: { cookie: ck } });
+      expect(res.status).toBe(409);
+    }
+  });
+
+  it("실패한 작업도 대본이 있으면 다시 렌더링할 수 있다", async () => {
+    const ck = await userCookie();
+    const id = await makeVideoJob(ck, "youtube", "failed");
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/rerender`, { method: "POST", headers: { cookie: ck } });
+    expect(res.status).toBe(200);
+    const job = await env.DB.prepare("SELECT status, error FROM content_jobs WHERE id=?").bind(id).first<{ status: string; error: string | null }>();
+    expect(job).toEqual({ status: "queued", error: null });
+  });
+
+  it("남의 작업은 404", async () => {
+    const ck = await userCookie();
+    const id = await makeVideoJob(ck);
+    const ck2 = await userCookie("u2", "u2@e.com");
+    const res = await SELF.fetch(`https://example.com/api/content/jobs/${id}/rerender`, { method: "POST", headers: { cookie: ck2 } });
+    expect(res.status).toBe(404);
+  });
+});
