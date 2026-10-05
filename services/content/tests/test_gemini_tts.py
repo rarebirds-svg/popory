@@ -63,7 +63,8 @@ def test_split_sentences_cuts_at_pauses_and_trims_edges():
     pieces = g.split_sentences(pcm, 24000, [20, 12, 30])
     assert pieces is not None and len(pieces) == 3
     secs = [len(p) / 2 / 24000 for p in pieces]
-    assert secs == pytest.approx([0.8, 0.5, 1.2], abs=0.03)                  # 앞뒤·사이 무음은 빠진다
+    # 사이 무음은 빠지고, 앞뒤는 끝소리가 잘리지 않게 EDGE_PAD_MS(40ms)만 남긴다
+    assert secs == pytest.approx([0.84, 0.5, 1.24], abs=0.03)
 
 
 def test_split_sentences_prefers_pause_nearest_expected_position():
@@ -75,13 +76,13 @@ def test_split_sentences_prefers_pause_nearest_expected_position():
     a.extend([0] * int(rate * 0.5)); a.extend(tone(0.8))
     pieces = g.split_sentences(a.tobytes(), rate, [10, 10])
     secs = [len(p) / 2 / rate for p in pieces]
-    assert secs == pytest.approx([1.0, 0.8], abs=0.03)
+    assert secs == pytest.approx([1.0, 0.8], abs=0.03)   # 앞뒤에 무음이 없으면 덧붙일 여유도 없다
 
 
 def test_split_sentences_gives_up_without_enough_pauses():
     assert g.split_sentences(_pcm([2.0]), 24000, [10, 10, 10]) is None
     one = g.split_sentences(_pcm([1.0]), 24000, [10])
-    assert len(one) == 1 and len(one[0]) / 2 / 24000 == pytest.approx(1.0, abs=0.03)
+    assert len(one) == 1 and len(one[0]) / 2 / 24000 == pytest.approx(1.08, abs=0.03)
 
 
 def test_payload_separates_direction_from_transcript():
@@ -138,3 +139,94 @@ def test_synthesize_scene_retries_5xx_once(monkeypatch):
     monkeypatch.setattr(g.requests, "post", lambda *a, **k: seq.pop(0))
     pcm, _ = g.synthesize_scene("대본", "gemini-3.8-flash-tts/Iapetus")
     assert len(pcm) == 4800 and g.usage()["day_requests"] == 2
+
+
+def _tone(sec, rate=24000, amp=8000):
+    return [int(amp * math.sin(2 * math.pi * 220 * t / rate)) for t in range(int(rate * sec))]
+
+
+def _build(spec, rate=24000):
+    """spec: [("t", 초, 진폭?) | ("s", 초)] 를 이어붙인 PCM."""
+    a = array("h")
+    for item in spec:
+        if item[0] == "t":
+            a.extend(_tone(item[1], rate, item[2] if len(item) > 2 else 8000))
+        else:
+            a.extend([0] * int(rate * item[1]))
+    return a.tobytes()
+
+
+def _secs(pieces, rate=24000):
+    return [len(p) / 2 / rate for p in pieces]
+
+
+def test_alignment_prefers_sentence_pause_over_nearer_comma_pause():
+    # 문장1 = 1.0 + (쉼표 숨 0.16) + 1.0, 문장 끝 숨 0.5, 문장2 = 1.0. 원고 비례 예상 위치는 쉼표 숨 쪽에 더 가깝다.
+    pcm = _build([("s", 0.1), ("t", 1.0), ("s", 0.16), ("t", 1.0), ("s", 0.5), ("t", 1.0), ("s", 0.1)])
+    pieces = g.split_sentences(pcm, 24000, [12, 10])
+    assert _secs(pieces) == pytest.approx([2.2, 1.04], abs=0.03)
+
+
+def test_alignment_handles_many_sentences_with_drifting_pace():
+    # 8문장, 실제 길이가 원고 비례와 ±40% 어긋나도 숨마다 정확히 자른다
+    lens = [1.4, 0.6, 1.1, 0.9, 1.6, 0.5, 1.2, 0.8]
+    spec = [("s", 0.1)]
+    for k, sec in enumerate(lens):
+        spec.append(("t", sec))
+        spec.append(("s", 0.4 if k < len(lens) - 1 else 0.1))
+    pieces = g.split_sentences(_build(spec), 24000, [10] * 8)
+    assert pieces is not None
+    got = _secs(pieces)
+    assert got[1:-1] == pytest.approx(lens[1:-1], abs=0.03)
+
+
+def test_paragraph_boundary_prefers_long_pause():
+    # 장면 경계(문장 0 뒤)는 긴 숨(0.9초)을, 같은 거리의 짧은 숨(0.2초)보다 고른다
+    pcm = _build([("s", 0.1), ("t", 0.9), ("s", 0.2), ("t", 0.3), ("s", 0.9), ("t", 1.0), ("s", 0.1)])
+    pieces = g.split_sentences(pcm, 24000, [10, 10], paragraph_after={0})
+    assert _secs(pieces)[0] == pytest.approx(1.44, abs=0.03)
+
+
+def test_edge_artifacts_are_dropped():
+    # 앞의 0.15초 딸깍·뒤의 0.2초 잡음은 본 발화와 떨어져 있으면 버린다 — 챕터 경계의 '이상한 소리'
+    pcm = _build([("t", 0.15), ("s", 0.4), ("t", 1.0), ("s", 0.4), ("t", 0.2), ("s", 0.1)])
+    pieces = g.split_sentences(pcm, 24000, [10])
+    assert _secs(pieces) == pytest.approx([1.08], abs=0.03)
+
+
+def test_pieces_fade_in_and_out():
+    pcm = _build([("t", 1.0, 20000)])
+    piece = array("h")
+    piece.frombytes(g.split_sentences(pcm, 24000, [10])[0])
+    assert abs(piece[0]) < 200 and abs(piece[-1]) < 200          # 끝이 0 근처 — 딸깍 없음
+    assert max(abs(x) for x in piece[2400:4800]) > 3000
+
+
+def test_chunk_loudness_is_normalized():
+    # 다른 음량으로 생성된 두 묶음도 같은 발화 음량으로 맞춘다 — 묶음 사이 목소리 차이 완화
+    def rms(b):
+        a = array("h"); a.frombytes(b)
+        return math.sqrt(sum(x * x for x in a) / len(a))
+    loud = g.split_sentences(_build([("s", 0.1), ("t", 1.0, 16000), ("s", 0.1)]), 24000, [10])[0]
+    soft = g.split_sentences(_build([("s", 0.1), ("t", 1.0, 3000), ("s", 0.1)]), 24000, [10])[0]
+    assert rms(loud) == pytest.approx(rms(soft), rel=0.05)
+
+
+def test_implausible_alignment_is_rejected():
+    # 3문장인데 원고상 아주 짧아야 할 문장이 소리로는 대부분을 차지하면 경계를 믿지 않는다
+    pcm = _build([("s", 0.1), ("t", 0.3), ("s", 0.4), ("t", 3.0), ("s", 0.4), ("t", 0.3), ("s", 0.1)])
+    assert g.split_sentences(pcm, 24000, [40, 2, 40]) is None
+
+
+def test_plan_chunks_balances_and_respects_limit():
+    assert g.plan_chunks([35] * 17, 360) == [list(range(8)), list(range(8, 17))]   # 롱폼 → 2요청
+    assert g.plan_chunks([7] * 8, 360) == [list(range(8))]                         # 쇼츠 → 1요청
+    assert g.plan_chunks([], 360) == []
+    chunks = g.plan_chunks([50] * 20, 360)
+    assert [i for c in chunks for i in c] == list(range(20)) and len(chunks) == 3
+
+
+def test_pause_spans_reports_inner_pauses_only():
+    pcm = _build([("s", 0.2), ("t", 0.5), ("s", 0.3), ("t", 0.5), ("s", 0.2)])
+    spans = g.pause_spans(pcm, 24000, 80)
+    assert len(spans) == 1 and spans[0][0] == pytest.approx(0.7, abs=0.02) and spans[0][1] == pytest.approx(1.0, abs=0.02)

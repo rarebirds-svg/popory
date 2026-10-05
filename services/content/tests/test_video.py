@@ -911,7 +911,7 @@ def test_split_existing_rules_unchanged():
 
 
 def _pcm_with_pauses(rate=24000, parts=(0.6, 0.9), pause=0.4):
-    """소리(사인파) 구간 사이에 무음을 둔 16비트 PCM — Gemini 장면 오디오 흉내."""
+    """소리(사인파) 구간 사이에 무음을 둔 16비트 PCM — Gemini 합성 오디오 흉내."""
     import math
     from array import array
     a = array("h")
@@ -922,54 +922,91 @@ def _pcm_with_pauses(rate=24000, parts=(0.6, 0.9), pause=0.4):
     return a.tobytes()
 
 
-def test_render_video_gemini_voice_synthesizes_per_scene_and_splits(monkeypatch, tmp_path):
-    from popory_content import video, gemini_tts
+def _fake_gemini(calls):
+    """원고의 문장 수만큼 소리 구간을 만들어 돌려주는 가짜 합성기(문단 빈 줄은 긴 숨)."""
+    def synth(text, voice):
+        calls.append(text)
+        n = sum(text.count(c) for c in ".?!")
+        return _pcm_with_pauses(parts=tuple(0.5 + 0.1 * (k % 3) for k in range(n))), 24000
+    return synth
+
+
+def _gemini_stub(monkeypatch, tmp_path, video, gemini_tts):
     _render_stub(monkeypatch, tmp_path, video)
     monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
     monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
     monkeypatch.setattr(gemini_tts, "LEDGER", tmp_path / "ledger.json")
+
+
+def test_render_video_gemini_voice_synthesizes_scenes_together_and_splits(monkeypatch, tmp_path):
+    from popory_content import video, gemini_tts
+    _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
     calls = []
-    monkeypatch.setattr(gemini_tts, "synthesize_scene",
-                        lambda text, voice: calls.append(text) or (_pcm_with_pauses(), 24000))
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", _fake_gemini(calls))
     cloud = []
     monkeypatch.setattr(video, "synthesize", lambda text, voice=None: cloud.append(voice) or b"AUDIO")
     stats = {}
     scenes = [{"caption": "a", "narration": "첫 문장입니다. 두 번째 문장이죠."},
               {"caption": "b", "narration": "다음 장면 첫 문장. 그리고 끝 문장."}]
     video.render_video(scenes, job_id="gemini_ok", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
-    assert len(calls) == 2                       # 문장별이 아니라 장면당 한 번
-    assert cloud == []                           # Cloud TTS 는 부르지 않는다
-    assert stats["used_voice"] == "gemini-3.8-flash-tts/Iapetus"
-    assert "engine_fallback" not in stats and "split_fallback_scenes" not in stats
+    assert len(calls) == 1 and "\n\n" in calls[0]   # 두 장면을 한 요청에 — 목소리가 장면마다 바뀌지 않게
+    assert cloud == []
+    assert stats["used_voice"] == "gemini-3.8-flash-tts/Iapetus" and stats["gemini_requests"] == 1
+    assert "engine_fallback" not in stats and "rechunked_scenes" not in stats
     assert stats["sentences"] == 4
     work = video.TMP / "video_gemini_ok"
-    assert (work / "g0_0.wav").exists() and (work / "g0_1.wav").exists()   # 무음에서 문장별로 나뉨
+    for name in ("g0_0.wav", "g0_1.wav", "g1_0.wav", "g1_1.wav"):
+        assert (work / name).exists()                # 묶음 오디오를 장면별·문장별로 다시 나눴다
+
+
+def test_render_video_longform_is_two_requests(monkeypatch, tmp_path):
+    from popory_content import video, gemini_tts
+    _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
+    calls = []
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", _fake_gemini(calls))
+    narration = "가" * 180 + ". " + "나" * 6 + "?"       # 장면당 약 35초 분량
+    scenes = [{"caption": str(i), "narration": narration} for i in range(17)]
+    stats = {}
+    video.render_video(scenes, job_id="gemini_long", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert len(calls) == 2 and stats["gemini_requests"] == 2
+
+
+def test_render_video_gemini_rechunks_when_split_is_unsure(monkeypatch, tmp_path):
+    from popory_content import video, gemini_tts
+    _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
+    calls = []
+
+    def synth(text, voice):
+        calls.append(text)
+        if "\n\n" in text:                          # 묶음 오디오는 숨이 하나도 없다 → 경계를 못 찾음
+            return _pcm_with_pauses(parts=(3.0,)), 24000
+        return _fake_gemini([])(text, voice)
+
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", synth)
+    stats = {}
+    scenes = [{"caption": "a", "narration": "하나입니다. 둘입니다."}, {"caption": "b", "narration": "셋입니다. 넷이죠."}]
+    video.render_video(scenes, job_id="gemini_rechunk", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert len(calls) == 3 and stats["rechunked_scenes"] == 2 and stats["gemini_requests"] == 3
+    assert stats["used_voice"].startswith("gemini-")
 
 
 def test_render_video_gemini_failure_falls_back_for_whole_video(monkeypatch, tmp_path):
     from popory_content import video, gemini_tts
     from popory_content.options import FALLBACK_VOICE
-    _render_stub(monkeypatch, tmp_path, video)
-    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
-    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
-    monkeypatch.setattr(gemini_tts, "LEDGER", tmp_path / "ledger.json")
-    n = {"i": 0}
+    _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
 
-    def flaky(text, voice):
-        n["i"] += 1
-        if n["i"] == 2:                          # 두 번째 장면에서 실패
-            raise gemini_tts.GeminiTTSError("429 RESOURCE_EXHAUSTED")
-        return _pcm_with_pauses(parts=(0.6,)), 24000
+    def boom(text, voice):
+        raise gemini_tts.GeminiTTSError("429 RESOURCE_EXHAUSTED")
 
-    monkeypatch.setattr(gemini_tts, "synthesize_scene", flaky)
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", boom)
     cloud = []
     monkeypatch.setattr(video, "synthesize", lambda text, voice=None: cloud.append(voice) or b"AUDIO")
     stats = {}
     scenes = [{"caption": "a", "narration": "하나."}, {"caption": "b", "narration": "둘."}]
     video.render_video(scenes, job_id="gemini_fail", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
     assert stats["used_voice"] == FALLBACK_VOICE
-    assert "429" in stats["engine_fallback"] and "장면 2" in stats["engine_fallback"]
-    assert cloud == [FALLBACK_VOICE, FALLBACK_VOICE]   # 첫 장면도 무료 음성으로 — 목소리가 섞이지 않는다
+    assert "429" in stats["engine_fallback"]
+    assert cloud == [FALLBACK_VOICE, FALLBACK_VOICE]   # 모든 장면이 무료 음성 — 목소리가 섞이지 않는다
 
 
 def test_render_video_gemini_budget_block_skips_api(monkeypatch, tmp_path):
@@ -999,3 +1036,39 @@ def test_tts_meta_for_gemini_and_its_fallback():
     assert m["voice"] == "ko-KR-Neural2-C" and m["family"] == "Neural2"
     assert m["requested_voice"] == "gemini-3.8-flash-tts/Iapetus"
     assert m["fallback"] is True and m["engine_fallback"] == "월 상한 초과 예상"
+
+
+def test_wrap_chunks_breaks_at_meaning_boundaries():
+    from popory_content.video import _wrap_chunks
+    s = "복리는 수익률이 아니라 시간에 붙습니다, 그래서 버티는 사람에게만 열리는 문이 되고 대부분은 그걸 끝내 못 견딥니다."
+    assert _wrap_chunks(s, 30) == ["복리는 수익률이 아니라 시간에 붙습니다,", "그래서 버티는 사람에게만 열리는 문이 되고",
+                                   "대부분은 그걸 끝내 못 견딥니다."]
+    # 숫자와 단위(1,800만 달러), 꾸밈말과 명사는 한 줄에 둔다
+    for chunks in (_wrap_chunks("1977년 1,800만 달러였던 펀드 자산은 140억 달러까지 불어났습니다.", w) for w in (18, 30)):
+        for a, b in zip(chunks, chunks[1:]):
+            assert not (a.endswith("만") and b.startswith("달러"))
+            assert not (a.endswith("억") and b.startswith("달러"))
+    chunks = _wrap_chunks("우리가 매일 할 수 있는 것은 생각보다 훨씬 많습니다.", 12)
+    assert all(not c.endswith("할") for c in chunks) and all(not c.startswith("것") for c in chunks)
+
+
+def test_chunk_spans_use_snapped_cuts():
+    from popory_content.video import _chunk_spans
+    spans = _chunk_spans(["앞 줄", "뒷 줄"], start=10.0, speech_dur=4.0, end=4.7 + 10.0, cuts=[1.3])
+    assert spans == [(10.0, 11.3), (11.3, 14.7)]
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+def test_snap_chunk_cuts_lands_on_real_pause(tmp_path):
+    # 글자 수 비례 예상(약 1.0초)이 아니라 실제 숨(1.6~1.9초) 끝 직전에서 다음 줄로 넘어간다
+    from popory_content import video, gemini_tts
+    import math
+    from array import array
+    a = array("h")
+    a.extend(int(8000 * math.sin(2 * math.pi * 220 * t / 24000)) for t in range(int(24000 * 1.6)))
+    a.extend([0] * int(24000 * 0.3))
+    a.extend(int(8000 * math.sin(2 * math.pi * 220 * t / 24000)) for t in range(int(24000 * 0.6)))
+    wav = tmp_path / "s.wav"
+    gemini_tts.write_wav(a.tobytes(), 24000, wav)
+    cuts = video._snap_chunk_cuts(wav, ["가나다라마", "바사라자차"], 2.5)
+    assert cuts == pytest.approx([1.9 - video.SNAP_LEAD_S], abs=0.03)
