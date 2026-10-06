@@ -311,3 +311,20 @@ def test_head_pcm_takes_leading_share():
     pcm = bytes(range(200))
     assert g.head_pcm(pcm, 0.25) == pcm[:50]
     assert g.head_pcm(pcm, 2.0) == pcm
+
+
+def test_prepay_depleted_402_is_explained_and_remembered(monkeypatch):
+    # 2026-10-06: 선불 크레딧 소진(402)으로 자동 생성 영상이 폴백 음성으로 나왔다 — 이유를 사람 말로, 장부에 남긴다.
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    calls = []
+    body = '{"error": {"code": 402, "message": "Your prepayment credits are depleted.", "status": "RESOURCE_EXHAUSTED"}}'
+    monkeypatch.setattr(g.requests, "post", lambda *a, **k: calls.append(1) or _Resp(402, body))
+    with pytest.raises(g.GeminiTTSError, match="선불 크레딧 소진"):
+        g.synthesize_scene("대본", "gemini-3.8-flash-tts/Iapetus")
+    assert len(calls) == 1                                       # 다시 보내도 같다
+    err = g.usage()["last_error"]
+    assert err["message"].startswith("402 선불 크레딧 소진") and "depleted" in err["message"]
+    # 다음 성공이 마지막 실패를 지운다
+    monkeypatch.setattr(g.requests, "post", lambda *a, **k: _Resp(200, pcm=b"\x00\x00" * 2400))
+    g.synthesize_scene("대본", "gemini-3.8-flash-tts/Iapetus")
+    assert g.usage()["last_error"] is None
