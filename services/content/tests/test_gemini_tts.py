@@ -127,10 +127,37 @@ def test_synthesize_scene_returns_pcm_and_records_usage(monkeypatch):
 def test_synthesize_scene_does_not_retry_4xx_but_counts_request(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     calls = []
-    monkeypatch.setattr(g.requests, "post", lambda *a, **k: calls.append(1) or _Resp(429, "RESOURCE_EXHAUSTED"))
-    with pytest.raises(g.GeminiTTSError, match="429"):
+    monkeypatch.setattr(g.requests, "post", lambda *a, **k: calls.append(1) or _Resp(400, "INVALID_ARGUMENT"))
+    with pytest.raises(g.GeminiTTSError, match="400"):
         g.synthesize_scene("대본", "gemini-3.8-flash-tts/Iapetus")
     assert len(calls) == 1 and g.usage()["day_requests"] == 1
+
+
+def test_synthesize_scene_daily_quota_429_is_not_retried(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    calls = []
+    body = "RESOURCE_EXHAUSTED Quota exceeded for metric: generate_requests_per_model_per_day, limit: 100 (PerDay)"
+    monkeypatch.setattr(g.requests, "post", lambda *a, **k: calls.append(1) or _Resp(429, body))
+    with pytest.raises(g.GeminiTTSError, match="PerDay"):
+        g.synthesize_scene("대본", "gemini-3.8-flash-tts/Iapetus")
+    assert len(calls) == 1
+
+
+def test_synthesize_scene_retries_rate_limit_and_timeouts_with_backoff(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    waits = []
+    monkeypatch.setattr(g.time, "sleep", waits.append)
+    seq = [_Resp(429, "RESOURCE_EXHAUSTED per minute"), None, _Resp(200, pcm=b"\x00\x00" * 2400)]
+
+    def post(*a, **k):
+        r = seq.pop(0)
+        if r is None:
+            raise g.requests.Timeout("read timed out")
+        return r
+
+    monkeypatch.setattr(g.requests, "post", post)
+    pcm, _ = g.synthesize_scene("대본", "gemini-3.8-flash-tts/Iapetus")
+    assert len(pcm) == 4800 and waits == [15, 45] and g.usage()["day_requests"] == 3
 
 
 def test_synthesize_scene_retries_5xx_once(monkeypatch):

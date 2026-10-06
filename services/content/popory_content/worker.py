@@ -137,6 +137,7 @@ def run_once(client) -> bool:
                 voice=VOICE[opts["voice"]],
             )
             meta["worker_commit"] = runtime_info._short(runtime_info.LOADED_COMMIT)
+            _log_tts_fallback(job_id, meta)
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
@@ -156,6 +157,7 @@ def run_once(client) -> bool:
                 user_msg_builder=build_shorts_user_message,
             )
             meta["worker_commit"] = runtime_info._short(runtime_info.LOADED_COMMIT)
+            _log_tts_fallback(job_id, meta)
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
@@ -218,6 +220,18 @@ def run_once(client) -> bool:
     return True
 
 
+def _log_tts_fallback(job_id: str, meta: dict) -> None:
+    """Gemini 음성이 실패하거나 상한에 걸려 영상 전체가 폴백 음성으로 만들어졌으면 실패로 기록한다.
+
+    예전엔 이유가 job meta(tts.engine_fallback)에만 남아, 매일 자동 생성 영상이 무료 음성으로 내려가도
+    아무도 몰랐다(2026-10-06). `_failed` 상태라 포털 /admin/errors 로도 올라간다."""
+    tts = meta.get("tts") if isinstance(meta.get("tts"), dict) else {}
+    if tts.get("engine_fallback"):
+        append_log(LOGS_DIR, {"worker": "content", "status": "gemini_tts_failed", "job": job_id,
+                              "requested_voice": tts.get("requested_voice", ""), "used_voice": tts.get("voice", ""),
+                              "error": str(tts["engine_fallback"])[:300]})
+
+
 def _json_obj(raw) -> dict:
     try:
         data = json.loads(raw) if raw else {}
@@ -260,6 +274,7 @@ def _rerender_video(client, job: dict, draft: str | None, portrait: bool) -> Non
                         "scenes": len(scenes)}
     # 어느 코드로 렌더했는지 — 고친 뒤 다시 만들었는데 증상이 그대로면 먼저 이 값을 본다(pull·재시작 누락).
     meta["worker_commit"] = runtime_info._short(runtime_info.LOADED_COMMIT)
+    _log_tts_fallback(job_id, meta)
     append_log(LOGS_DIR, {"worker": "content", "status": "rerender", "job": job_id,
                           "commit": meta["worker_commit"],
                           "reused_backgrounds": len(backgrounds), "scenes": len(scenes),

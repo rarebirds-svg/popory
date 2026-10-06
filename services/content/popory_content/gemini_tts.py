@@ -45,8 +45,12 @@ PRICE_CHANGE_DATE = datetime.date(2027, 1, 1)
 CHARS_PER_SEC = 5.3
 LEDGER = Path(os.environ.get("POPORY_GEMINI_TTS_LEDGER",
                              str(Path(__file__).resolve().parent.parent / "logs" / "gemini_tts_usage.json")))
-TIMEOUT_SECONDS = 180
-ATTEMPTS = 2
+# 6분 묶음 합성은 응답까지 수 분 걸릴 수 있다 — 180초에선 긴 묶음이 시간 초과로 영상 전체 폴백이 됐을 수 있다.
+TIMEOUT_SECONDS = int(os.environ.get("POPORY_GEMINI_TTS_TIMEOUT", "300"))
+# 일시적 실패(시간 초과·연결 끊김·5xx·분당 한도 429·오디오 없는 응답)는 간격을 늘려 다시 보낸다. 한 번 실패로
+# 영상 전체가 무료 음성으로 내려가는 건 손해가 크다. 하루 한도(PerDay) 429·권한·모델명 오류는 다시 보내도 같다.
+ATTEMPTS = 3
+RETRY_WAITS = (15, 45)
 # 여러 장면을 한 요청에 묶는 길이 상한(예상 낭독 초). 요청마다 목소리 톤이 미세하게 달라지므로 묶을수록
 # 일관되지만, 출력 상한(16,384 오디오 토큰 ≈ 655초)과 실패 시 재시도 비용을 생각해 6분으로 둔다.
 # 롱폼(~10분)은 2요청, 쇼츠는 1요청이 된다.
@@ -163,13 +167,14 @@ def synthesize_scene(text: str, voice: str) -> tuple[bytes, int]:
     last = ""
     made = 0
     for attempt in range(ATTEMPTS):
+        if attempt:
+            time.sleep(RETRY_WAITS[min(attempt, len(RETRY_WAITS)) - 1])
         made += 1
         try:
             resp = requests.post(API_URL.format(model=model), params={"key": key},
                                  json=payload(text, speaker), timeout=TIMEOUT_SECONDS)
         except requests.RequestException as e:
             last = f"요청 실패 — {e}"
-            time.sleep(3)
             continue
         if resp.status_code == 200:
             try:
@@ -181,12 +186,20 @@ def synthesize_scene(text: str, voice: str) -> tuple[bytes, int]:
             rate = _pcm_rate(inline.get("mimeType", ""))
             record(len(pcm) / 2 / rate, made)
             return pcm, rate
-        last = f"{resp.status_code} {resp.text[:200]}"
-        if resp.status_code < 500:
-            break  # 4xx(권한·쿼터·모델명)는 다시 보내도 같다
-        time.sleep(3)
+        last = f"{resp.status_code} {resp.text[:300]}"
+        if not _retryable(resp.status_code, resp.text):
+            break
     record(0.0, made)
     raise GeminiTTSError(last)
+
+
+def _retryable(status: int, body: str) -> bool:
+    """다시 보내면 나아질 수 있는 실패인가 — 5xx, 그리고 하루 한도가 아닌 429(분당 한도)."""
+    if status >= 500:
+        return True
+    if status == 429:
+        return not re.search(r"per ?day", body or "", re.IGNORECASE)
+    return False
 
 
 def write_wav(pcm: bytes, rate: int, path: Path) -> None:

@@ -155,3 +155,13 @@ def test_run_once_rerender_without_script_fails_visibly(rerender_env):
     worker.run_once(client)
     _, body = client.patched[0]
     assert body["status"] == "failed" and "대본" in body["error"]
+
+
+def test_tts_fallback_is_logged_as_failure(monkeypatch, tmp_path):
+    logged = []
+    monkeypatch.setattr(worker, "append_log", lambda d, rec: logged.append(rec))
+    worker._log_tts_fallback("j1", {"tts": {"voice": "ko-KR-Neural2-C", "requested_voice": "gemini-3.8-flash-tts/Iapetus",
+                                            "engine_fallback": "합성 실패 — 429 per day"}})
+    worker._log_tts_fallback("j2", {"tts": {"voice": "gemini-3.8-flash-tts/Iapetus"}})
+    assert len(logged) == 1 and logged[0]["status"] == "gemini_tts_failed" and logged[0]["job"] == "j1"
+    assert "429" in logged[0]["error"]
