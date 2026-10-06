@@ -45,8 +45,12 @@ PRICE_CHANGE_DATE = datetime.date(2027, 1, 1)
 CHARS_PER_SEC = 5.3
 LEDGER = Path(os.environ.get("POPORY_GEMINI_TTS_LEDGER",
                              str(Path(__file__).resolve().parent.parent / "logs" / "gemini_tts_usage.json")))
-TIMEOUT_SECONDS = 180
-ATTEMPTS = 2
+# 6분 묶음 합성은 응답까지 수 분 걸릴 수 있다 — 180초에선 긴 묶음이 시간 초과로 영상 전체 폴백이 됐을 수 있다.
+TIMEOUT_SECONDS = int(os.environ.get("POPORY_GEMINI_TTS_TIMEOUT", "300"))
+# 일시적 실패(시간 초과·연결 끊김·5xx·분당 한도 429·오디오 없는 응답)는 간격을 늘려 다시 보낸다. 한 번 실패로
+# 영상 전체가 무료 음성으로 내려가는 건 손해가 크다. 하루 한도(PerDay) 429·권한·모델명 오류는 다시 보내도 같다.
+ATTEMPTS = 3
+RETRY_WAITS = (15, 45)
 # 여러 장면을 한 요청에 묶는 길이 상한(예상 낭독 초). 요청마다 목소리 톤이 미세하게 달라지므로 묶을수록
 # 일관되지만, 출력 상한(16,384 오디오 토큰 ≈ 655초)과 실패 시 재시도 비용을 생각해 6분으로 둔다.
 # 롱폼(~10분)은 2요청, 쇼츠는 1요청이 된다.
@@ -100,6 +104,8 @@ def usage(today: "datetime.date | None" = None) -> dict:
         "day_requests": int(led.get("day_requests", 0)) if led.get("day") == day else 0,
         "monthly_cap_usd": MONTHLY_USD_CAP,
         "daily_request_cap": DAILY_REQUEST_CAP,
+        # 마지막 합성 실패(성공하면 지운다) — 어드민 TTS 화면이 "지금 Gemini 가 막혀 있다" 를 보여 주는 근거.
+        "last_error": led.get("last_error"),
     }
 
 
@@ -115,8 +121,10 @@ def budget_block_reason(texts: list[str], today: "datetime.date | None" = None) 
     return None
 
 
-def record(seconds: float, requests_made: int, today: "datetime.date | None" = None) -> None:
-    """실제 합성 길이·요청 수를 장부에 더한다. 실패한 요청도 요청 수에는 넣는다(쿼터는 소모된다)."""
+def record(seconds: float, requests_made: int, today: "datetime.date | None" = None,
+           error: "str | None" = None) -> None:
+    """실제 합성 길이·요청 수를 장부에 더한다. 실패한 요청도 요청 수에는 넣는다(쿼터는 소모된다).
+    error 를 주면 마지막 실패로 남기고, 성공(seconds > 0)하면 지운다."""
     u = usage(today)
     led = {
         "month": u["month"],
@@ -125,6 +133,10 @@ def record(seconds: float, requests_made: int, today: "datetime.date | None" = N
         "day": u["day"],
         "day_requests": u["day_requests"] + requests_made,
     }
+    if error:
+        led["last_error"] = {"at": datetime.datetime.now().isoformat(timespec="seconds"), "message": error[:300]}
+    elif seconds <= 0 and u.get("last_error"):
+        led["last_error"] = u["last_error"]
     try:
         LEDGER.parent.mkdir(parents=True, exist_ok=True)
         tmp = LEDGER.with_suffix(".tmp")
@@ -163,13 +175,14 @@ def synthesize_scene(text: str, voice: str) -> tuple[bytes, int]:
     last = ""
     made = 0
     for attempt in range(ATTEMPTS):
+        if attempt:
+            time.sleep(RETRY_WAITS[min(attempt, len(RETRY_WAITS)) - 1])
         made += 1
         try:
             resp = requests.post(API_URL.format(model=model), params={"key": key},
                                  json=payload(text, speaker), timeout=TIMEOUT_SECONDS)
         except requests.RequestException as e:
             last = f"요청 실패 — {e}"
-            time.sleep(3)
             continue
         if resp.status_code == 200:
             try:
@@ -181,12 +194,33 @@ def synthesize_scene(text: str, voice: str) -> tuple[bytes, int]:
             rate = _pcm_rate(inline.get("mimeType", ""))
             record(len(pcm) / 2 / rate, made)
             return pcm, rate
-        last = f"{resp.status_code} {resp.text[:200]}"
-        if resp.status_code < 500:
-            break  # 4xx(권한·쿼터·모델명)는 다시 보내도 같다
-        time.sleep(3)
-    record(0.0, made)
+        last = _explain(resp.status_code, resp.text)
+        if not _retryable(resp.status_code, resp.text):
+            break
+    record(0.0, made, error=last)
     raise GeminiTTSError(last)
+
+
+def _explain(status: int, body: str) -> str:
+    """API 오류를 사람이 바로 조치할 수 있는 말로. 원문은 뒤에 붙여 둔다."""
+    hint = {
+        402: "선불 크레딧 소진 — AI Studio(https://ai.studio/projects)에서 결제·충전 필요",
+        403: "권한 없음 — GEMINI_API_KEY·프로젝트 결제 설정 확인",
+        404: "모델 이름을 찾을 수 없음 — 모델 ID 변경 여부 확인",
+    }.get(status)
+    if status == 429 and re.search(r"per ?day", body or "", re.IGNORECASE):
+        hint = "하루 요청 한도 초과 — 내일 다시 시도"
+    raw = re.sub(r"\s+", " ", body or "")[:200]
+    return f"{status} {hint} · {raw}" if hint else f"{status} {raw}"
+
+
+def _retryable(status: int, body: str) -> bool:
+    """다시 보내면 나아질 수 있는 실패인가 — 5xx, 그리고 하루 한도가 아닌 429(분당 한도)."""
+    if status >= 500:
+        return True
+    if status == 429:
+        return not re.search(r"per ?day", body or "", re.IGNORECASE)
+    return False
 
 
 def write_wav(pcm: bytes, rate: int, path: Path) -> None:

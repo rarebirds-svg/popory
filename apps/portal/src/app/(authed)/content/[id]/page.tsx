@@ -160,7 +160,7 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
             })()}
             {(() => {
               // 이 영상을 어떤 음성·속도로 만들었는지, Google TTS 가 실패해 시스템 음성(say)으로 대체된 문장이 있는지.
-              const t = meta?.tts as { voice?: string; family?: string; speaking_rate?: number; sentences?: number; fallback_sentences?: number } | undefined;
+              const t = meta?.tts as { voice?: string; family?: string; speaking_rate?: number | null; sentences?: number; fallback_sentences?: number; requested_voice?: string; engine_fallback?: string } | undefined;
               if (!t || typeof t.voice !== "string") return null;
               const fb = typeof t.fallback_sentences === "number" ? t.fallback_sentences : 0;
               return (
@@ -168,6 +168,13 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                   <p className="text-xs text-popory-muted">
                     음성 {t.voice}{t.family ? ` (${t.family})` : ""}{typeof t.speaking_rate === "number" ? ` · 말속도 ${t.speaking_rate}×` : ""}
                   </p>
+                  {/* Gemini 가 실패하거나 상한에 걸리면 영상 전체가 폴백 음성으로 만들어진다 — 예전엔 이유가 화면 어디에도 없었다. */}
+                  {t.engine_fallback && (
+                    <p className="text-xs text-amber-600">
+                      요청한 음성({t.requested_voice ?? "Gemini"})으로 만들지 못해 {t.voice} 로 만들었습니다 — {t.engine_fallback}.
+                      원인이 풀렸으면 아래 &quot;음성·자막만 다시 만들기&quot;로 다시 입힐 수 있습니다.
+                    </p>
+                  )}
                   {fb > 0 && (
                     <p className="text-xs text-amber-600">
                       Google TTS 합성이 실패해 {typeof t.sentences === "number" ? `${fb}/${t.sentences}` : fb}문장은 시스템 음성으로 대체됐습니다. 재생성을 권장합니다.

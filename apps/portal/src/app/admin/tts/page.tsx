@@ -25,7 +25,7 @@ interface TtsConfig {
   video_motion?: { rows: MotionRow[] };
   gemini?: {
     provider: string; api_key_set: boolean; fallback_voice: string; style: string; price_per_m_output_usd: number;
-    usage: { month: string; month_usd: number; month_seconds: number; day: string; day_requests: number; monthly_cap_usd: number; daily_request_cap: number };
+    usage: { month: string; month_usd: number; month_seconds: number; day: string; day_requests: number; monthly_cap_usd: number; daily_request_cap: number; last_error?: { at: string; message: string } | null };
     rows?: MotionRow[];
   };
   subtitles?: { rows: MotionRow[] };
@@ -123,6 +123,13 @@ export default async function TtsPage() {
             <h2 className="text-base font-semibold">Gemini 음성 · 비용</h2>
             {c.gemini ? (
               <>
+                {/* 마지막 합성이 실패했으면(성공하면 지워진다) 지금 Gemini 가 막혀 영상이 폴백 음성으로 나가는 중이다 */}
+                {c.gemini.usage.last_error && (
+                  <div className="mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+                    <strong>최근 Gemini 합성 실패</strong> ({c.gemini.usage.last_error.at.replace("T", " ")}) — 이후 영상은 폴백 음성으로 만들어집니다.
+                    <div className="mt-1 break-all text-xs">{c.gemini.usage.last_error.message}</div>
+                  </div>
+                )}
                 <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
                   <dt className="text-popory-muted">이번 달 사용액 ({c.gemini.usage.month})</dt>
                   <dd>
