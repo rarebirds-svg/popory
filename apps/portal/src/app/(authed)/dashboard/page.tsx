@@ -14,6 +14,7 @@ const AREAS: AreaCard[] = [
   { key: "balance", label: "재무상태표", desc: "우리집 자산·부채·순자산 월간 추적.", href: () => "/balance" },
   { key: "finance", label: "자산 포트폴리오", desc: "우리 가족의 금융·부동산 자산을 한곳에서 관리하는 포트폴리오 서비스.", href: () => "/portfolio" },
   { key: "trading", label: "트레이딩", desc: "관심종목 분석, 전략 수립, 매매 시그널 포착, 자동·수동 주문까지. 능동적 트레이딩을 돕는 서비스.", href: () => "https://trading.poporyfamily.com" },
+  { key: "bigempty", label: "Big Empty Blog", desc: "티스토리에서 운영하는 Big Empty 블로그의 글을 읽어 보세요.", href: () => "https://bigempty.tistory.com/", external: true },
 ];
 
 export default async function Dashboard() {
