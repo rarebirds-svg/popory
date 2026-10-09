@@ -328,3 +328,69 @@ def test_prepay_depleted_402_is_explained_and_remembered(monkeypatch):
     monkeypatch.setattr(g.requests, "post", lambda *a, **k: _Resp(200, pcm=b"\x00\x00" * 2400))
     g.synthesize_scene("대본", "gemini-3.8-flash-tts/Iapetus")
     assert g.usage()["last_error"] is None
+
+
+def _speech(sentences, rate=24000, sent_pause=0.5, para_after=(), para_pause=0.6):
+    """sentences: [[소리 초, ('s', 숨 초), 소리 초, ...], ...] — 문장 안 숨(쉼표·극적 쉼)도 넣을 수 있다.
+    반환: (PCM, 문장별 정답 길이 초)."""
+    spec, truth = [("s", 0.1)], []
+    for k, parts in enumerate(sentences):
+        dur = 0.0
+        for p in parts:
+            if isinstance(p, tuple):
+                spec.append(p); dur += p[1]
+            else:
+                spec.append(("t", p)); dur += p
+        truth.append(dur)
+        if k < len(sentences) - 1:
+            spec.append(("s", para_pause if k in para_after else sent_pause))
+    spec.append(("s", 0.1))
+    return _build(spec, rate), truth
+
+
+def test_alignment_survives_a_slow_intro_without_drifting():
+    # 2026-10-09 『칼의 노래』: 도입 장면을 천천히 읽자 예상 위치(글자 비례)가 실제보다 앞서 문장 중간 숨을 문장
+    # 끝으로 잡았고, 두 번째 문장부터 자막이 말보다 앞섰다. 장면 1 은 0.12초/자, 장면 2 는 0.08초/자로 읽힌다.
+    slow, fast = 0.12, 0.08
+    s1 = [[20 * slow], [14 * slow, ("s", 0.3), 16 * slow], [12 * slow, ("s", 0.3), 12 * slow], [22 * slow]]
+    s2 = [[18 * fast, ("s", 0.3), 10 * fast], [25 * fast], [12 * fast, ("s", 0.3), 14 * fast], [20 * fast]]
+    pcm, truth = _speech(s1 + s2, para_after={3})
+    weights = [[20, 30, 24, 22], [28, 25, 26, 20]]
+    res = g.split_chunk(pcm, 24000, weights)
+    assert res is not None and all(r is not None for r in res)
+    got = _secs([p for r in res for p in r])
+    want = [t + (0.04 if i in (0, len(truth) - 1) else 0) for i, t in enumerate(truth)]
+    assert got == pytest.approx(want, abs=0.03)
+
+
+def test_alignment_keeps_next_sentence_first_word_after_dramatic_pause():
+    # "그런데, … 이 병력을 넘겨받은 사람은" 처럼 다음 문장 첫 단어 뒤에 문장 끝만큼 긴 쉼이 와도, 첫 단어를 앞
+    # 문장 끝에 붙이지 않는다(조각 끝의 '긴 숨 + 짧은 한 단어' 는 벌점).
+    sents = [[2.4], [0.45, ("s", 0.55), 2.2], [2.0]]
+    pcm, truth = _speech(sents, sent_pause=0.5)
+    pieces = g.split_sentences(pcm, 24000, [30, 34, 25])
+    got = _secs(pieces)
+    assert got[1] == pytest.approx(truth[1], abs=0.03)          # 문장 2 = 첫 단어 + 극적 쉼 + 나머지
+
+
+def test_split_chunk_flags_a_scene_whose_rates_cannot_fit():
+    # 장면 2 의 둘째 문장은 원고상 길지만 소리는 아주 짧다(모델이 건너뛰었거나 붙여 읽음) → 그 장면만 다시 합성
+    pcm, _ = _speech([[2.0], [2.2], [2.1], [0.3], [2.0]], para_after={1})
+    res = g.split_chunk(pcm, 24000, [[25, 27], [26, 30, 25]])
+    assert res is not None and res[0] is not None and res[1] is None
+
+
+def test_sentence_cuts_picks_sentence_pauses_for_whole_audio():
+    pcm, truth = _speech([[1.2, ("s", 0.2), 1.0], [1.5]], sent_pause=0.6)
+    spans = g.sentence_cuts(pcm, 24000, [28, 19])
+    assert len(spans) == 1
+    a, b = spans[0]
+    assert a == pytest.approx(0.1 + 2.4, abs=0.02) and b - a == pytest.approx(0.6, abs=0.02)
+    assert g.sentence_cuts(pcm, 24000, [40]) is None
+
+
+def test_split_chunk_reports_worst_rate_ratios_for_diagnosis():
+    pcm, _ = _speech([[2.0], [2.2], [2.1], [0.3], [2.0]], para_after={1})
+    stats = {}
+    g.split_chunk(pcm, 24000, [[25, 27], [26, 30, 25]], stats)
+    assert stats["min_ratio"] < 0.65 and stats["max_ratio"] >= 1.0      # 0.3초짜리 30자 문장이 가장 벗어난다

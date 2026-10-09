@@ -931,11 +931,15 @@ def _pcm_with_pauses(rate=24000, parts=(0.6, 0.9), pause=0.4):
 
 
 def _fake_gemini(calls):
-    """원고의 문장 수만큼 소리 구간을 만들어 돌려주는 가짜 합성기(문단 빈 줄은 긴 숨)."""
+    """원고의 문장마다 글자 수에 비례하는 길이의 소리 구간을 만들어 돌려주는 가짜 합성기.
+    실제 TTS 처럼 긴 문장은 길게 읽는다 — 정렬이 문장 조각의 말빠르기로 경계를 고르기 때문이다."""
+    import re as _re
+
     def synth(text, voice):
         calls.append(text)
-        n = sum(text.count(c) for c in ".?!")
-        return _pcm_with_pauses(parts=tuple(0.5 + 0.1 * (k % 3) for k in range(n))), 24000
+        sents = [x for x in _re.findall(r"[^.?!]+[.?!]", text) if x.strip()]
+        parts = tuple(max(0.4, 0.02 * len(x.strip())) * (1 + 0.05 * (k % 3)) for k, x in enumerate(sents))
+        return _pcm_with_pauses(parts=parts), 24000
     return synth
 
 
@@ -1082,25 +1086,27 @@ def test_snap_chunk_cuts_lands_on_real_pause(tmp_path):
     assert cuts == pytest.approx([1.9 - video.SNAP_LEAD_S], abs=0.03)
 
 
-def test_render_video_gemini_splits_by_scene_before_resynthesizing(monkeypatch, tmp_path):
-    # 문장 경계를 못 찾아도 장면 경계(긴 숨)는 찾으면 같은 오디오를 장면별로 쓴다 — 다시 합성하면 장면마다
-    # 목소리가 달라진다(2026-10-05 드러커 영상 피드백).
+def test_render_video_gemini_resynthesizes_only_the_suspect_scene(monkeypatch, tmp_path):
+    # 묶음 정렬에서 말빠르기가 주변과 크게 다른 장면(모델이 문장을 건너뛰었을 수 있다)만 다시 합성하고,
+    # 나머지 장면은 묶음 오디오를 그대로 쓴다 — 다시 합성할수록 요청이 늘고 목소리도 달라진다.
     from popory_content import video, gemini_tts
     _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
     calls = []
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", _fake_gemini(calls))
+    real = gemini_tts.split_chunk
 
-    def synth(text, voice):
-        calls.append(text)
-        return _pcm_with_pauses(parts=(2.0, 2.0), pause=0.6), 24000   # 장면 사이 숨 하나뿐
+    def suspect_second(pcm, rate, scene_weights, stats=None):
+        got = real(pcm, rate, scene_weights, stats)
+        return [got[0], None] if len(scene_weights) == 2 else got
 
-    monkeypatch.setattr(gemini_tts, "synthesize_scene", synth)
+    monkeypatch.setattr(gemini_tts, "split_chunk", suspect_second)
     stats = {}
     scenes = [{"caption": "a", "narration": "하나입니다. 둘입니다."}, {"caption": "b", "narration": "셋입니다. 넷이죠."}]
-    video.render_video(scenes, job_id="gemini_scene_split", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
-    assert len(calls) == 1 and stats["gemini_requests"] == 1
-    assert "rechunked_scenes" not in stats and stats["split_fallback_scenes"] == 2
-    work = video.TMP / "video_gemini_scene_split"
-    assert (work / "g0.wav").exists() and (work / "g1.wav").exists()
+    video.render_video(scenes, job_id="gemini_suspect", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert len(calls) == 2 and "\n\n" in calls[0] and calls[1] == "셋입니다. 넷이죠."
+    assert stats["rechunked_scenes"] == 1 and stats["gemini_requests"] == 2
+    work = video.TMP / "video_gemini_suspect"
+    assert (work / "g0_0.wav").exists() and (work / "g1_1.wav").exists()
 
 
 def test_render_video_gemini_matches_later_requests_to_first_chapter(monkeypatch, tmp_path):
@@ -1159,24 +1165,25 @@ def test_wrap_does_not_split_initials_from_name():
         assert not any(c.startswith(("F.", "카는", "드러커는")) for c in chunks), chunks
 
 
-def test_whole_scene_subtitles_snap_to_sentence_pauses(monkeypatch, tmp_path):
-    # 문장 경계를 못 찾아 장면 통째로 쓰는 경우에도 자막 경계는 발화량 비례가 아니라 문장 사이 숨에 맞춘다.
+def test_whole_scene_subtitles_use_aligned_sentence_pauses(monkeypatch, tmp_path):
+    # 문장 조각으로 나누지 못해 장면 통째로 쓰는 경우에도 자막 경계는 발화량 비례가 아니라, 문장 조각 정렬과
+    # 같은 방식(gemini_tts.sentence_cuts)으로 고른 숨에서 — 말이 다시 시작되기 조금 전에 바꾼다.
     from popory_content import video, gemini_tts
     _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
-    monkeypatch.setattr(gemini_tts, "synthesize_scene",
-                        lambda text, voice: (_pcm_with_pauses(parts=(2.0, 2.0), pause=0.6), 24000))
+    monkeypatch.setattr(gemini_tts, "synthesize_scene", _fake_gemini([]))
+    monkeypatch.setattr(gemini_tts, "split_chunk", lambda pcm, rate, sw, stats=None: None)   # 묶음 정렬 실패
+    real = gemini_tts.split_sentences
+    monkeypatch.setattr(gemini_tts, "split_sentences",
+                        lambda pcm, rate, w, paragraph_after=(): None if len(w) > 1 else real(pcm, rate, w))
+    monkeypatch.setattr(video, "_decode_pcm", lambda path, rate=24000: b"\x00\x00" * 2400)
     seen = []
-
-    def snap(audio, chunks, dur, min_pause_ms=video.SNAP_MIN_PAUSE_MS):
-        seen.append((len(chunks), min_pause_ms))
-        return [0.7] if len(chunks) == 2 else None
-
-    monkeypatch.setattr(video, "_snap_chunk_cuts", snap)
+    monkeypatch.setattr(gemini_tts, "sentence_cuts",
+                        lambda pcm, rate, w: seen.append(list(w)) or [(0.62, 0.78)])
     scenes = [{"caption": "a", "narration": "하나입니다. 둘입니다."}, {"caption": "b", "narration": "셋입니다. 넷이죠."}]
-    _, _, _, cues = video.render_video(scenes, job_id="whole_snap", voice="gemini-3.8-flash-tts/Iapetus")
-    assert (2, video.WHOLE_SNAP_MIN_PAUSE_MS) in seen
+    _, _, _, cues = video.render_video(scenes, job_id="whole_cuts", voice="gemini-3.8-flash-tts/Iapetus")
+    assert seen and len(seen[0]) == 2
     first = [c for c in cues if c[2] in ("하나입니다.", "둘입니다.")]
-    assert first[0][1] == pytest.approx(0.7) and first[1][0] == pytest.approx(0.7)
+    assert first[0][1] == pytest.approx(0.70) and first[1][0] == pytest.approx(0.70)   # 0.78 - 0.08
 
 
 def test_clip_length_is_frame_aligned_and_audio_trimmed_to_the_same_samples():
