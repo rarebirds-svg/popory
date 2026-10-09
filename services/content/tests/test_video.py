@@ -93,6 +93,8 @@ def test_master_audio_with_bgm_still_copies_video(tmp_path, monkeypatch):
     cmd = cmds[0]
     assert "copy" in cmd and "libx264" not in cmd
     assert not any("scale=" in str(a) for a in cmd)
+    # loudnorm 뒤 48kHz 로 — 안 그러면 loudnorm 의 192kHz 출력 때문에 최종 AAC 가 96kHz 가 된다
+    assert all("loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000" in " ".join(c) for c in cmds)
 
 
 def test_x264_q_shorts_richer_than_longform():
@@ -127,7 +129,7 @@ def test_deepen_voice_builds_pitchdown_filter(tmp_path, monkeypatch):
     src = tmp_path / "0.mp3"
     src.write_bytes(b"x")
     out = _deepen_voice(src)
-    assert out.name == "0_deep.mp3"        # 새 파일로 출력
+    assert out.name == "0_deep.wav"        # 새 파일로 출력(무손실 — 문장 길이가 흐려지지 않게)
     af = cmds[0][cmds[0].index("-af") + 1]
     assert "asetrate" in af and "atempo" in af   # 피치 다운
     assert "treble" in af                         # 명료도(프레즌스) 복원
@@ -345,9 +347,9 @@ def test_render_two_scenes_makes_mp4(tmp_path, monkeypatch):
     ]
     out, _, _, _ = render_video(scenes, job_id="smoketest")
     assert out.exists() and out.stat().st_size > 10000
-    # 장면당 클립 1개(문장 분할 안 함): scene_*.mp4 가 정확히 2개
+    # 장면당 클립 1개(문장 분할 안 함): scene_*.mkv 가 정확히 2개
     work = tmp_path / "video_smoketest"
-    clips = sorted(work.glob("scene_*.mp4"))
+    clips = sorted(work.glob("scene_*.mkv"))
     assert len(clips) == 2
 
 
@@ -437,6 +439,7 @@ def test_render_video_counts_missing_images(monkeypatch, tmp_path):
     monkeypatch.setattr(video, "FONT_PATH", str(tmp_path))  # 폰트 존재 체크 통과
     monkeypatch.setattr(video, "synthesize", lambda text, voice=None: b"AUDIO")
     monkeypatch.setattr(video, "_run", lambda cmd: None)
+    monkeypatch.setattr(video, "_to_wav", lambda p: p)       # ffmpeg 를 건너뛰므로 변환 파일이 생기지 않는다
     monkeypatch.setattr(video, "_duration", lambda path: 1.0)
     monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
     monkeypatch.setattr(video, "_render_headline_png", lambda *a, **k: None)
@@ -463,6 +466,7 @@ def test_render_video_encodes_with_bitrate_cap(monkeypatch, tmp_path):
     monkeypatch.setattr(video, "FONT_PATH", str(tmp_path))
     monkeypatch.setattr(video, "synthesize", lambda text, voice=None: b"AUDIO")
     monkeypatch.setattr(video, "_run", lambda cmd: cmds.append(cmd))
+    monkeypatch.setattr(video, "_to_wav", lambda p: p)
     monkeypatch.setattr(video, "_duration", lambda path: 1.0)
     monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
     monkeypatch.setattr(video, "_render_headline_png", lambda *a, **k: None)
@@ -482,6 +486,7 @@ def _render_stub(monkeypatch, tmp_path, video):
     monkeypatch.setattr(video, "FONT_PATH", str(tmp_path))
     monkeypatch.setattr(video, "synthesize", lambda text, voice=None: b"AUDIO")
     monkeypatch.setattr(video, "_run", lambda cmd: None)
+    monkeypatch.setattr(video, "_to_wav", lambda p: p)       # ffmpeg 를 건너뛰므로 변환 파일이 생기지 않는다
     monkeypatch.setattr(video, "_duration", lambda path: 1.0)
     monkeypatch.setattr(video, "_render_card", lambda *a, **k: None)
     monkeypatch.setattr(video, "_render_headline_png", lambda *a, **k: None)
@@ -641,7 +646,7 @@ def test_render_video_inserts_card_clip_before_scene(monkeypatch, tmp_path):
     monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
     monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
     made = []
-    monkeypatch.setattr(video, "_card_clip", lambda card, i, work, portrait=False: made.append((i, card["type"])) or (work / f"card_{i}.mp4"))
+    monkeypatch.setattr(video, "_card_clip", lambda card, i, work, portrait=False: made.append((i, card["type"])) or (work / f"card_{i}.mkv"))
     durs = []
     monkeypatch.setattr(video, "_xfade_graph", lambda d, td=0.4: durs.extend(d) or ("", "v", "a"))
     scenes = [{"caption": "a", "narration": "n1."},
@@ -677,15 +682,18 @@ def test_card_clip_uses_silence_or_chime_and_matches_scene_audio_format(monkeypa
     monkeypatch.setattr(_video, "_render_graphic_card_png", lambda card, png, portrait=False: None)
     monkeypatch.setattr(_video, "CARD_SFX", tmp_path / "없음.mp3")
     clip = _video._card_clip({"type": "quote", "text": "x"}, 3, tmp_path)
-    assert clip == tmp_path / "card_3.mp4"
+    assert clip == tmp_path / "card_3.mkv"
     cmd = cmds[-1]
     assert "anullsrc=channel_layout=mono:sample_rate=24000" in cmd and "-crf" in cmd
-    assert cmd[cmd.index("-t") + 1] == f"{_video.CARD_SECONDS:.3f}"
+    assert cmd[cmd.index("-t") + 1] == f"{_video.CARD_SECONDS:.6f}"
+    # 오디오는 PCM 으로 영상과 같은 길이(샘플 단위)로 자른다 — AAC 채움이 이어 붙일 때 쌓이지 않게
+    assert cmd[cmd.index("-c:a") + 1] == "pcm_s16le" and "-shortest" not in cmd
+    assert f"atrim=end_sample={round(_video.CARD_SECONDS * 24000)}" in " ".join(cmd)
     chime = tmp_path / "chime.mp3"; chime.write_bytes(b"x")
     monkeypatch.setattr(_video, "CARD_SFX", chime)
     _video._card_clip({"type": "quote", "text": "x"}, 4, tmp_path)
     cmd = cmds[-1]
-    assert str(chime) in cmd and "sample_rates=24000:channel_layouts=mono" in " ".join(cmd)
+    assert str(chime) in cmd and "aresample=24000,aformat=sample_fmts=s16:channel_layouts=mono" in " ".join(cmd)
 
 
 @pytest.mark.skipif(not Path(FONT_PATH).exists(), reason="한국어 폰트 필요")
@@ -1169,3 +1177,30 @@ def test_whole_scene_subtitles_snap_to_sentence_pauses(monkeypatch, tmp_path):
     assert (2, video.WHOLE_SNAP_MIN_PAUSE_MS) in seen
     first = [c for c in cues if c[2] in ("하나입니다.", "둘입니다.")]
     assert first[0][1] == pytest.approx(0.7) and first[1][0] == pytest.approx(0.7)
+
+
+def test_clip_length_is_frame_aligned_and_audio_trimmed_to_the_same_samples():
+    # 2026-10-09: 클립 오디오(AAC) 끝 채움이 이어 붙일 때 쌓여 장면마다 소리가 늦어졌다 — 클립 길이를 프레임
+    # 경계로 맞추고 오디오를 정확히 같은 샘플 수로 자른다(1프레임 = 800샘플).
+    from popory_content import video as V
+    assert abs(V._frame_align(9.1) - 273 / 30) < 1e-9          # 이미 프레임 경계면 그대로
+    assert abs(V._frame_align(9.101) - 274 / 30) < 1e-9        # 아니면 다음 프레임으로 올린다
+    assert abs(V._frame_align(3.5) - 3.5) < 1e-9 and V._frame_align(1.0) == 1.0
+    chain = V._clip_audio_chain("[1:a]", 274 / 30)
+    assert chain.startswith("[1:a]aresample=24000,") and "apad,atrim=end_sample=219200" in chain
+
+
+def test_scene_clips_use_pcm_audio_without_shortest(monkeypatch, tmp_path):
+    from popory_content import video
+    cmds = []
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "_run", lambda cmd: cmds.append(cmd))
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    monkeypatch.setattr(video, "_pick_bgm", lambda d, j: None)
+    video.render_video([{"caption": "a", "narration": "n1."}, {"caption": "b", "narration": "n2."}], job_id="pcmclip")
+    scene = [c for c in cmds if str(c[-1]).endswith(".mkv") and "scene_" in str(c[-1])]   # 출력이 장면 클립인 명령
+    assert len(scene) == 2
+    for c in scene:
+        assert c[c.index("-c:a") + 1] == "pcm_s16le" and "-shortest" not in c and "[aout]" in c
+    join = [c for c in cmds if any(str(x).endswith("joined.mkv") for x in c)]
+    assert join and join[0][join[0].index("-c:a") + 1] == "pcm_s16le"

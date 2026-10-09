@@ -19,6 +19,7 @@ from popory_content.hook_check import check_hook
 from popory_content.script_review import review_script
 from popory_content.subtitles import scene_offsets, Cue
 from popory_content.rerender import scene_records
+from popory_content import sync_check
 from popory_content import gemini_tts
 from popory_content import tts as _tts
 from popory_content.options import FALLBACK_VOICE
@@ -291,19 +292,20 @@ def _card_clip(card: dict[str, Any], index: int, work: Path, portrait: bool = Fa
     글자 카드는 정지가 자연스럽고 3~4초라 켄번스를 걸지 않는다."""
     png = work / f"card_{index}.png"
     _render_graphic_card_png(card, png, portrait=portrait)
-    clip = work / f"card_{index}.mp4"
+    clip = work / f"card_{index}.mkv"
+    seconds = _frame_align(seconds)
     if CARD_SFX.exists():
         audio_in = ["-i", str(CARD_SFX)]
-        afilt = "[1:a]aformat=sample_rates=24000:channel_layouts=mono,apad[a]"
     else:
-        audio_in = ["-f", "lavfi", "-i", "anullsrc=channel_layout=mono:sample_rate=24000"]
-        afilt = "[1:a]anull[a]"
+        audio_in = ["-f", "lavfi", "-i", f"anullsrc=channel_layout=mono:sample_rate={AUDIO_RATE}"]
+    afilt = _clip_audio_chain("[1:a]", seconds) + "[a]"
+    # 오디오는 PCM, 길이는 영상·오디오 모두 프레임 경계로 정확히(_frame_align) — 이어 붙일 때 어긋남이 쌓이지 않게.
     _run([
         FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), *audio_in,
         "-filter_complex", f"[0:v]format=yuv420p[v];{afilt}",
         "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_x264_q(portrait), "-t", f"{seconds:.3f}",
-        "-c:a", "aac", "-shortest", str(clip),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(FPS), *_x264_q(portrait), "-t", f"{seconds:.6f}",
+        "-c:a", "pcm_s16le", str(clip),
     ])
     return clip
 
@@ -400,6 +402,34 @@ CHAPTER_GAP = 2 * SENTENCE_GAP
 # 시청자가 생각할 틈이 없어 톤이 단조롭게 들린다(2026-09 대표 영상 검토). 0.8~1초 무음을 둔다.
 QUESTION_GAP = float(os.environ.get("POPORY_QUESTION_GAP", "1.0"))
 XFADE_TD = 0.4  # 장면 크로스페이드 전이 길이(초). _xfade_graph·자막 오프셋이 공유.
+# 장면·카드 클립의 영상 프레임율과 오디오 샘플레이트. 클립 길이를 프레임 경계에 맞추면(1프레임 = 800샘플)
+# 영상과 오디오가 샘플 단위로 같은 길이가 된다 — _frame_align 참고.
+FPS = 30
+AUDIO_RATE = 24000
+
+
+def _frame_align(seconds: float) -> float:
+    """클립 길이를 다음 프레임 경계로 올린다. 영상(-t)과 오디오(atrim)를 이 값에 함께 맞춘다.
+
+    예전엔 장면 클립 오디오를 AAC 로 넣고 -shortest 로 끝을 맞췄다. AAC 는 마지막 프레임(1024샘플)을
+    무음으로 채우므로 디코드한 오디오가 영상보다 클립마다 20~60ms 길었고, 이어 붙이는 acrossfade 가 그
+    여분을 그대로 쌓아 **장면을 지날 때마다 소리가 자막보다 늦어졌다**(2026-10-09 측정: 8장면·카드 2장에
+    0.24초, 10분 롱폼이면 끝에서 0.5초 이상). 그래서 클립 오디오는 무손실 PCM 으로 두고 길이를 정확히 맞춘다."""
+    return math.ceil(seconds * FPS - 1e-6) / FPS
+
+
+def _clip_audio_chain(src: str, seconds: float) -> str:
+    """클립 오디오를 24kHz 모노로 맞추고 무음을 덧대 정확히 seconds(샘플 단위)로 자르는 필터 사슬."""
+    return (f"{src}aresample={AUDIO_RATE},aformat=sample_fmts=s16:channel_layouts=mono,"
+            f"apad,atrim=end_sample={round(seconds * AUDIO_RATE)},asetpts=N/SR/TB")
+
+
+def _to_wav(src: Path) -> Path:
+    """압축 음성(MP3·AIFF)을 24kHz 모노 WAV 로. MP3 는 인코더 지연·끝 채움이 있어 컨테이너 길이(ffprobe)와
+    실제 디코드 길이가 문장마다 수십 ms 다르다 — 문장 길이를 재기 전에 무손실로 풀어 둔다."""
+    out = src.with_suffix(".wav")
+    _run([FFMPEG_BIN, "-y", "-i", str(src), "-ar", str(AUDIO_RATE), "-ac", "1", str(out)])
+    return out
 
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
@@ -446,7 +476,10 @@ def _concat_audio_with_gaps(segments: list[Path], gap: "float | list[float]", ou
     """문장별 오디오 클립을 사이에 gap(무음)을 넣어 한 장면 오디오로 이어붙인다(필터 concat=재인코딩).
     gap 은 스칼라 또는 문장 사이별 리스트(_gaps_for) — 질문 뒤엔 더 긴 무음이 들어간다."""
     if len(segments) == 1:
-        shutil.copy(segments[0], out)
+        if segments[0].suffix == out.suffix:
+            shutil.copy(segments[0], out)
+        else:
+            _run([FFMPEG_BIN, "-y", "-i", str(segments[0]), "-ar", str(AUDIO_RATE), "-ac", "1", str(out)])
         return
     gaps = _gap_list(len(segments), gap)
     sil_by_len: dict[str, Path] = {}
@@ -867,17 +900,18 @@ def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
     BGM 소스 자체가 작아(mean ~-34dB) 예전 volume=0.15 + amix 기본 normalize(입력당 ÷2)는
     BGM을 ~-40dB로 묻어 사실상 안 들렸다. normalize=0(내레이션 원음 유지) + volume=3.5로
     BGM을 갭 기준 ~-15dB(말소리보다 ~2dB 아래)의 강한 배경 베드로 올린다.
-    이 값이 실질 상한 — 더 키우면 BGM이 내레이션보다 커져 말소리가 묻힌다."""
+    이 값이 실질 상한 — 더 키우면 BGM이 내레이션보다 커져 말소리가 묻힌다.
+    loudnorm 은 내부적으로 192kHz 로 올려 내보내 최종 AAC 가 96kHz 가 됐다 — 48kHz(유튜브 권장)로 되돌린다."""
     if bgm:
         afilt = ("[1:a]volume=3.5[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix];"
-                 "[mix]loudnorm=I=-14:TP=-1.5:LRA=11[a]")
+                 "[mix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]")
         cmd = [
             FFMPEG_BIN, "-y", "-i", str(src), "-stream_loop", "-1", "-i", str(bgm),
             "-filter_complex", afilt,
             "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", str(out),
         ]
     else:
-        afilt = "[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[a]"
+        afilt = "[0:a]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]"
         cmd = [
             FFMPEG_BIN, "-y", "-i", str(src),
             "-filter_complex", afilt,
@@ -897,7 +931,7 @@ def _deepen_voice(audio: Path) -> Path:
         return audio
     ratio = 2 ** (-VOICE_DEEPEN_SEMITONES / 12)
     tempo = 2 ** (VOICE_DEEPEN_SEMITONES / 12)
-    out = audio.with_name(f"{audio.stem}_deep.mp3")
+    out = audio.with_name(f"{audio.stem}_deep.wav")   # 무손실 — MP3 지연·채움이 문장 길이를 흐리지 않게
     af = (
         f"aresample=24000,asetrate={int(24000 * ratio)},aresample=24000,atempo={tempo:.4f},"
         "equalizer=f=350:width_type=q:w=1.2:g=-3,treble=g=4:f=4000"
@@ -970,7 +1004,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         sentences = _split_sentences(narration) or [narration.strip() or " "]
         seg_audios: list[Path] = []
         seg_durs: list[float] = []
-        audio = work / f"{i}.mp3"
+        audio = work / f"{i}.wav"   # 무손실 — MP3 는 앞뒤 채움으로 실제 길이와 잰 길이가 어긋난다
         gaps = _gaps_for(sentences)  # 질문 뒤엔 QUESTION_GAP — 자막 스팬도 같은 리스트를 쓴다
         pre = scene_audio[i] if scene_audio else None
         tts_stats["sentences"] = tts_stats.get("sentences", 0) + len(sentences)
@@ -1004,6 +1038,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                     seg = work / f"{i}_{j}.aiff"
                     _run([SAY_BIN, "-v", SAY_VOICE, "-o", str(seg), sent])
                     tts_stats["fallback"] = tts_stats.get("fallback", 0) + 1
+                seg = _to_wav(seg)        # 문장 길이를 실제 디코드 길이로 재기 위해 무손실로 푼다
                 seg = _deepen_voice(seg)  # 묵직한 중저음으로 변형(길이 보존)
                 seg_audios.append(seg)
                 seg_durs.append(_duration(seg))
@@ -1012,10 +1047,11 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         # 불필요). 무음은 클립에 포함되므로 dur·clip_durations에 반영돼 cue 오프셋이 자동 정합.
         # 장면 전환 크로스페이드(XFADE_TD)가 이 무음 끝을 살짝 먹어 실제 정적은 조금 짧게 들린다.
         if i < len(scenes) - 1:
-            padded = work / f"{i}_chapter.mp3"
+            padded = work / f"{i}_chapter.wav"
             _append_silence(audio, CHAPTER_GAP, padded)
             audio = padded
-        dur = _duration(audio)
+        # 클립 길이를 프레임 경계로 올리고(_frame_align) 오디오도 같은 길이로 맞춘다 — 자막 시점은 그대로다.
+        dur = _frame_align(_duration(audio))
         # 커버 크롭이 버리던 여유만큼 캔버스를 키워 그 안에서 패닝한다(확대율은 그대로 → 화질 손실 없음).
         pan_px = _pan_amplitude(dur, _pan_headroom(_image_size(bg_bytes), portrait)) if motion else 0
         fw, fh = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
@@ -1053,18 +1089,21 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                           f":enable='between(t,{cst:.3f},{cen:.3f})'[{out}]")
                 prev = out
                 n += 1
-        clip = work / f"scene_{i}.mp4"
+        clip = work / f"scene_{i}.mkv"
+        graph += ";" + _clip_audio_chain("[1:a]", dur) + "[aout]"
+        # 오디오는 PCM 으로 두고 영상·오디오 길이를 dur 로 정확히 맞춘다(-shortest 를 쓰지 않는다). AAC 는
+        # 마지막 프레임을 무음으로 채워 클립마다 수십 ms 길어지고, 이어 붙이면 그 여분이 쌓여 소리가 밀린다.
         _run([
             FFMPEG_BIN, "-y", *inputs,
             "-filter_complex", graph,
-            "-map", f"[{prev}]", "-map", "1:a",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_x264_q(portrait), "-t", f"{dur:.3f}",
-            "-c:a", "aac", "-shortest", str(clip),
+            "-map", f"[{prev}]", "-map", "[aout]",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(FPS), *_x264_q(portrait), "-t", f"{dur:.6f}",
+            "-c:a", "pcm_s16le", str(clip),
         ])
         clips.append(clip)
 
     clip_durations = [_duration(c) for c in clips]
-    joined = work / "joined.mp4"
+    joined = work / "joined.mkv"   # 오디오는 마스터 단계에서 한 번만 AAC 로 인코딩한다
     if len(clips) == 1:
         shutil.copy(clips[0], joined)
     else:
@@ -1075,7 +1114,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         cmd += [
             "-filter_complex", graph,
             "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", *_x264_q(portrait), "-c:a", "aac", str(joined),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(FPS), *_x264_q(portrait), "-c:a", "pcm_s16le", str(joined),
         ]
         _run(cmd)
     out = work / "out.mp4"
@@ -1086,6 +1125,11 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     for off, local in zip(offsets, scene_local_cues):
         for st, en, text in local:
             cues.append((off + st, off + en, text))
+    # 완성 영상에서 자막과 실제 발화 시작이 맞는지 잰다(meta.tts.sync). 점검일 뿐이라 실패해도 영상은 그대로 낸다.
+    try:
+        tts_stats["sync"] = sync_check.measure(out, cues)
+    except Exception:  # noqa: BLE001
+        pass
     return out, images_missing, images_total, cues
 
 
@@ -1264,6 +1308,8 @@ def tts_meta(voice: str, stats: "dict[str, Any]") -> dict[str, Any]:
             meta[key] = int(stats[key])
     if stats.get("voice_match"):
         meta["voice_match"] = stats["voice_match"]
+    if stats.get("sync"):
+        meta["sync"] = stats["sync"]
     return meta
 
 
