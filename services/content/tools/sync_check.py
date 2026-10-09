@@ -5,6 +5,10 @@
 자막(SRT) cue 시작마다 가장 가까운 발화 시작(무음 뒤 첫 소리)을 찾아 얼마나 어긋났는지, 그리고 뒤로 갈수록
 밀리는지(분 단위 중앙값)를 보여 준다. 소리가 자막보다 늦으면 +, 빠르면 -.
 
+한계: 문장 사이에 무음을 넣어 이어 붙이므로 cue 시작은 늘 발화 시작과 맞는다 — **문장 조각이 엉뚱한 숨에서 잘린
+'내용 어긋남'은 이 도구로 보이지 않는다.** 그건 자막 길이로 말빠르기를 거꾸로 셈해 보거나(문장마다 글자/초가
+들쭉날쭉하면 의심), 렌더 기록 meta.tts.align(min_ratio·max_ratio — 주변 대비 가장 벗어난 말빠르기 비)을 본다.
+
 사용(맥미니, services/content 에서 — 포털에서 영상·자막을 받으려면 워커 키가 필요하다):
   (source secrets/env.sh; .venv/bin/python tools/sync_check.py --youtube FeG4Lo6bKC8)
   (source secrets/env.sh; .venv/bin/python tools/sync_check.py --job <작업ID> --find "그런데 이 병력을")

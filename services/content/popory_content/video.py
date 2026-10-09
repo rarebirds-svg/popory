@@ -604,7 +604,6 @@ def _wrap_chunks(sentence: str, width: int) -> list[str]:
 # 한 문장 안 자막 줄 전환을 실제 숨에 맞출 때: 이보다 긴 무음을 숨으로 보고, 예상 위치에서 이만큼 안쪽만 찾는다.
 SNAP_MIN_PAUSE_MS = 80
 SNAP_LEAD_S = 0.08   # 다음 줄은 말이 다시 시작되기 조금 전에 띄운다
-WHOLE_SNAP_MIN_PAUSE_MS = 200   # 장면 통째 오디오에서 문장 경계로 볼 숨(쉼표 숨보다 길다)
 
 
 def _decode_pcm(path: Path, rate: int = 24000) -> "bytes | None":
@@ -1021,10 +1020,12 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             w = [max(1, x) for x in pre["weights"]]
             seg_durs = [total * x / sum(w) for x in w]
             gaps = [0.0] * (len(sentences) - 1)
-            # 발화량 비례만으로는 장면 뒤로 갈수록 자막이 말과 어긋난다 — 문장 사이 숨에 경계를 맞춘다.
-            cuts = (_snap_chunk_cuts(audio, sentences, total, WHOLE_SNAP_MIN_PAUSE_MS)
-                    if len(sentences) > 1 else None)
-            if cuts and len(cuts) == len(sentences) - 1:
+            # 발화량 비례만으로는 장면 뒤로 갈수록 자막이 말과 어긋난다 — 문장 조각 정렬과 같은 방식(말빠르기
+            # 일관성 + 숨 길이)으로 문장 사이 숨을 골라 경계로 쓴다. 다음 줄은 말이 다시 시작되기 조금 전에.
+            pcm = _decode_pcm(audio) if len(sentences) > 1 else None
+            spans = gemini_tts.sentence_cuts(pcm, 24000, w) if pcm else None
+            if spans and len(spans) == len(sentences) - 1:
+                cuts = [max(a, b - SNAP_LEAD_S) for a, b in spans]
                 bounds = [0.0, *cuts, total]
                 seg_durs = [max(0.05, bounds[k + 1] - bounds[k]) for k in range(len(sentences))]
         else:
@@ -1153,9 +1154,9 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
     목소리는 요청마다 미세하게 달라지므로(화자 이름만 고정되고 소리는 매번 새로 생성된다) 연속한 장면을 묶어
     (롱폼 2요청·쇼츠 1요청) 한 번에 합성하고, 둘째 요청부터는 첫 장면(챕터 1)의 음높이·밝기·말빠르기에 맞춘다
     (gemini_tts.match_filter). 차이가 크면 한 번 더 합성해 가까운 쪽을 고른 뒤 맞춘다.
-    묶음 오디오의 숨에서 문장 경계를 되찾아 장면별로 나눈다. 장면 사이는 빈 줄로 넘겨 모델이 문단 호흡을 둔다.
-    문장 경계를 못 믿겠으면 같은 오디오를 장면 경계(긴 숨)로 먼저 나누고 장면 안에서 다시 시도한다 —
-    예전엔 장면마다 다시 합성해 챕터마다 목소리가 달라졌다. 그래도 안 될 때만 그 장면을 따로 합성한다.
+    묶음 오디오의 숨에서 문장 경계를 되찾아 장면별로 나눈다(gemini_tts.split_chunk — 문장 조각의 말빠르기가
+    주변과 맞는지로 고른다). 장면 사이는 빈 줄로 넘겨 모델이 문단 호흡을 둔다. 말빠르기가 주변과 크게 다른
+    조각이 있는 장면만 따로 다시 합성하고, 그래도 안 되면 장면 통째로 쓴다.
     상한 초과가 예상되거나 합성이 실패하면 None(영상 전체를 무료 음성으로) — 이유는 tts_stats 에."""
     texts: list[str] = []
     weights: list[list[int]] = []
@@ -1174,6 +1175,7 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
     out: list[dict[str, Any] | None] = [None] * len(scenes)
     ref: "dict[str, Any] | None" = None
     matches: list[dict[str, Any]] = []
+    align: dict[str, Any] = {}      # 문장 정렬에서 가장 벗어난 말빠르기 비(진단용 — meta.tts.align)
     requests_made = 0
 
     def save(i: int, pieces: "list[bytes]", rate: int) -> None:
@@ -1241,45 +1243,31 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
     try:
         for grp in chunks:
             pcm, rate = synth(grp)
-            flat = [w for i in grp for w in weights[i]]
-            ends, acc = set(), 0
-            for i in grp[:-1]:
-                acc += len(weights[i])
-                ends.add(acc - 1)
-            pieces = gemini_tts.split_sentences(pcm, rate, flat, ends)
-            if pieces and len(pieces) == len(flat):
-                pos = 0
-                for i in grp:
-                    save(i, pieces[pos:pos + len(weights[i])], rate)
-                    pos += len(weights[i])
-                continue
-            # 문장 경계를 못 믿겠으면 같은 오디오를 장면 경계(문단의 긴 숨)로 먼저 나눈다 — 다시 합성하지 않는다.
-            scene_parts = (gemini_tts.split_sentences(pcm, rate, [sum(weights[i]) for i in grp],
-                                                      set(range(len(grp) - 1)))
-                           if len(grp) > 1 else [pcm])
-            if scene_parts and len(scene_parts) == len(grp):
-                for i, part in zip(grp, scene_parts):
-                    sent = gemini_tts.split_sentences(part, rate, weights[i])
-                    if sent and len(sent) == len(weights[i]):
-                        save(i, sent, rate)
-                    else:
-                        save_whole(i, part, rate)
-                continue
-            # 장면 경계도 못 찾으면 장면 단위로 다시 합성한다(이때도 첫 챕터 목소리에 맞춘다).
-            tts_stats["rechunked_scenes"] = tts_stats.get("rechunked_scenes", 0) + len(grp)
-            for i in grp:
-                pcm, rate = synth([i])
-                pieces = gemini_tts.split_sentences(pcm, rate, weights[i])
-                if pieces and len(pieces) == len(weights[i]):
+            parts = gemini_tts.split_chunk(pcm, rate, [weights[i] for i in grp], align)
+            if parts is None:
+                # 숨이 문장 수보다 적어 정렬 자체가 안 된다 — 장면마다 다시 합성한다
+                parts = [None] * len(grp)
+            for i, pieces in zip(grp, parts):
+                if pieces is not None and len(pieces) == len(weights[i]):
                     save(i, pieces, rate)
+                    continue
+                # 이 장면 조각의 말빠르기가 주변과 크게 달랐다 — 모델이 문장을 건너뛰었거나 붙여 읽었을 수 있어
+                # 그 장면만 다시 합성한다(이때도 첫 챕터 목소리에 맞춘다). 그래도 안 되면 장면 통째로 쓴다.
+                tts_stats["rechunked_scenes"] = tts_stats.get("rechunked_scenes", 0) + 1
+                pcm1, rate1 = synth([i])
+                pieces = gemini_tts.split_sentences(pcm1, rate1, weights[i])
+                if pieces and len(pieces) == len(weights[i]):
+                    save(i, pieces, rate1)
                 else:
-                    save_whole(i, pcm, rate)
+                    save_whole(i, pcm1, rate1)
     except gemini_tts.GeminiTTSError as e:
         tts_stats["engine_fallback"] = f"합성 실패 — {e}"
         return None
     tts_stats["gemini_requests"] = requests_made
     if matches:
         tts_stats["voice_match"] = matches
+    if align:
+        tts_stats["align"] = align
     return out
 
 
@@ -1310,6 +1298,8 @@ def tts_meta(voice: str, stats: "dict[str, Any]") -> dict[str, Any]:
         meta["voice_match"] = stats["voice_match"]
     if stats.get("sync"):
         meta["sync"] = stats["sync"]
+    if stats.get("align"):
+        meta["align"] = stats["align"]
     return meta
 
 

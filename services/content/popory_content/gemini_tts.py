@@ -7,6 +7,7 @@
 # 무료 버킷이 없어 과금된다(AI Pro 월 $10 Cloud 크레딧으로 충당). 월 비용·일 요청 상한을 넘을 것 같으면
 # 합성하지 않고 None 을 돌려 호출측(video.py)이 영상 전체를 무료 Cloud TTS 음성으로 만들게 한다.
 import base64
+import bisect
 import datetime
 import json
 import math
@@ -251,9 +252,13 @@ def plan_chunks(est_seconds: list[float], limit: float = CHUNK_SECONDS) -> list[
 
 
 # --- 합성 오디오를 문장으로 다시 나누기 ---
-# 모델은 문장 사이에 숨(무음)을 둔다. 문장 수-1 개의 경계를 "원고 길이 비례 예상 위치에 가깝고 긴 숨"으로
-# 최적 정렬해 고른다(DP). 문장 끝 숨이 쉼표 숨보다 길고, 문단(장면) 경계는 더 길다는 점을 쓴다.
-# 정렬이 의심스러우면 None — 호출측이 더 작은 단위로 다시 합성한다.
+# 모델은 문장 사이에 숨(무음)을 둔다. 문장 수-1 개의 경계를 숨 후보에서 고르는 최적화(DP)다.
+# 비용 = 문장 조각의 말빠르기가 **주변 문장들의 말빠르기**와 얼마나 다른지(log 비의 제곱) − 숨 길이 보상
+#        + 조각 끝이 '긴 숨 + 짧은 말 한 덩어리'면 벌점(다음 문장 첫 단어를 끌어온 신호).
+# 예전엔 "말빠르기가 일정하다" 고 보고 묶음 전체를 글자 수 비율로 나눈 예상 위치에 가까운 숨을 골랐다. 도입부만
+# 천천히 읽어도 예상 위치가 실제보다 앞서 문장 중간 숨을 문장 끝으로 잡았고, 그 어긋남이 뒤로 이어졌다
+# (2026-10-09 『칼의 노래』 영상: 두 번째 문장부터 자막이 말보다 앞섬. 시뮬레이션에서 도입 장면만 22% 느려도
+# 조각의 41% 가 틀렸다). 조각마다 자기 길이만 보므로 오차가 쌓이지 않고, 기준 말빠르기는 고른 결과로 다시 잡는다.
 FRAME_MS = 10
 SILENCE_DBFS = -38.0
 MIN_SILENCE_MS = 140
@@ -262,8 +267,21 @@ ARTIFACT_GAP_MS = 200   # 본 발화와 이만큼 떨어져 있을 때만 잡음
 EDGE_PAD_MS = 40        # 발화 앞뒤로 남기는 여유 — 끝소리가 잘려 '툭' 하지 않게
 FADE_IN_MS, FADE_OUT_MS = 10, 30
 TARGET_RMS_DBFS = -20.0  # 묶음마다 발화 음량을 이 값에 맞춰 묶음 사이 음량 차이를 없앤다
-SENTENCE_PAUSE_BONUS = 0.5
+RATE_COST = 12.0        # 말빠르기 어긋남 비용 계수(시뮬레이션에서 고른 값 — 4·8·16·24 보다 고르게 정확했다)
+SENTENCE_PAUSE_BONUS = 1.0
 PARAGRAPH_PAUSE_BONUS = 1.5
+TAIL_ISLAND_CHARS = 6   # 조각 끝의 말 덩어리가 이 글자 수만큼의 발화보다 짧고(최대 1.3초)
+TAIL_ISLAND_MAX_S = 1.3
+TAIL_PAUSE_S = 0.3      # 그 앞 숨이 이보다 길면 벌점 — 문장 끝 짧은 한 단어가 긴 숨 뒤에 따로 떨어지는 일은 드물다
+TAIL_PENALTY = 1.5
+LOCAL_WINDOW = 3        # 기준 말빠르기를 잴 때 앞뒤로 보는 문장 수
+ALIGN_ITERS = 3
+# 받아들이는 말빠르기 비(조각 길이 / 주변 기준). 여러 장면을 한꺼번에 정렬했을 때는 좁게 봐서 벗어난 장면을
+# 다시 합성하고(모델이 문장을 건너뛰었을 수 있다), 장면 하나를 다시 합성한 뒤에는 넓게 봐서 받아들인다.
+ACCEPT_RATIO = (0.45, 2.2)
+SUSPECT_RATIO = (0.65, 1.5)
+MIN_CHECK_CHARS = 10    # 이보다 짧은 문장은 원래 말빠르기가 들쭉날쭉해 판정에서 뺀다
+MIN_SENTENCE_S = 0.5    # 아무리 짧은 문장("네.")도 이만큼은 걸린다 — 글자 수 비례 예상의 바닥
 
 
 def _quiet_frames(samples: array, rate: int) -> tuple[list[bool], int]:
@@ -306,52 +324,111 @@ def _speech_span(flags: list[bool], frame: int, n: int, rate: int) -> "tuple[int
     return max(0, isl[0][0] * frame - pad), min(n, isl[-1][1] * frame + pad)
 
 
-def _align(inner: list[tuple[int, int]], lead: int, tail: int, weights: list[int],
-           paragraph_after: "set[int]", rate: int) -> "list[int] | None":
-    """경계 k(문장 k 뒤)마다 inner 무음 하나를 순서대로 고른다. 비용 = (예상 위치와의 거리/평균 문장 길이)²
-    − 보너스×log(무음 길이). 문단 경계는 긴 숨을 더 선호한다."""
-    n, m = len(weights), len(inner)
+def _align_rate(inner: list[tuple[int, int]], s0: int, e0: int, w: list[int], paragraph_after: "set[int]",
+                spc: list[float], rate: int, ratio_bounds: tuple[float, float] = (0.2, 5.0)) -> "list[int] | None":
+    """경계 k(문장 k 뒤)마다 inner 숨 하나를 순서대로 고른다. spc[k] 는 문장 k 의 기준 '글자당 샘플'.
+    조각 k 는 앞 경계 숨의 끝부터 자기 경계 숨의 시작까지(중간의 다른 숨은 포함).
+    ratio_bounds 밖의 조각은 아예 보지 않는다(계산량) — 길이가 예상의 이 배수를 벗어나면 그 경로는 버린다."""
+    n, m = len(w), len(inner)
+    if n == 1:
+        return []
     if m < n - 1:
         return None
-    w = [max(1, x) for x in weights]
-    total_w = sum(w)
-    span = tail - lead
-    scale = max(rate * 0.5, span / n)
     min_len = rate * MIN_SILENCE_MS / 1000
-    expected = []
-    acc = 0
-    for k in range(n - 1):
-        acc += w[k]
-        expected.append(lead + span * acc / total_w)
+    rew = [math.log(max(1.0, (b - a) / min_len)) for a, b in inner]
+    starts = [b for _, b in inner]
+    weight = [min(1.0, x / 20) for x in w]       # 짧은 문장은 말빠르기 근거가 약하다
+    tail_pause = rate * TAIL_PAUSE_S
+    floor = rate * MIN_SENTENCE_S
+    expect = [max(floor, w[k] * spc[k]) for k in range(n)]
+    bonus = [PARAGRAPH_PAUSE_BONUS if k in paragraph_after else SENTENCE_PAUSE_BONUS for k in range(n - 1)]
 
-    def cost(k: int, c: int) -> float:
-        a, b = inner[c]
-        d = ((a + b) / 2 - expected[k]) / scale
-        bonus = PARAGRAPH_PAUSE_BONUS if k in paragraph_after else SENTENCE_PAUSE_BONUS
-        return d * d - bonus * math.log(max(1.0, (b - a) / min_len))
+    def cost(k: int, st: int, en: int, c_end: "int | None") -> float:
+        d = en - st
+        if d <= 0:
+            return math.inf
+        r = d / expect[k]
+        if r < ratio_bounds[0] or r > ratio_bounds[1]:
+            return math.inf
+        v = RATE_COST * weight[k] * math.log(r) ** 2
+        if c_end is not None and c_end >= 1:
+            pa, pb = inner[c_end - 1]
+            island = min(rate * TAIL_ISLAND_MAX_S, TAIL_ISLAND_CHARS * spc[k])
+            if pb > st and en - pb < island and pb - pa >= tail_pause:
+                v += TAIL_PENALTY
+        return v
 
-    inf = float("inf")
-    prev = [cost(0, c) if c <= m - (n - 1) else inf for c in range(m)]
-    back: list[list[int]] = [[-1] * m]
+    inf = math.inf
+    f = [cost(0, s0, inner[c][0], c) - bonus[0] * rew[c] if c <= m - (n - 1) else inf for c in range(m)]
+    back: list[list[int]] = []
     for k in range(1, n - 1):
-        cur = [inf] * m
-        arg = [-1] * m
-        best, best_c = inf, -1
-        for c in range(m):
-            if c >= 1 and prev[c - 1] < best:
-                best, best_c = prev[c - 1], c - 1
-            if c >= k and c <= m - (n - 1 - k) and best < inf:
-                cur[c] = best + cost(k, c)
-                arg[c] = best_c
+        cur, arg = [inf] * m, [-1] * m
+        exp = expect[k]
+        for c in range(k, m - (n - 1 - k) + 1):
+            en = inner[c][0]
+            # 앞 경계 후보는 조각 길이가 예상의 ratio_bounds 배가 되는 범위만 본다(계산량)
+            lo = bisect.bisect_left(starts, en - ratio_bounds[1] * exp)
+            hi = bisect.bisect_right(starts, en - ratio_bounds[0] * exp)
+            best, bi = inf, -1
+            for cp in range(max(k - 1, lo), min(c, hi)):
+                if f[cp] == inf:
+                    continue
+                v = f[cp] + cost(k, inner[cp][1], en, c)
+                if v < best:
+                    best, bi = v, cp
+            if bi >= 0:
+                cur[c] = best - bonus[k] * rew[c]
+                arg[c] = bi
         back.append(arg)
-        prev = cur
-    end = min(range(m), key=lambda c: prev[c])
-    if prev[end] == inf:
+        f = cur
+    best, end = inf, -1
+    for c in range(m):
+        if f[c] < inf:
+            v = f[c] + cost(n - 1, inner[c][1], e0, None)
+            if v < best:
+                best, end = v, c
+    if end < 0:
         return None
     picks = [end]
-    for k in range(n - 2, 0, -1):
-        picks.append(back[k][picks[-1]])
+    for arg in reversed(back):
+        picks.append(arg[picks[-1]])
     return picks[::-1]
+
+
+def _segment(inner: list[tuple[int, int]], s0: int, e0: int, weights: list[int], rate: int,
+             paragraph_after: "set[int] | tuple" = ()) -> "tuple[list[tuple[int, int]], list[float], list[int]] | None":
+    """(문장 조각 [(시작, 끝)], 조각별 말빠르기 비, 고른 숨 인덱스). 기준 말빠르기는 고른 결과로 다시 잡아
+    ALIGN_ITERS 번 되풀이한다 — 장면마다 완급이 달라도 앞뒤 문장 기준이라 오차가 쌓이지 않는다."""
+    n = len(weights)
+    w = [max(1, x) for x in weights]
+    if n == 1:
+        return [(s0, e0)], [1.0], []
+    cand = [p for p in inner if s0 < p[0] and p[1] < e0]
+    if len(cand) < n - 1:
+        return None
+    longest = sorted(b - a for a, b in cand)[-(n - 1):]
+    spc = [max(1.0, e0 - s0 - sum(longest)) / sum(w)] * n
+    para = set(paragraph_after)
+    pieces: list[tuple[int, int]] = []
+    picks: list[int] = []
+    for _ in range(ALIGN_ITERS):
+        got = _align_rate(cand, s0, e0, w, para, spc, rate)
+        if got is None:
+            # 말빠르기가 터무니없는 조각 없이는 맞출 수 없다(모델이 문장을 건너뛰었거나 붙여 읽었다) — 범위를 넓혀
+            # 정렬은 해 두고, 판정(_plausible)이 그 장면만 골라 다시 합성하게 한다. 묶음 전체를 버리지 않는다.
+            got = _align_rate(cand, s0, e0, w, para, spc, rate, (0.02, 50.0))
+        if got is None:
+            return None
+        picks = got
+        bounds = [s0] + [x for c in picks for x in cand[c]] + [e0]
+        pieces = [(bounds[2 * i], bounds[2 * i + 1]) for i in range(n)]
+        spc = []
+        for k in range(n):
+            lo, hi = max(0, k - LOCAL_WINDOW), min(n, k + LOCAL_WINDOW + 1)
+            spc.append(sum(pieces[j][1] - pieces[j][0] for j in range(lo, hi)) / sum(w[lo:hi]))
+    floor = rate * MIN_SENTENCE_S
+    ratios = [(b - a) / max(floor, w[k] * spc[k]) for k, (a, b) in enumerate(pieces)]
+    return pieces, ratios, picks
 
 
 def _fade(piece: array, rate: int) -> None:
@@ -381,11 +458,8 @@ def _speech_gain(samples: array, flags: list[bool], frame: int) -> float:
     return min(target / max(1.0, rms), 32000 / peak)
 
 
-def split_sentences(pcm: bytes, rate: int, weights: list[int],
-                    paragraph_after: "set[int] | tuple" = ()) -> "list[bytes] | None":
-    """합성 PCM 을 문장별 PCM 조각으로. weights 는 문장별 발화량(정규화 원고 글자 수),
-    paragraph_after 는 그 문장 뒤가 문단(장면) 경계인 문장 인덱스. 앞뒤 무음·잡음은 잘라 내고
-    (문장 사이 호흡은 video.py 가 정한 간격으로 다시 넣는다), 조각마다 짧은 페이드를 건다."""
+def _prepare(pcm: bytes, rate: int):
+    """(샘플, 무음 플래그, 프레임 길이, 발화 시작, 발화 끝, 안쪽 숨 후보) — 발화가 없으면 None."""
     samples = array("h")
     samples.frombytes(pcm[: len(pcm) // 2 * 2])
     if not samples:
@@ -395,36 +469,91 @@ def split_sentences(pcm: bytes, rate: int, weights: list[int],
     if span is None:
         return None
     lead, tail = span
-    n = len(weights)
-    if n == 1:
-        cuts: list[tuple[int, int]] = [(lead, tail)]
-    else:
-        inner = [(a * frame, min(len(samples), b * frame)) for a, b in _runs(flags, True)
-                 if (b - a) * FRAME_MS >= MIN_SILENCE_MS and a * frame > lead and b * frame < tail]
-        picks = _align(inner, lead, tail, weights, set(paragraph_after), rate)
-        if picks is None:
-            return None
-        cuts = []
-        pos = lead
-        for c in picks:
-            a, b = inner[c]
-            cuts.append((pos, a))
-            pos = b
-        cuts.append((pos, tail))
-        # 정렬 점검 — 조각 길이가 원고 비례 예상과 크게 다르면 경계를 잘못 잡은 것
-        w = [max(1, x) for x in weights]
-        speech = sum(b - a for a, b in cuts)
-        for (a, b), wk in zip(cuts, w):
-            exp = speech * wk / sum(w)
-            if b - a < rate // 10 or not (exp / 3 <= b - a <= exp * 3 + rate):
-                return None
+    inner = [(a * frame, min(len(samples), b * frame)) for a, b in _runs(flags, True)
+             if (b - a) * FRAME_MS >= MIN_SILENCE_MS and a * frame > lead and b * frame < tail]
+    return samples, flags, frame, lead, tail, inner
+
+
+def _cut(samples: array, gain: float, a: int, b: int, rate: int) -> bytes:
+    piece = array("h", (max(-32768, min(32767, int(x * gain))) for x in samples[a:b]))
+    _fade(piece, rate)
+    return piece.tobytes()
+
+
+def _plausible(ratios: list[float], weights: list[int], bounds: tuple[float, float]) -> bool:
+    lo, hi = bounds
+    return all(lo <= r <= hi or w < MIN_CHECK_CHARS for r, w in zip(ratios, weights))
+
+
+def split_sentences(pcm: bytes, rate: int, weights: list[int],
+                    paragraph_after: "set[int] | tuple" = ()) -> "list[bytes] | None":
+    """합성 PCM 을 문장별 PCM 조각으로. weights 는 문장별 발화량(정규화 원고 글자 수),
+    paragraph_after 는 그 문장 뒤가 문단(장면) 경계인 문장 인덱스. 앞뒤 무음·잡음은 잘라 내고
+    (문장 사이 호흡은 video.py 가 정한 간격으로 다시 넣는다), 조각마다 짧은 페이드를 건다.
+    말빠르기가 주변과 크게 다른 조각(ACCEPT_RATIO 밖)이 있으면 경계를 믿지 않고 None."""
+    prep = _prepare(pcm, rate)
+    if prep is None:
+        return None
+    samples, flags, frame, lead, tail, inner = prep
+    seg = _segment(inner, lead, tail, weights, rate, paragraph_after)
+    if seg is None:
+        return None
+    pieces, ratios, _ = seg
+    if len(weights) > 1 and not _plausible(ratios, weights, ACCEPT_RATIO):
+        return None
     gain = _speech_gain(samples, flags, frame)
-    pieces: list[bytes] = []
-    for a, b in cuts:
-        piece = array("h", (max(-32768, min(32767, int(x * gain))) for x in samples[a:b]))
-        _fade(piece, rate)
-        pieces.append(piece.tobytes())
-    return pieces
+    return [_cut(samples, gain, a, b, rate) for a, b in pieces]
+
+
+def split_chunk(pcm: bytes, rate: int, scene_weights: "list[list[int]]",
+                stats: "dict | None" = None) -> "list[list[bytes] | None] | None":
+    """여러 장면을 한 번에 합성한 PCM 을 장면별·문장별 조각으로. 묶음 전체 문장을 한꺼번에 정렬한다(장면 경계를
+    따로 먼저 찾지 않는다 — 모델이 장면 사이에서 늘 더 길게 쉬지는 않는다). 말빠르기가 주변과 SUSPECT_RATIO 보다
+    크게 다른 조각이 있는 장면은 None(호출측이 그 장면만 다시 합성) — 모델이 문장을 건너뛰었을 수 있다.
+    정렬 자체가 안 되면(숨이 문장 수보다 적음) None. stats 를 주면 가장 벗어난 말빠르기 비를 채운다(진단용)."""
+    prep = _prepare(pcm, rate)
+    if prep is None:
+        return None
+    samples, flags, frame, lead, tail, inner = prep
+    flat = [x for sc in scene_weights for x in sc]
+    para, acc = set(), 0
+    for sc in scene_weights[:-1]:
+        acc += len(sc)
+        para.add(acc - 1)
+    seg = _segment(inner, lead, tail, flat, rate, para)
+    if seg is None:
+        return None
+    pieces, ratios, _ = seg
+    if stats is not None:
+        judged = [r for r, w in zip(ratios, flat) if w >= MIN_CHECK_CHARS] or [1.0]
+        stats["min_ratio"] = round(min(stats.get("min_ratio", 9.0), min(judged)), 2)
+        stats["max_ratio"] = round(max(stats.get("max_ratio", 0.0), max(judged)), 2)
+    gain = _speech_gain(samples, flags, frame)
+    bounds = SUSPECT_RATIO if len(scene_weights) > 1 else ACCEPT_RATIO
+    out: "list[list[bytes] | None]" = []
+    pos = 0
+    for sc in scene_weights:
+        idx = range(pos, pos + len(sc))
+        pos += len(sc)
+        if len(sc) > 1 and not _plausible([ratios[k] for k in idx], [flat[k] for k in idx], bounds):
+            out.append(None)
+            continue
+        out.append([_cut(samples, gain, *pieces[k], rate) for k in idx])
+    return out
+
+
+def sentence_cuts(pcm: bytes, rate: int, weights: list[int]) -> "list[tuple[float, float]] | None":
+    """문장 조각으로 나누지 못한 오디오(장면 통째)에서도 자막 경계로 쓸 숨 [(시작 초, 끝 초)] 을 고른다 — 판정 없이
+    가장 그럴듯한 정렬. 발화 앞 무음은 이미 잘린 오디오를 받는다고 보고 시각은 오디오 처음 기준."""
+    prep = _prepare(pcm, rate)
+    if prep is None or len(weights) < 2:
+        return None
+    _, _, _, lead, tail, inner = prep
+    seg = _segment(inner, lead, tail, weights, rate)
+    if seg is None:
+        return None
+    pieces, _, _ = seg
+    return [(pieces[k][1] / rate, pieces[k + 1][0] / rate) for k in range(len(pieces) - 1)]
 
 
 def pause_spans(pcm: bytes, rate: int, min_ms: int = 80) -> list[tuple[float, float]]:
