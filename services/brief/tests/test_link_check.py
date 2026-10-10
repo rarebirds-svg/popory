@@ -58,8 +58,9 @@ def test_extract_urls_empty_when_none():
 # ---------------- 상태코드 판정 ----------------
 
 class _Resp:
-    def __init__(self, status: int):
+    def __init__(self, status: int, location: str | None = None):
         self.status_code = status
+        self.headers = {"Location": location} if location else {}
 
     def close(self):
         pass
@@ -130,6 +131,106 @@ def test_check_url_retries_with_get_when_head_rejected(monkeypatch):
     monkeypatch.setattr(lc.requests, "get", _get)
     assert lc.check_url("https://x.test/a") == 200
     assert calls == ["head", "get"]
+
+
+def test_check_url_confirms_dead_verdict_with_get(monkeypatch):
+    """404·410 은 링크를 벗기는 확정 판정이다 — HEAD 에만 404 를 주는 서버면 GET 이 기준이다."""
+    calls: list[str] = []
+
+    def _head(url, **kwargs):
+        calls.append("head")
+        return _Resp(404)
+
+    def _get(url, **kwargs):
+        calls.append("get")
+        return _Resp(200)
+
+    monkeypatch.setattr(lc.requests, "head", _head)
+    monkeypatch.setattr(lc.requests, "get", _get)
+    assert lc.check_url("https://x.test/a") == 200
+    assert calls == ["head", "get"]
+
+
+def test_check_url_does_not_get_when_head_is_fine(monkeypatch):
+    def _get(url, **kwargs):
+        raise AssertionError("HEAD 가 200 이면 GET 을 다시 보낼 이유가 없다")
+    monkeypatch.setattr(lc.requests, "head", lambda url, **k: _Resp(200))
+    monkeypatch.setattr(lc.requests, "get", _get)
+    assert lc.check_url("https://x.test/a") == 200
+
+
+# ---------------- grounding 경유 주소 풀기 ----------------
+#
+# 2026-10-10 실측: 부동산 본문에 구글 경유 주소 8개, 그중 4개가 강등됐다. 경유 주소 자체는
+# HEAD·GET 모두 302 로 기사에 닿았다 — 구글 쪽이 아니라 따라간 기사 쪽 판정이었다.
+
+_G = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/"
+
+
+def _redirects(monkeypatch, table: dict[str, tuple[int, str | None]]):
+    seen: list[dict] = []
+
+    def _get(url, **kwargs):
+        seen.append(kwargs)
+        code, loc = table.get(url, (404, None))
+        return _Resp(code, loc)
+    monkeypatch.setattr(lc.requests, "get", _get)
+    return seen
+
+
+def test_resolve_grounding_redirects_replaces_with_article_url(monkeypatch):
+    a, b = _G + "AUZIYQaaa", _G + "AUZIYQbbb_-="
+    seen = _redirects(monkeypatch, {a: (302, "https://www.mk.co.kr/news/realestate/12169851"),
+                                    b: (302, "https://www.yna.co.kr/view/AKR20261008210100003")})
+    body = f"- [매경 — 제목]({a}) · [연합 — 제목]({b})\n- 다시 [매경]({a})"
+    out, n, unresolved = lc.resolve_grounding_redirects(body)
+    assert out == ("- [매경 — 제목](https://www.mk.co.kr/news/realestate/12169851) · "
+                   "[연합 — 제목](https://www.yna.co.kr/view/AKR20261008210100003)\n"
+                   "- 다시 [매경](https://www.mk.co.kr/news/realestate/12169851)")
+    assert (n, unresolved) == (2, [])
+    assert len(seen) == 2                                  # 같은 주소는 한 번만 연다
+    assert all(k["allow_redirects"] is False for k in seen)   # 기사까지 따라가지 않는다
+
+
+def test_resolve_grounding_redirects_keeps_unresolvable(monkeypatch):
+    """풀리지 않는 주소(오기·만료)는 그대로 두고 링크 점검에 맡긴다."""
+    bad = _G + "AUZIYQbroken"
+    _redirects(monkeypatch, {})
+    body = f"[t]({bad})"
+    assert lc.resolve_grounding_redirects(body) == (body, 0, [bad])
+
+
+def test_resolve_grounding_redirects_does_not_corrupt_longer_token(monkeypatch):
+    """한 주소가 다른 주소의 앞부분이면 str.replace 는 긴 주소를 깨뜨린다."""
+    short, long_ = _G + "AUZIYQab", _G + "AUZIYQabcd"
+    _redirects(monkeypatch, {short: (302, "https://a.com/1"), long_: (302, "https://b.com/2")})
+    out, n, _ = lc.resolve_grounding_redirects(f"[x]({long_}) [y]({short})")
+    assert out == "[x](https://b.com/2) [y](https://a.com/1)"
+
+
+def test_resolve_grounding_redirects_encodes_parentheses(monkeypatch):
+    g = _G + "AUZIYQp"
+    _redirects(monkeypatch, {g: (302, "https://en.wikipedia.org/wiki/Foo_(bar)")})
+    out, _, _ = lc.resolve_grounding_redirects(f"[위키]({g})")
+    assert out == "[위키](https://en.wikipedia.org/wiki/Foo_%28bar%29)"
+
+
+def test_resolve_grounding_redirects_noop_without_redirects(monkeypatch):
+    def _get(url, **kwargs):
+        raise AssertionError("경유 주소가 없으면 네트워크를 쓰지 않는다")
+    monkeypatch.setattr(lc.requests, "get", _get)
+    body = "[t](https://www.mk.co.kr/news/1)"
+    assert lc.resolve_grounding_redirects(body) == (body, 0, [])
+
+
+def test_resolve_grounding_redirects_survives_network_error(monkeypatch):
+    g = _G + "AUZIYQx"
+
+    def _get(url, **kwargs):
+        raise lc.requests.ConnectionError("boom")
+    monkeypatch.setattr(lc.requests, "get", _get)
+    body = f"[t]({g})"
+    assert lc.resolve_grounding_redirects(body) == (body, 0, [g])
 
 
 # ---------------- 모드 ----------------

@@ -774,6 +774,30 @@ def test_generate_degrade_mode_strips_links_and_publishes(monkeypatch):
     assert "법률신문 — 제목" in written      # 출처 텍스트는 남는다
 
 
+def test_generate_resolves_grounding_redirects_before_link_check(monkeypatch):
+    """구글 경유 주소는 기사 주소로 풀린 뒤 점검·발행된다 — 독자에게 기사 링크가 나간다."""
+    rec = _patch(monkeypatch, generate_brief)
+    monkeypatch.setenv("BRIEF_LINK_CHECK", "degrade")
+    g = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQabc"
+    tagged = (f'<body_markdown>본문 [매경 — 제목]({g})</body_markdown>'
+              '<meta_json>{"title": "제목", "published_at": 1}</meta_json>')
+    _claude_returns(monkeypatch, tagged)
+    monkeypatch.setattr(generate_brief.link_check, "resolve_grounding_redirects",
+                        lambda body, **k: (body.replace(g, "https://www.mk.co.kr/news/1"), 1, []))
+    checked = {}
+    monkeypatch.setattr(generate_brief.link_check, "dead_links",
+                        lambda body, **k: checked.setdefault("body", body) and [])
+    _link_argv(monkeypatch)
+
+    generate_brief.main()
+
+    assert "https://www.mk.co.kr/news/1" in checked["body"] and g not in checked["body"]
+    written = Path("/tmp/brief_realestate_2026-01-02.md").read_text(encoding="utf-8")
+    assert "[매경 — 제목](https://www.mk.co.kr/news/1)" in written
+    r = next(c[1] for c in rec.calls if c[1]["status"] == "grounding_resolved")
+    assert (r["resolved"], r["unresolved"]) == (1, 0)
+
+
 # ---------------- generate_brief · Gemini 실패 → claude 대체 ----------------
 #
 # 2026-09-25 부동산 PICK 5 두 카테고리가 Gemini 빈 응답으로 그날 유실됐다. 이제 Gemini 가

@@ -283,6 +283,9 @@ def main() -> None:
                                     fallback=f"[{args.name} 브리핑] {date_str}")
 
     # 인용 링크 점검 (generate_brief 와 같은 규약). 기본 warn.
+    # Gemini 가 적은 구글 경유 주소를 기사 주소로 먼저 푼다 (generate_brief.py 와 동일).
+    body, _, _ = link_check.resolve_grounding_redirects(body)
+
     lc_mode = link_check.mode()
     if lc_mode != "off":
         dead = link_check.dead_links(body)
