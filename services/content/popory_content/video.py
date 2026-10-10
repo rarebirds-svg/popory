@@ -72,6 +72,10 @@ CARD_ACCENT = (232, 197, 120)
 # 카드가 뜰 때 곁들일 효과음(차임). 없으면 무음 — 파일 유무로만 켜진다.
 SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
 CARD_SFX = SFX_DIR / "chime.mp3"
+# 차임 끝을 CARD_SFX_FADE_S 에 걸쳐 줄여, 다음 장면으로 넘어가는 크로스페이드가 시작되기 CARD_SFX_QUIET_S
+# 전부터는 완전히 조용하게 한다(_card_clip).
+CARD_SFX_FADE_S = 1.0
+CARD_SFX_QUIET_S = 0.3
 
 
 class VideoError(Exception):
@@ -294,11 +298,18 @@ def _card_clip(card: dict[str, Any], index: int, work: Path, portrait: bool = Fa
     _render_graphic_card_png(card, png, portrait=portrait)
     clip = work / f"card_{index}.mkv"
     seconds = _frame_align(seconds)
+    afilt = _clip_audio_chain("[1:a]", seconds)
     if CARD_SFX.exists():
         audio_in = ["-i", str(CARD_SFX)]
+        # 차임 여운은 다음 장면으로 넘어가는 크로스페이드(XFADE_TD)가 시작되기 전에 무음까지 줄인다. 예전엔 차임이 길면
+        # 카드 끝에서 그냥 잘린 여운이 크로스페이드로 내레이션 첫머리에 얹혀 첫 단어와 겹쳤고, 싱크 점검도 그 장면 첫
+        # 발화 시작을 찾지 못해 첫 숨 뒤 소리를 시작으로 잡았다(로컬 재현: 카드 뒤 첫 자막 +743ms).
+        end = max(0.0, seconds - XFADE_TD - CARD_SFX_QUIET_S)
+        start = max(0.0, end - CARD_SFX_FADE_S)
+        afilt += f",afade=t=out:st={start:.3f}:d={max(0.05, end - start):.3f}"
     else:
         audio_in = ["-f", "lavfi", "-i", f"anullsrc=channel_layout=mono:sample_rate={AUDIO_RATE}"]
-    afilt = _clip_audio_chain("[1:a]", seconds) + "[a]"
+    afilt += "[a]"
     # 오디오는 PCM, 길이는 영상·오디오 모두 프레임 경계로 정확히(_frame_align) — 이어 붙일 때 어긋남이 쌓이지 않게.
     _run([
         FFMPEG_BIN, "-y", "-loop", "1", "-i", str(png), *audio_in,
