@@ -1,5 +1,6 @@
 # 영상 합성 테스트. _render_card 는 Pillow만 필요(항상 실행), render_video 스모크는 ffmpeg/say 필요(조건부).
 import io
+import re
 import shutil
 from pathlib import Path
 
@@ -689,11 +690,44 @@ def test_card_clip_uses_silence_or_chime_and_matches_scene_audio_format(monkeypa
     # 오디오는 PCM 으로 영상과 같은 길이(샘플 단위)로 자른다 — AAC 채움이 이어 붙일 때 쌓이지 않게
     assert cmd[cmd.index("-c:a") + 1] == "pcm_s16le" and "-shortest" not in cmd
     assert f"atrim=end_sample={round(_video.CARD_SECONDS * 24000)}" in " ".join(cmd)
+    assert "afade" not in " ".join(cmd)
     chime = tmp_path / "chime.mp3"; chime.write_bytes(b"x")
     monkeypatch.setattr(_video, "CARD_SFX", chime)
     _video._card_clip({"type": "quote", "text": "x"}, 4, tmp_path)
     cmd = cmds[-1]
     assert str(chime) in cmd and "aresample=24000,aformat=sample_fmts=s16:channel_layouts=mono" in " ".join(cmd)
+    # 차임은 다음 장면으로 넘어가는 크로스페이드가 시작되기 CARD_SFX_QUIET_S 전까지 다 줄어든다
+    m = re.search(r"afade=t=out:st=([\d.]+):d=([\d.]+)\[a\]", " ".join(cmd))
+    assert m and float(m[2]) == pytest.approx(_video.CARD_SFX_FADE_S)
+    assert float(m[1]) + float(m[2]) == pytest.approx(
+        _video.CARD_SECONDS - _video.XFADE_TD - _video.CARD_SFX_QUIET_S, abs=1e-3)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+def test_card_chime_tail_never_reaches_next_scene_narration(monkeypatch, tmp_path):
+    # 카드보다 긴 차임도 다음 장면으로 넘어가는 크로스페이드 전에 완전히 조용해진다. 예전엔 카드 끝에서 잘린 여운이
+    # 크로스페이드로 내레이션 첫 단어에 얹혔고, 싱크 점검이 그 장면 첫 발화 시작을 못 찾았다.
+    import math
+    import subprocess
+    from array import array
+    from popory_content import gemini_tts
+    monkeypatch.setattr(_video, "_render_graphic_card_png",
+                        lambda card, png, portrait=False: _Image.new("RGB", (64, 36)).save(png))
+    rate = 24000
+    ring = array("h", (int(9000 * math.exp(-t / rate / 1.2) * math.sin(2 * math.pi * 1200 * t / rate))
+                       for t in range(int(4.5 * rate))))
+    chime = tmp_path / "chime.wav"
+    gemini_tts.write_wav(ring.tobytes(), rate, chime)
+    monkeypatch.setattr(_video, "CARD_SFX", chime)
+    clip = _video._card_clip({"type": "quote", "text": "x"}, 0, tmp_path)
+    pcm = subprocess.run(["ffmpeg", "-v", "error", "-i", str(clip), "-f", "s16le", "-ac", "1", "-ar", str(rate), "-"],
+                         capture_output=True, check=True).stdout
+    s = array("h")
+    s.frombytes(pcm)
+    assert len(s) == round(_video.CARD_SECONDS * rate)
+    assert max(abs(x) for x in s[: rate // 2]) > 3000                       # 차임은 그대로 울린다
+    quiet_from = int((_video.CARD_SECONDS - _video.XFADE_TD - _video.CARD_SFX_QUIET_S) * rate)
+    assert max(abs(x) for x in s[quiet_from:]) == 0                         # 전환 전부터 완전 무음
 
 
 @pytest.mark.skipif(not Path(FONT_PATH).exists(), reason="한국어 폰트 필요")
