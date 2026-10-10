@@ -49,8 +49,13 @@ _TEXT_URL_RE = re.compile(r"""`[^`\n]*`|(?:https?://|www\.)[^\s<>"'`()\[\]]+""",
 _TRAILING = ".,;:"
 # 없는 문서라고 단정할 수 있는 상태코드만. 나머지는 판정 불가로 본다.
 DEAD_CODES = frozenset({404, 410})
-# HEAD 를 막는 서버가 있다 — 이때만 GET 으로 한 번 더 본다.
+# HEAD 를 막는 서버가 있다 — 이때 GET 으로 한 번 더 본다. 404·410 도 GET 으로 확인한다:
+# 링크를 벗기는 확정 판정인데, HEAD 에만 404 를 주는 서버가 있으면 살아 있는 출처를 잃는다.
 HEAD_REJECTED = frozenset({403, 405, 501})
+# Gemini grounding 이 본문에 적는 구글 경유 주소. 열면 기사로 302 된다.
+_GROUNDING_REDIRECT_RE = re.compile(
+    r"https://vertexaisearch\.cloud\.google\.com/grounding-api-redirect/[A-Za-z0-9_=-]+")
+_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 VALID_MODES = ("off", "warn", "degrade", "strict")
 TIMEOUT_SECONDS = float(os.environ.get("BRIEF_LINK_CHECK_TIMEOUT", "6"))
 MAX_URLS = int(os.environ.get("BRIEF_LINK_CHECK_MAX", "40"))
@@ -110,7 +115,7 @@ def check_url(url: str, *, timeout: float = TIMEOUT_SECONDS) -> int | None:
     headers = {"User-Agent": USER_AGENT}
     try:
         resp = requests.head(url, timeout=timeout, allow_redirects=True, headers=headers)
-        if resp.status_code in HEAD_REJECTED:
+        if resp.status_code in HEAD_REJECTED or resp.status_code in DEAD_CODES:
             resp = requests.get(url, timeout=timeout, allow_redirects=True,
                                 headers=headers, stream=True)
             resp.close()
@@ -122,6 +127,43 @@ def check_url(url: str, *, timeout: float = TIMEOUT_SECONDS) -> int | None:
         # urllib3 버전에 따라 LocationParseError(ValueError) 가 requests 로 감싸지지 않고 새어 나와
         # pool.map 에서 generate 전체를 exit 1 로 죽였다 — 점검 하나로 발행을 막지 않는다(판정 불가).
         return None
+
+
+def _resolve_redirect(url: str, timeout: float) -> str | None:
+    """구글 경유 주소가 가리키는 기사 주소. 못 풀면 None(원래 주소를 그대로 둔다)."""
+    try:
+        resp = requests.get(url, timeout=timeout, allow_redirects=False,
+                            headers={"User-Agent": USER_AGENT}, stream=True)
+        resp.close()
+    except Exception:   # noqa: BLE001 — check_url 과 같은 이유. 풀이 하나로 생성을 막지 않는다.
+        return None
+    if resp.status_code not in _REDIRECT_CODES:
+        return None
+    loc = (resp.headers.get("Location") or "").strip()
+    if not loc.startswith(("http://", "https://")) or re.search(r"[\s<>`\"]", loc) \
+            or _GROUNDING_REDIRECT_RE.match(loc):
+        return None
+    # 괄호는 마크다운 링크 목적지를 끊을 수 있어 인코딩해 둔다(같은 주소로 열린다).
+    return loc.replace("(", "%28").replace(")", "%29")
+
+
+def resolve_grounding_redirects(markdown: str, *, timeout: float = TIMEOUT_SECONDS,
+                                workers: int = WORKERS) -> tuple[str, int, list[str]]:
+    """본문의 구글 grounding 경유 주소를 기사 주소로 바꾼다. (새 본문, 바꾼 주소 수, 못 푼 주소).
+
+    Gemini 는 검색 결과로 받은 `vertexaisearch.cloud.google.com/grounding-api-redirect/...` 를
+    그대로 출처로 적는다. 독자에게 구글 경유 링크가 나가고, 링크 점검도 리다이렉트를 따라간
+    기사 쪽 응답으로 판정해 원인을 가리기 어렵다(2026-10-10 부동산 본문 8개 중 4개 강등).
+    302 의 Location 이 기사 주소라 한 번씩 열어 바꾼다. 못 푼 주소는 그대로 두고 링크 점검에 맡긴다."""
+    urls = list(dict.fromkeys(_GROUNDING_REDIRECT_RE.findall(markdown or "")))
+    if not urls:
+        return markdown, 0, []
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(urls)))) as pool:
+        targets = list(pool.map(lambda u: _resolve_redirect(u, timeout), urls))
+    mapping = {u: t for u, t in zip(urls, targets) if t}
+    # 정규식으로 토큰 전체를 맞춰 바꾼다 — str.replace 는 한 주소가 다른 주소의 앞부분이면 깨뜨린다.
+    out = _GROUNDING_REDIRECT_RE.sub(lambda m: mapping.get(m.group(0), m.group(0)), markdown)
+    return out, len(mapping), [u for u in urls if u not in mapping]
 
 
 def dead_links(markdown: str, *, timeout: float = TIMEOUT_SECONDS,

@@ -304,6 +304,14 @@ def main() -> None:
 
     # 인용 링크 점검. grounding 은 URL 을 지어낼 수 있어 실측이 유일한 방어다(README §4-1).
     # 기본 warn — 로그만 남기고 진행한다. strict 로 올리면 죽은 링크가 있을 때 발행하지 않는다.
+    # Gemini 가 적은 구글 경유 주소를 기사 주소로 먼저 푼다 — 독자에게 기사 링크가 나가고,
+    # 링크 점검도 기사 주소를 직접 본다.
+    body, resolved, unresolved = link_check.resolve_grounding_redirects(body)
+    if resolved or unresolved:
+        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "grounding_resolved",
+                              "category": category.slug, "date": date_str,
+                              "resolved": resolved, "unresolved": len(unresolved)})
+
     lc_mode = link_check.mode()
     if lc_mode != "off":
         dead = link_check.dead_links(body)
