@@ -6,7 +6,6 @@ subject_template: "[{date}] {name}"
 sender_name: "{name}"
 enabled: true
 description: "오늘의 부동산 기사 5건 큐레이션 — 네이버 뉴스 링크 데일리 PICK"
-days: "mon,tue,wed,thu,fri,sun"
 seo_suffix: "{date_label} 부동산 데일리 뉴스 PICK 5"
 seo_body: false
 ---
