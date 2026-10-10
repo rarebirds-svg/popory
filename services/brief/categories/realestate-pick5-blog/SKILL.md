@@ -6,7 +6,6 @@ subject_template: "[{date}] {name}"
 sender_name: "{name}"
 enabled: true
 description: "PICK 5 상세판 — 주제별 핵심내용·시사점·출처 블로그 정리 (포털 전용)"
-days: "mon,tue,wed,thu,fri,sun"
 seo_suffix: "{date_label} 부동산 데일리 뉴스 PICK 5"
 ---
 
