@@ -3,7 +3,7 @@ import time
 import requests
 
 
-GRAPH_BASE = "https://graph.facebook.com/v19.0"
+GRAPH_BASE = "https://graph.facebook.com/v23.0"
 MAX_POLL = 20
 
 

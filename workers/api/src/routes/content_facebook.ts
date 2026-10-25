@@ -15,7 +15,7 @@ export function mountContentFacebook(app: Hono<{ Bindings: Env; Variables: Vars 
     const u = c.get("user")!;
     const state = crypto.randomUUID();
     await c.env.KV.put(`oauth:facebook:state:${state}`, u.sub, { expirationTtl: STATE_TTL });
-    const url = new URL("https://www.facebook.com/v19.0/dialog/oauth");
+    const url = new URL("https://www.facebook.com/v23.0/dialog/oauth");
     url.searchParams.set("client_id", c.env.INSTAGRAM_CLIENT_ID);
     url.searchParams.set("redirect_uri", `${c.env.PUBLIC_BASE_URL}/api/content/facebook/callback`);
     url.searchParams.set("response_type", "code");
@@ -32,7 +32,7 @@ export function mountContentFacebook(app: Hono<{ Bindings: Env; Variables: Vars 
     const sub = await c.env.KV.get(`oauth:facebook:state:${state}`);
     if (!sub) return c.redirect(`${portal}/content/facebook?error=state`, 302);
     await c.env.KV.delete(`oauth:facebook:state:${state}`);
-    const tokRes = await fetch("https://graph.facebook.com/v19.0/oauth/access_token", {
+    const tokRes = await fetch("https://graph.facebook.com/v23.0/oauth/access_token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -48,7 +48,7 @@ export function mountContentFacebook(app: Hono<{ Bindings: Env; Variables: Vars 
     if (!tok.access_token) return c.redirect(`${portal}/content/facebook?error=notoken`, 302);
 
     const longRes = await fetch(
-      `https://graph.facebook.com/v19.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${c.env.INSTAGRAM_CLIENT_ID}&client_secret=${c.env.INSTAGRAM_CLIENT_SECRET}&fb_exchange_token=${tok.access_token}`,
+      `https://graph.facebook.com/v23.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${c.env.INSTAGRAM_CLIENT_ID}&client_secret=${c.env.INSTAGRAM_CLIENT_SECRET}&fb_exchange_token=${tok.access_token}`,
     );
     const longTok = longRes.ok
       ? ((await longRes.json()) as { access_token?: string }).access_token ?? tok.access_token
@@ -56,7 +56,7 @@ export function mountContentFacebook(app: Hono<{ Bindings: Env; Variables: Vars 
 
     // 첫 페이지의 page_id·이름·페이지 액세스 토큰 획득.
     const pagesRes = await fetch(
-      `https://graph.facebook.com/v19.0/me/accounts?fields=id,name,access_token&access_token=${longTok}`,
+      `https://graph.facebook.com/v23.0/me/accounts?fields=id,name,access_token&access_token=${longTok}`,
     );
     if (!pagesRes.ok) return c.redirect(`${portal}/content/facebook?error=pages`, 302);
     const pages = (await pagesRes.json()) as { data?: Array<{ id: string; name: string; access_token: string }> };
