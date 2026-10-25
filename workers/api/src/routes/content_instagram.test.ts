@@ -63,13 +63,14 @@ const json = (b: unknown, status = 200) =>
   new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
 
 // Graph API 응답을 URL 경로별로 흉내낸다.
-function mockGraph(routes: { token?: () => Response; pages?: () => Response; ig?: () => Response }) {
+function mockGraph(routes: { token?: () => Response; pages?: () => Response; ig?: () => Response; perms?: () => Response }) {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
     if (!url.startsWith("https://graph.facebook.com/v23.0/")) return new Response("bad version", { status: 500 });
     if (url.includes("/oauth/access_token?")) return json({ access_token: "long-tok" });
     if (url.includes("/oauth/access_token")) return routes.token?.() ?? json({ access_token: "short-tok" });
     if (url.includes("/me/accounts")) return routes.pages?.() ?? json({ data: [] });
+    if (url.includes("/me/permissions")) return routes.perms?.() ?? json({ data: [] });
     return routes.ig?.() ?? json({ username: "fallback" });
   });
 }
@@ -86,6 +87,18 @@ async function withState(sub = "u1") {
   await env.KV.put(`oauth:instagram:state:${state}`, sub);
   return state;
 }
+
+describe("GET /api/content/instagram/connect", () => {
+  it("business_management 포함 scope + rerequest 로 Meta 로 보낸다", async () => {
+    const ck = await userCookie();
+    const res = await SELF.fetch("https://example.com/api/content/instagram/connect", { headers: { cookie: ck }, redirect: "manual" });
+    expect(res.status).toBe(302);
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/v23.0/dialog/oauth");
+    expect(loc.searchParams.get("scope")).toContain("business_management");
+    expect(loc.searchParams.get("auth_type")).toBe("rerequest");
+  });
+});
 
 describe("GET /api/content/instagram/callback", () => {
   it("Meta 가 error 로 돌려보내면 denied + 상세 메시지", async () => {
@@ -124,10 +137,17 @@ describe("GET /api/content/instagram/callback", () => {
     expect(row).toBeNull();
   });
 
-  it("페이지가 하나도 없으면 nopage", async () => {
-    mockGraph({ pages: () => json({ data: [] }) });
+  it("페이지가 하나도 없으면 nopage + 거부된 권한 안내", async () => {
+    mockGraph({
+      pages: () => json({ data: [] }),
+      perms: () => json({ data: [
+        { permission: "pages_show_list", status: "granted" },
+        { permission: "business_management", status: "declined" },
+      ] }),
+    });
     const loc = await callback(`code=c1&state=${await withState()}`);
     expect(loc.searchParams.get("error")).toBe("nopage");
+    expect(loc.searchParams.get("detail")).toBe("거부된 권한: business_management");
   });
 
   it("state 가 없거나 만료면 state 오류", async () => {

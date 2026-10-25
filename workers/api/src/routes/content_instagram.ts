@@ -5,7 +5,8 @@ import { requireAuth, type AppVars } from "../middleware/session";
 import type { ServiceVars } from "../middleware/service_auth";
 import { encrypt } from "../lib/secretbox";
 
-const SCOPE = "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement";
+// business_management: 비즈니스 포트폴리오 소유 페이지는 이 권한 없이는 me/accounts 에 나오지 않는다.
+const SCOPE = "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,business_management";
 const STATE_TTL = 600;
 // Graph API 버전 — 만료(약 2년)되면 OAuth·조회가 실패하므로 한 곳에서 관리한다.
 const GRAPH_VERSION = "v23.0";
@@ -23,6 +24,8 @@ export function mountContentInstagram(app: Hono<{ Bindings: Env; Variables: Vars
     url.searchParams.set("redirect_uri", `${c.env.PUBLIC_BASE_URL}/api/content/instagram/callback`);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", SCOPE);
+    // 이전에 거부·누락한 권한/페이지 선택 화면을 다시 띄운다.
+    url.searchParams.set("auth_type", "rerequest");
     url.searchParams.set("state", state);
     return c.redirect(url.toString(), 302);
   });
@@ -81,7 +84,7 @@ export function mountContentInstagram(app: Hono<{ Bindings: Env; Variables: Vars
       data?: Array<{ name?: string; instagram_business_account?: { id: string; username?: string } }>;
     };
     const pages = me.data ?? [];
-    if (pages.length === 0) return fail("nopage");
+    if (pages.length === 0) return fail("nopage", await declinedPermissions(longTok));
     const ig = pages.find((p) => p.instagram_business_account?.id)?.instagram_business_account;
     if (!ig) return fail("noig", pages.map((p) => p.name).filter(Boolean).join(", "));
     let username = ig.username ?? "";
@@ -123,4 +126,17 @@ async function graphError(res: Response): Promise<string> {
     // JSON 아님 — 본문 앞부분을 그대로 쓴다.
   }
   return `HTTP ${res.status}${text ? ` ${text.slice(0, 120)}` : ""}`;
+}
+
+// 페이지가 비어 돌아올 때 원인 파악용 — 거부된 권한 목록(없으면 페이지 선택 누락 안내).
+async function declinedPermissions(token: string): Promise<string> {
+  try {
+    const res = await fetch(`${GRAPH}/me/permissions?access_token=${encodeURIComponent(token)}`);
+    if (!res.ok) return await graphError(res);
+    const { data = [] } = (await res.json()) as { data?: Array<{ permission: string; status: string }> };
+    const declined = data.filter((p) => p.status !== "granted").map((p) => p.permission);
+    return declined.length ? `거부된 권한: ${declined.join(", ")}` : "권한은 모두 승인됨 — 로그인 시 페이지 선택 확인 필요";
+  } catch {
+    return "";
+  }
 }
