@@ -17,7 +17,7 @@ const ERROR_TEXT: Record<string, string> = {
   token: "Meta 토큰 발급에 실패했습니다. 앱 ID·시크릿 또는 Redirect URI 설정을 확인하세요.",
   notoken: "Meta 응답에 토큰이 없습니다.",
   pages: "Facebook 페이지 목록을 조회하지 못했습니다.",
-  nopage: "관리 중인 Facebook 페이지가 없거나, 로그인 시 페이지 접근을 허용하지 않았습니다.",
+  nopage: "관리 중인 Facebook 페이지가 없거나, 로그인 시 페이지 접근을 허용하지 않았습니다. 다시 연결하면서 페이지 선택 화면에서 Instagram과 연결된 페이지를 체크하세요.",
   noig: "Facebook 페이지에 Instagram 프로페셔널 계정이 연결되어 있지 않습니다. Instagram 앱 설정에서 페이지를 연결한 뒤 다시 시도하세요.",
 };
 
