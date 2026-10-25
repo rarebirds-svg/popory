@@ -9,10 +9,22 @@ import { DisconnectButton } from "./DisconnectButton";
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
+// API 콜백이 넘겨주는 오류 코드 → 사용자 안내 문구.
+const ERROR_TEXT: Record<string, string> = {
+  denied: "Meta 로그인 화면에서 권한 승인이 취소되었거나 거부되었습니다.",
+  missing: "Meta에서 인가 코드가 돌아오지 않았습니다. 다시 시도해 주세요.",
+  state: "연결 요청이 만료되었습니다(10분). 다시 시도해 주세요.",
+  token: "Meta 토큰 발급에 실패했습니다. 앱 ID·시크릿 또는 Redirect URI 설정을 확인하세요.",
+  notoken: "Meta 응답에 토큰이 없습니다.",
+  pages: "Facebook 페이지 목록을 조회하지 못했습니다.",
+  nopage: "관리 중인 Facebook 페이지가 없거나, 로그인 시 페이지 접근을 허용하지 않았습니다.",
+  noig: "Facebook 페이지에 Instagram 프로페셔널 계정이 연결되어 있지 않습니다. Instagram 앱 설정에서 페이지를 연결한 뒤 다시 시도하세요.",
+};
+
 export default async function InstagramPage({
   searchParams,
 }: {
-  searchParams: Promise<{ connected?: string; error?: string }>;
+  searchParams: Promise<{ connected?: string; error?: string; detail?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/");
@@ -42,7 +54,8 @@ export default async function InstagramPage({
         )}
         {sp.error && (
           <p className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-800 dark:bg-red-900/20 dark:text-red-300">
-            연결 오류: {sp.error}
+            연결 오류: {ERROR_TEXT[sp.error] ?? sp.error}
+            {sp.detail && <span className="mt-1 block text-xs opacity-80">상세: {sp.detail}</span>}
           </p>
         )}
 
