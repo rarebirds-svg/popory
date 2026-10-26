@@ -30,6 +30,11 @@ from popory_content.video_contract import parse_video
 
 SAY_BIN = shutil.which("say") or "/usr/bin/say"
 FFMPEG_BIN = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+# 장면 목소리 맞추기용 ffmpeg — rubberband(포먼트 보존 음높이 보정)가 든 빌드여야 한다. Homebrew 기본 ffmpeg(8.x)는
+# 2026-01 부터 기능을 줄인 빌드라 rubberband 가 없고, ffmpeg-full(keg-only — PATH 에 안 잡힌다)에만 있다.
+MATCH_FFMPEG_BIN = (os.environ.get("POPORY_MATCH_FFMPEG_BIN")
+                    or next((p for p in ("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",) if os.path.exists(p)), None)
+                    or FFMPEG_BIN)
 FFPROBE_BIN = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
 SAY_VOICE = "Yuna"
 FONT_PATH = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
@@ -1151,7 +1156,7 @@ def _match_voice(pcm: bytes, rate: int, af: str, work: Path, tag: str) -> bytes:
     src, dst = work / f"match_{tag}_in.wav", work / f"match_{tag}_out.wav"
     try:
         gemini_tts.write_wav(pcm, rate, src)
-        _run([FFMPEG_BIN, "-y", "-i", str(src), "-af", af, "-ar", str(rate), "-ac", "1",
+        _run([MATCH_FFMPEG_BIN, "-y", "-i", str(src), "-af", af, "-ar", str(rate), "-ac", "1",
               "-c:a", "pcm_s16le", str(dst)])
         with wave.open(str(dst), "rb") as w:
             return w.readframes(w.getnframes())
@@ -1253,9 +1258,10 @@ SCENE_FILTER_SPACER_S = 0.25
 
 @functools.lru_cache(maxsize=1)
 def _has_rubberband() -> bool:
-    """ffmpeg 에 rubberband(포먼트 보존 음높이 보정) 필터가 있는지. 없으면 asetrate 로 낮은 상한까지만 맞춘다."""
+    """보정용 ffmpeg(MATCH_FFMPEG_BIN)에 rubberband(포먼트 보존 음높이 보정) 필터가 있는지. 없으면 장면 음높이는
+    맞추지 않는다(밝기·음량만) — asetrate 는 포먼트까지 옮겨 장면마다 음색이 튄다."""
     try:
-        r = subprocess.run([FFMPEG_BIN, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=30)
+        r = subprocess.run([MATCH_FFMPEG_BIN, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return False
     return " rubberband " in r.stdout
@@ -1301,19 +1307,6 @@ def _speech_level(pieces: "list[bytes]", rate: int) -> tuple[float, int]:
     return (math.sqrt(energy / count) if count else 0.0), max(abs(x) for x in s)
 
 
-def _piece_f0_spread(pieces: "list[bytes]", rate: int) -> "float | None":
-    """장면 안 문장 조각(발화 1.5초 이상)들의 음높이 사분위 범위(반음). 잴 수 있는 조각이 셋 미만이면 None."""
-    f0s = []
-    for p in pieces:
-        prof = gemini_tts.voice_profile(p, rate, 1)
-        if prof and prof["speech_s"] >= 1.5:
-            f0s.append(prof["f0"])
-    if len(f0s) < 3:
-        return None
-    st = sorted(gemini_tts._semitones(f / f0s[0]) for f in f0s)
-    return round(st[(3 * len(st)) // 4] - st[len(st) // 4], 2)
-
-
 def _scale_pieces(pieces: "list[bytes]", gain: float) -> "list[bytes]":
     return [array("h", (max(-32768, min(32767, int(x * gain))) for x in _pcm16(p))).tobytes() for p in pieces]
 
@@ -1323,8 +1316,8 @@ def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "lis
     """장면마다 음높이·밝기·음량을 영상 전체 기준(장면들의 발화 길이 가중 중앙값)에 맞춘다(말빠르기는 재기만 한다).
 
     Gemini 는 한 요청 안에서도 문단(장면)이 바뀔 때마다 음역대를 바꿔 읽는다(2026-10-26 실측: 같은 요청 안
-    5.7반음). 장면 전체를 한 번에 옮기므로 장면 안의 억양(질문·강조)은 그대로다. 음높이는 rubberband(포먼트 보존)가
-    있으면 그것으로 ±MAX_SHIFT_FORMANT_SAFE 반음까지, 없으면 asetrate 로 ±MAX_SHIFT_SEMITONES 까지. 결과는
+    5.7반음). 장면 전체를 한 번에 옮기므로 장면 안의 억양(질문·강조)은 그대로다. 음높이는 보정용 ffmpeg 에
+    rubberband(포먼트 보존)가 있을 때만 ±MAX_SHIFT_FORMANT_SAFE 반음까지 옮긴다(없으면 engine=pitch_off). 결과는
     meta.tts.scene_match(장면별 잰 값·보정·보정 뒤 음높이, 장면 사이 음높이 폭 전후)."""
     g = gemini_tts
     formant_safe = _has_rubberband()
@@ -1334,7 +1327,10 @@ def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "lis
         if p and p["speech_s"] >= g.SCENE_MIN_SPEECH_S:
             profs[i] = p
     target = g.scene_target(list(profs.values()))
-    limits = {"formant_safe": formant_safe, "pitch_deadzone": g.SCENE_PITCH_DEADZONE,
+    # rubberband 가 없으면 음높이는 옮기지 않는다 — asetrate 로 장면마다 옮기면 포먼트(음색)가 장면마다 달라져
+    # 챕터 경계마다 음색이 튄다(검토 실측: 16장면 중 14장면, 이웃 장면 사이 최대 2.7반음어치 포먼트 차이).
+    limits = {"formant_safe": formant_safe,
+              "pitch_deadzone": g.SCENE_PITCH_DEADZONE if formant_safe else math.inf,
               "tilt_deadzone": g.SCENE_TILT_DEADZONE_DB, "match_tempo": False}
     out: dict[int, tuple[list[bytes], int, bool]] = {}
     records = []
@@ -1349,11 +1345,10 @@ def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "lis
             rec.update(f0=round(p["f0"], 1), tilt_db=round(p["tilt_db"], 1), cps=round(p["cps"], 2), filters=[])
             lim_i = limits
             shift = g._semitones(target["f0"] / p["f0"])
-            spread_i = _piece_f0_spread(pieces, rate)
-            if abs(shift) > g.SCENE_TRUST_SEMITONES or (spread_i is not None and spread_i > g.SCENE_MIXED_SPREAD):
-                # 측정을 믿을 수 없거나 음역이 다른 문장이 섞였다 — 음높이는 두고 밝기·음량만 맞춘다
+            if abs(shift) > g.SCENE_TRUST_SEMITONES:
+                # 옥타브 오측정처럼 믿을 수 없는 폭 — 음높이는 두고 밝기·음량만 맞춘다
                 lim_i = {**limits, "pitch_deadzone": math.inf}
-                rec["pitch_skipped"] = {"shift": round(shift, 2), "piece_spread": spread_i}
+                rec["pitch_skipped"] = round(shift, 2)
             # 셸프 한 번으로는 밝기 차이가 7할 정도만 맞는다 — 다시 재서 남은 차이를 한 번 더 맞춘다. 두 번 합쳐도
             # 셸프는 MAX_TILT_DB 를 넘지 않게 1차에서 쓴 만큼 2차 상한을 줄인다.
             tilt_used = 0.0
@@ -1390,7 +1385,7 @@ def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "lis
         return round(12 * math.log2(max(f0s) / min(f0s)), 2) if len(f0s) > 1 else None
 
     tts_stats["scene_match"] = {
-        "engine": "rubberband" if formant_safe else "asetrate",
+        "engine": "rubberband" if formant_safe else "pitch_off",
         "target_f0": round(target["f0"], 1) if target else None,
         "spread_semitones": spread("f0"), "spread_after_semitones": spread("after_f0"),
         "scenes": records,

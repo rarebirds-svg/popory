@@ -604,10 +604,11 @@ SCENE_TILT_DEADZONE_DB = 1.0
 # 장면 단위로는 말빠르기를 맞추지 않는다 — 발화 길이를 -38dBFS 절대 기준으로 세므로 음량·밝기가 다른 장면은 빠르기가
 # 같아도 6~8% 다르게 잰다(검토 실측). 빠르기는 내용(설명·대사)에 따라 원래 달라도 된다. cps 는 진단용으로만 남긴다.
 SCENE_MIN_SPEECH_S = 4.0     # 발화가 이보다 짧은 장면은 잰 값을 믿지 않는다(음량만 맞춘다)
-# 음높이를 옮기지 않는 장면 — 옮길 폭이 이보다 크면 측정 오류(옥타브 등)로 본다. 장면 안 문장들의 음높이 사분위
-# 범위가 이보다 넓으면 대사·인용처럼 음역이 다른 문장이 섞인 장면이라 통째로 옮기면 내레이션까지 틀어진다.
+# 옮길 폭이 이보다 크면 측정 오류(옥타브 등)로 보고 그 장면 음높이는 두고 밝기·음량만 맞춘다. 장면 안 문장들의
+# 음높이가 갈리는지로 '섞인 장면'을 가리는 장치는 두지 않는다 — 실제 Gemini 낭독은 정상 장면도 문장마다 음높이가
+# 크게 오르내려(2026-10-26 롱폼 실측: 문장 음높이 사분위 범위 0.2~5.1반음, 16장면 중 7장면이 2.5반음 초과) 고쳐야 할
+# 장면까지 건너뛰게 된다.
 SCENE_TRUST_SEMITONES = 6.0
-SCENE_MIXED_SPREAD = 2.5
 SCENE_MAX_GAIN_DB = 6.0
 MATCH_ENABLED = os.environ.get("POPORY_GEMINI_TTS_MATCH", "1") != "0"
 
@@ -733,7 +734,8 @@ def match_filter(ref: dict, cur: dict, rate: int, tilt_only: bool = False, *, fo
     ratio = 2 ** (st / 12) if abs(st) >= pitch_deadzone else 1.0
     if formant_safe:
         if ratio != 1.0 or abs(tempo - 1) >= 0.002:
-            parts.append(f"rubberband=pitch={ratio:.6f}:tempo={tempo:.4f}:formant=preserved:pitchq=quality")
+            # transients=smooth — 기본(crisp)은 마찰음을 번지게 해 음높이를 내리면 고역이 2~7dB 빠졌다(검토 실측)
+            parts.append(f"rubberband=pitch={ratio:.6f}:tempo={tempo:.4f}:transients=smooth:formant=preserved:pitchq=quality")
     else:
         atempo = tempo
         if ratio != 1.0:

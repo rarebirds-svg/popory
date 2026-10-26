@@ -139,6 +139,7 @@ def run_once(client) -> bool:
             meta["worker_commit"] = runtime_info._short(runtime_info.LOADED_COMMIT)
             _log_tts_fallback(job_id, meta)
             _log_sync(job_id, meta)
+            _log_scene_match(job_id, meta)
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
@@ -160,6 +161,7 @@ def run_once(client) -> bool:
             meta["worker_commit"] = runtime_info._short(runtime_info.LOADED_COMMIT)
             _log_tts_fallback(job_id, meta)
             _log_sync(job_id, meta)
+            _log_scene_match(job_id, meta)
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
@@ -234,6 +236,17 @@ def _log_tts_fallback(job_id: str, meta: dict) -> None:
                               "error": str(tts["engine_fallback"])[:300]})
 
 
+def _log_scene_match(job_id: str, meta: dict) -> None:
+    """장면 음높이 맞추기를 못 했으면(보정용 ffmpeg 에 rubberband 없음) 실패로 기록한다(→ /admin/errors).
+    조용히 넘어가면 '챕터마다 목소리가 바뀐다'가 다시 와도 아무도 모른다."""
+    tts = meta.get("tts") if isinstance(meta.get("tts"), dict) else {}
+    sm = tts.get("scene_match") if isinstance(tts.get("scene_match"), dict) else {}
+    if sm.get("engine") == "pitch_off":
+        append_log(LOGS_DIR, {"worker": "content", "status": "scene_pitch_match_failed", "job": job_id,
+                              "error": ("ffmpeg 에 rubberband 가 없어 장면 음높이를 맞추지 못했습니다(밝기·음량만) — "
+                                        f"장면 사이 음높이 폭 {sm.get('spread_semitones')}반음. 맥미니에서 brew install ffmpeg-full 후 워커 재시작")})
+
+
 SYNC_P95_LIMIT_MS = 250     # 자막과 발화 시작이 이보다 크게 어긋난 cue 가 5% 넘으면 기록한다
 SYNC_DRIFT_LIMIT_MS = 200   # 뒤로 갈수록 이만큼 넘게 밀리면(누적 어긋남) 기록한다
 
@@ -295,6 +308,7 @@ def _rerender_video(client, job: dict, draft: str | None, portrait: bool) -> Non
     meta["worker_commit"] = runtime_info._short(runtime_info.LOADED_COMMIT)
     _log_tts_fallback(job_id, meta)
     _log_sync(job_id, meta)
+    _log_scene_match(job_id, meta)
     append_log(LOGS_DIR, {"worker": "content", "status": "rerender", "job": job_id,
                           "commit": meta["worker_commit"],
                           "reused_backgrounds": len(backgrounds), "scenes": len(scenes),

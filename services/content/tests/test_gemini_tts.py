@@ -314,7 +314,7 @@ def test_match_filter_formant_safe_uses_rubberband_with_wider_cap():
     ref = {"f0": 120.0, "tilt_db": -18.0, "cps": 7.0}
     up = g.match_filter(ref, {**ref, "f0": 160.0}, 24000, formant_safe=True)
     # 음색(포먼트)을 지키는 rubberband 는 4반음까지 — asetrate 처럼 길이가 바뀌지 않아 atempo 로 되돌릴 필요가 없다
-    assert up == f"rubberband=pitch={2 ** (-4 / 12):.6f}:tempo=1.0000:formant=preserved:pitchq=quality"
+    assert up == f"rubberband=pitch={2 ** (-4 / 12):.6f}:tempo=1.0000:transients=smooth:formant=preserved:pitchq=quality"
     assert g.match_filter(ref, {**ref, "f0": 150.0}, 24000, formant_safe=True).startswith(f"rubberband=pitch={120 / 150:.6f}:")
     assert g.match_filter(ref, {**ref, "cps": 7.5}, 24000, formant_safe=True).startswith("rubberband=pitch=1.000000:tempo=")
     # 장면 단위 데드존(0.3반음)은 요청 단위(0.15)보다 넓다
