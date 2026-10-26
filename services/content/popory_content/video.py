@@ -1286,16 +1286,23 @@ def _filter_pieces(pieces: "list[bytes]", rate: int, af: str, work: Path, tag: s
     return out
 
 
-def _scene_gain(pieces: "list[bytes]", rate: int) -> float:
-    """장면 발화 음량을 묶음 기준(gemini_tts.TARGET_RMS_DBFS)에 다시 맞추는 배율 — 문단마다 소리를 낮추거나 키워
-    읽는 차이를 없앤다(상한 ±SCENE_MAX_GAIN_DB, 피크가 넘치지 않게)."""
-    samples = array("h")
-    samples.frombytes(b"".join(pieces))
-    if not samples:
-        return 1.0
-    flags, frame = gemini_tts._quiet_frames(samples, rate)
-    lim = 10 ** (gemini_tts.SCENE_MAX_GAIN_DB / 20)
-    return max(1 / lim, min(lim, gemini_tts._speech_gain(samples, flags, frame)))
+def _speech_level(pieces: "list[bytes]", rate: int) -> tuple[float, int]:
+    """장면 발화 프레임의 RMS 와 전체 피크(절댓값)."""
+    s = _pcm16(b"".join(pieces))
+    if not s:
+        return 0.0, 0
+    flags, frame = gemini_tts._quiet_frames(s, rate)
+    energy = count = 0
+    for k, quiet in enumerate(flags):
+        if not quiet:
+            chunk = s[k * frame:(k + 1) * frame]
+            energy += sum(x * x for x in chunk)
+            count += len(chunk)
+    return (math.sqrt(energy / count) if count else 0.0), max(abs(x) for x in s)
+
+
+def _scale_pieces(pieces: "list[bytes]", gain: float) -> "list[bytes]":
+    return [array("h", (max(-32768, min(32767, int(x * gain))) for x in _pcm16(p))).tobytes() for p in pieces]
 
 
 def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "list[list[int]]", work: Path,
@@ -1318,13 +1325,12 @@ def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "lis
               "tempo_deadzone": g.SCENE_TEMPO_DEADZONE, "tilt_deadzone": g.SCENE_TILT_DEADZONE_DB}
     out: dict[int, tuple[list[bytes], int, bool]] = {}
     records = []
+    target_rms = 32768 * 10 ** (g.TARGET_RMS_DBFS / 20)
+    lim = 10 ** (g.SCENE_MAX_GAIN_DB / 20)
     for i in sorted(raw):
         pieces, rate, whole = raw[i]
-        gain = _scene_gain(pieces, rate)
-        if abs(20 * math.log10(gain)) >= 0.5:
-            pieces = [array("h", (max(-32768, min(32767, int(x * gain))) for x in _pcm16(p))).tobytes()
-                      for p in pieces]
-        rec: dict[str, Any] = {"scene": i, "gain_db": round(20 * math.log10(gain), 1)}
+        rms0, peak0 = _speech_level(pieces, rate)
+        rec: dict[str, Any] = {"scene": i}
         p = profs.get(i)
         if target and p:
             rec.update(f0=round(p["f0"], 1), tilt_db=round(p["tilt_db"], 1), cps=round(p["cps"], 2), filters=[])
@@ -1333,6 +1339,9 @@ def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "lis
                 af = g.match_filter(target, p, rate, tilt_only=k > 0, **limits)
                 if not af:
                     break
+                if k == 0 and peak0 > 16000:
+                    # 셸프·음높이 보정이 피크를 올리므로 여유(-6dBFS)를 두고 건다 — 음량은 아래에서 다시 맞춘다
+                    pieces = _scale_pieces(pieces, 16000 / peak0)
                 got = _filter_pieces(pieces, rate, af, work, f"s{i}_{k}")
                 if got is None:
                     break
@@ -1340,6 +1349,16 @@ def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "lis
                 rec["filters"].append(af)
                 p = g.voice_profile(b"".join(pieces), rate, sum(weights[i])) or p
             rec["after_f0"] = round(p["f0"], 1)
+        # 음량은 필터를 다 건 뒤에 맞춘다(셸프·음높이 보정이 음량·피크를 바꾼다). 목표는 발화 RMS -20 dBFS,
+        # 원래 음량에서 ±SCENE_MAX_GAIN_DB 안, 피크 32000 아래.
+        rms1, peak1 = _speech_level(pieces, rate)
+        gain = 1.0
+        if rms0 and rms1:
+            want = max(rms0 / lim, min(rms0 * lim, target_rms))
+            gain = min(want / rms1, 32000 / max(1, peak1))
+            if abs(20 * math.log10(gain)) >= 0.1:
+                pieces = _scale_pieces(pieces, gain)
+            rec["gain_db"] = round(20 * math.log10(rms1 * gain / rms0), 1)
         records.append(rec)
         out[i] = (pieces, rate, whole)
 

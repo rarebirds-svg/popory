@@ -1203,6 +1203,35 @@ def test_match_scenes_moves_each_scene_to_the_median_pitch_keeping_pieces(monkey
     assert sm["spread_semitones"] > 4 and sm["spread_after_semitones"] < 0.7
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+def test_match_scenes_levels_loudness_after_filters_without_clipping(monkeypatch, tmp_path):
+    # 음량은 필터를 다 건 뒤에 맞춘다 — 셸프·음높이 보정이 음량·피크를 바꾸므로, 먼저 맞추면 다시 벌어지고
+    # 피크 가까이 큰 장면은 보정 뒤 깨진다(검토 지적). 큰 장면(피크 ~28000)을 크게 옮겨도 깨지지 않아야 한다.
+    from array import array
+    from popory_content import video
+
+    def scaled(f0, amp, spikes=False):
+        a = array("h")
+        a.frombytes(_voiced_pcm(f0, 5.0))             # 장면 측정은 발화 4초 이상만 믿는다
+        a = array("h", (int(x * amp) for x in a))
+        if spikes:                                     # 짧은 파열음처럼 피크만 31000 가까이
+            for k in range(2000, len(a), 12000):
+                a[k] = 31000
+        return a.tobytes()
+
+    raw = {0: ([scaled(160.0, 1.9, spikes=True)], 24000, False), 1: ([scaled(125.0, 0.7)], 24000, False),
+           2: ([scaled(120.0, 1.0)], 24000, False)}
+    stats = {}
+    out = video._match_scenes(raw, [[20]] * 3, tmp_path, stats)
+    levels = []
+    for i in range(3):
+        rms, peak = video._speech_level(out[i][0], 24000)
+        assert peak < 32767, (i, peak)
+        levels.append(20 * __import__("math").log10(rms))
+    assert max(levels) - min(levels) < 0.5, levels
+    assert stats["scene_match"]["scenes"][0]["filters"]                      # 큰 장면도 실제로 보정했다
+
+
 def test_render_video_gemini_voice_match_can_be_disabled(monkeypatch, tmp_path):
     from popory_content import video, gemini_tts
     _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
