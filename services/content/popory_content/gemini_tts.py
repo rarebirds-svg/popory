@@ -600,9 +600,14 @@ TEMPO_DEADZONE = 0.02
 TILT_DEADZONE_DB = 0.5
 # 장면 단위는 내용(질문·인용·숫자)에 따라 잰 값이 조금씩 흔들리므로 데드존을 넓게 둔다.
 SCENE_PITCH_DEADZONE = 0.3
-SCENE_TEMPO_DEADZONE = 0.06
 SCENE_TILT_DEADZONE_DB = 1.0
+# 장면 단위로는 말빠르기를 맞추지 않는다 — 발화 길이를 -38dBFS 절대 기준으로 세므로 음량·밝기가 다른 장면은 빠르기가
+# 같아도 6~8% 다르게 잰다(검토 실측). 빠르기는 내용(설명·대사)에 따라 원래 달라도 된다. cps 는 진단용으로만 남긴다.
 SCENE_MIN_SPEECH_S = 4.0     # 발화가 이보다 짧은 장면은 잰 값을 믿지 않는다(음량만 맞춘다)
+# 음높이를 옮기지 않는 장면 — 옮길 폭이 이보다 크면 측정 오류(옥타브 등)로 본다. 장면 안 문장들의 음높이 사분위
+# 범위가 이보다 넓으면 대사·인용처럼 음역이 다른 문장이 섞인 장면이라 통째로 옮기면 내레이션까지 틀어진다.
+SCENE_TRUST_SEMITONES = 6.0
+SCENE_MIXED_SPREAD = 2.5
 SCENE_MAX_GAIN_DB = 6.0
 MATCH_ENABLED = os.environ.get("POPORY_GEMINI_TTS_MATCH", "1") != "0"
 
@@ -705,19 +710,22 @@ def scene_target(profiles: "list[dict]") -> "dict | None":
 
 def match_filter(ref: dict, cur: dict, rate: int, tilt_only: bool = False, *, formant_safe: bool = False,
                  pitch_deadzone: float = PITCH_DEADZONE, tempo_deadzone: float = TEMPO_DEADZONE,
-                 tilt_deadzone: float = TILT_DEADZONE_DB) -> "str | None":
+                 tilt_deadzone: float = TILT_DEADZONE_DB, max_tilt: float = MAX_TILT_DB,
+                 match_tempo: bool = True) -> "str | None":
     """cur 오디오를 ref 목소리에 맞추는 ffmpeg -af. 차이가 들리지 않을 만큼 작으면 None.
 
     formant_safe 면 rubberband(포먼트 보존, 길이 그대로)로 음높이·빠르기를 함께 옮긴다. 아니면 asetrate(빠르기도
     같이 바뀐다) 뒤 atempo 로 빠르기를 되돌리며 말빠르기 차이도 그 atempo 에 함께 싣는다 — asetrate 는 포먼트까지
     옮겨 음색이 바뀌므로 상한을 더 낮게 둔다. 밝기는 고역 셸프로 맞춘다. 보정 폭은 상한으로 묶는다 — 크게 비틀면
-    그 자체가 어색하다. tilt_only 는 2차 보정용 — 셸프만 한 번 더(한 번에 7할 정도만 맞는다)."""
+    그 자체가 어색하다. tilt_only 는 2차 보정용 — 셸프만 한 번 더(한 번에 7할 정도만 맞는다). max_tilt 는 이번에
+    걸 수 있는 셸프 폭(2차 보정엔 1차에서 쓰고 남은 만큼만). match_tempo=False 면 빠르기는 건드리지 않는다."""
     cap = MAX_SHIFT_FORMANT_SAFE if formant_safe else MAX_SHIFT_SEMITONES
     st = max(-cap, min(cap, _semitones(ref["f0"] / cur["f0"])))
     tempo = 1.0
-    if ref["cps"] and cur["cps"]:
+    if match_tempo and ref["cps"] and cur["cps"]:
         tempo = max(1 / MAX_TEMPO, min(MAX_TEMPO, ref["cps"] / cur["cps"]))
-    tilt = max(-MAX_TILT_DB, min(MAX_TILT_DB, ref["tilt_db"] - cur["tilt_db"]))
+    max_tilt = max(0.0, min(MAX_TILT_DB, max_tilt))
+    tilt = max(-max_tilt, min(max_tilt, ref["tilt_db"] - cur["tilt_db"]))
     if tilt_only:
         st, tempo = 0.0, 1.0
     parts: list[str] = []

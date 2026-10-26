@@ -1301,13 +1301,26 @@ def _speech_level(pieces: "list[bytes]", rate: int) -> tuple[float, int]:
     return (math.sqrt(energy / count) if count else 0.0), max(abs(x) for x in s)
 
 
+def _piece_f0_spread(pieces: "list[bytes]", rate: int) -> "float | None":
+    """장면 안 문장 조각(발화 1.5초 이상)들의 음높이 사분위 범위(반음). 잴 수 있는 조각이 셋 미만이면 None."""
+    f0s = []
+    for p in pieces:
+        prof = gemini_tts.voice_profile(p, rate, 1)
+        if prof and prof["speech_s"] >= 1.5:
+            f0s.append(prof["f0"])
+    if len(f0s) < 3:
+        return None
+    st = sorted(gemini_tts._semitones(f / f0s[0]) for f in f0s)
+    return round(st[(3 * len(st)) // 4] - st[len(st) // 4], 2)
+
+
 def _scale_pieces(pieces: "list[bytes]", gain: float) -> "list[bytes]":
     return [array("h", (max(-32768, min(32767, int(x * gain))) for x in _pcm16(p))).tobytes() for p in pieces]
 
 
 def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "list[list[int]]", work: Path,
                   tts_stats: dict[str, Any]) -> "dict[int, tuple[list[bytes], int, bool]]":
-    """장면마다 음높이·밝기·말빠르기·음량을 영상 전체 기준(장면들의 발화 길이 가중 중앙값)에 맞춘다.
+    """장면마다 음높이·밝기·음량을 영상 전체 기준(장면들의 발화 길이 가중 중앙값)에 맞춘다(말빠르기는 재기만 한다).
 
     Gemini 는 한 요청 안에서도 문단(장면)이 바뀔 때마다 음역대를 바꿔 읽는다(2026-10-26 실측: 같은 요청 안
     5.7반음). 장면 전체를 한 번에 옮기므로 장면 안의 억양(질문·강조)은 그대로다. 음높이는 rubberband(포먼트 보존)가
@@ -1322,7 +1335,7 @@ def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "lis
             profs[i] = p
     target = g.scene_target(list(profs.values()))
     limits = {"formant_safe": formant_safe, "pitch_deadzone": g.SCENE_PITCH_DEADZONE,
-              "tempo_deadzone": g.SCENE_TEMPO_DEADZONE, "tilt_deadzone": g.SCENE_TILT_DEADZONE_DB}
+              "tilt_deadzone": g.SCENE_TILT_DEADZONE_DB, "match_tempo": False}
     out: dict[int, tuple[list[bytes], int, bool]] = {}
     records = []
     target_rms = 32768 * 10 ** (g.TARGET_RMS_DBFS / 20)
@@ -1334,11 +1347,21 @@ def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "lis
         p = profs.get(i)
         if target and p:
             rec.update(f0=round(p["f0"], 1), tilt_db=round(p["tilt_db"], 1), cps=round(p["cps"], 2), filters=[])
-            # 셸프 한 번으로는 밝기 차이가 7할 정도만 맞는다 — 다시 재서 남은 차이를 한 번 더 맞춘다.
+            lim_i = limits
+            shift = g._semitones(target["f0"] / p["f0"])
+            spread_i = _piece_f0_spread(pieces, rate)
+            if abs(shift) > g.SCENE_TRUST_SEMITONES or (spread_i is not None and spread_i > g.SCENE_MIXED_SPREAD):
+                # 측정을 믿을 수 없거나 음역이 다른 문장이 섞였다 — 음높이는 두고 밝기·음량만 맞춘다
+                lim_i = {**limits, "pitch_deadzone": math.inf}
+                rec["pitch_skipped"] = {"shift": round(shift, 2), "piece_spread": spread_i}
+            # 셸프 한 번으로는 밝기 차이가 7할 정도만 맞는다 — 다시 재서 남은 차이를 한 번 더 맞춘다. 두 번 합쳐도
+            # 셸프는 MAX_TILT_DB 를 넘지 않게 1차에서 쓴 만큼 2차 상한을 줄인다.
+            tilt_used = 0.0
             for k in range(2):
-                af = g.match_filter(target, p, rate, tilt_only=k > 0, **limits)
+                af = g.match_filter(target, p, rate, tilt_only=k > 0, max_tilt=g.MAX_TILT_DB - tilt_used, **lim_i)
                 if not af:
                     break
+                tilt_used += sum(abs(float(x)) for x in re.findall(r"treble=g=(-?[\d.]+)", af))
                 if k == 0 and peak0 > 16000:
                     # 셸프·음높이 보정이 피크를 올리므로 여유(-6dBFS)를 두고 건다 — 음량은 아래에서 다시 맞춘다
                     pieces = _scale_pieces(pieces, 16000 / peak0)

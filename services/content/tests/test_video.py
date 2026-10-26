@@ -1172,6 +1172,46 @@ def test_render_video_gemini_matches_every_scene_to_the_video_median(monkeypatch
     assert all((work / f"g{i}_{j}.wav").exists() for i in range(3) for j in range(2))
 
 
+def test_match_scenes_caps_total_shelf_and_leaves_tempo(monkeypatch, tmp_path):
+    # 검토 지적: 셸프 상한이 패스마다 따로라 두 번 합쳐 ±6dB 까지 걸렸다. 또 장면 단위 말빠르기는 음량에 끌려
+    # 잘못 재므로 맞추지 않는다.
+    from popory_content import video, gemini_tts
+    monkeypatch.setattr(video, "_has_rubberband", lambda: True)
+    prof = {0: {"f0": 120.0, "tilt_db": -18.0, "cps": 6.0, "speech_s": 10.0},
+            1: {"f0": 120.0, "tilt_db": -10.0, "cps": 8.0, "speech_s": 10.0},
+            2: {"f0": 120.0, "tilt_db": -10.0, "cps": 8.0, "speech_s": 10.0}}
+    calls = iter([prof[0], prof[1], prof[2], {**prof[0], "tilt_db": -16.0}])
+    monkeypatch.setattr(gemini_tts, "voice_profile", lambda pcm, rate, chars: next(calls, {**prof[0], "tilt_db": -16.0}))
+    applied = []
+    monkeypatch.setattr(video, "_filter_pieces", lambda pieces, rate, af, work, tag: applied.append(af) or pieces)
+    raw = {i: ([b"\x10\x00" * 24000], 24000, False) for i in range(3)}
+    video._match_scenes(raw, [[20]] * 3, tmp_path, {})
+    # 장면 0: 1차 셸프 +3dB(상한) 뒤에도 6dB 어두우면 2차는 남은 폭 0 — 걸지 않는다. 빠르기(6 vs 8자/초)도 그대로.
+    assert applied == ["treble=g=3.0:f=1200"]
+
+
+def test_match_scenes_leaves_pitch_of_mixed_or_mismeasured_scenes(monkeypatch, tmp_path):
+    # 검토 지적: 대사·인용처럼 음역이 다른 문장이 섞인 장면을 통째로 옮기면 내레이션까지 틀어진다. 측정이 크게
+    # 틀린(옥타브) 장면도 상한까지 옮겼다. 두 경우 모두 음높이는 그대로 두고 기록만 남긴다.
+    from popory_content import video
+    monkeypatch.setattr(video, "_has_rubberband", lambda: True)
+    applied = []
+    monkeypatch.setattr(video, "_filter_pieces", lambda pieces, rate, af, work, tag: applied.append((tag, af)) or pieces)
+    same = lambda f0: [_voiced_pcm(f0, 2.0) for _ in range(3)]
+    raw = {0: (same(120.0), 24000, False), 1: (same(121.0), 24000, False), 2: (same(119.0), 24000, False),
+           3: ([_voiced_pcm(f, 2.0) for f in (100.0, 100.0, 150.0, 150.0)], 24000, False),   # 섞인 장면
+           4: (same(150.0), 24000, False),                                                     # 정상적으로 높은 장면
+           5: (same(250.0), 24000, False)}                                                     # 한 옥타브 위로 잰 장면
+    stats = {}
+    video._match_scenes(raw, [[10] * 4] * 6, tmp_path, stats)
+    recs = {r["scene"]: r for r in stats["scene_match"]["scenes"]}
+    assert "pitch_skipped" in recs[3] and recs[3]["pitch_skipped"]["piece_spread"] > 2.5
+    assert not any(t.startswith("s3_") and "rubberband" in af for t, af in applied)
+    assert any(t == "s4_0" and "rubberband=pitch=" in af for t, af in applied)     # 고른 장면은 그대로 옮긴다
+    assert "pitch_skipped" not in recs[4]
+    assert recs[5]["pitch_skipped"]["shift"] < -6 and not any(t.startswith("s5_") and "rubberband" in af for t, af in applied)
+
+
 def _voiced_pcm(f0, seconds, rate=24000):
     import math
     from array import array

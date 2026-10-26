@@ -322,6 +322,15 @@ def test_match_filter_formant_safe_uses_rubberband_with_wider_cap():
     assert g.match_filter(ref, {**ref, "f0": 121.8}, 24000) is not None          # 0.26반음
 
 
+def test_match_filter_can_skip_tempo_and_limit_tilt():
+    ref = {"f0": 120.0, "tilt_db": -18.0, "cps": 7.0}
+    # 장면 단위는 빠르기를 맞추지 않는다 — 7% 차이라도 손대지 않는다
+    assert g.match_filter(ref, {**ref, "cps": 7.5}, 24000, formant_safe=True, match_tempo=False) is None
+    # 2차 셸프는 1차에서 쓰고 남은 폭까지만
+    assert g.match_filter(ref, {**ref, "tilt_db": -12.0}, 24000, tilt_only=True, max_tilt=1.0) == "treble=g=-1.0:f=1200"
+    assert g.match_filter(ref, {**ref, "tilt_db": -12.0}, 24000, tilt_only=True, max_tilt=0.0) is None
+
+
 def test_scene_target_is_speech_weighted_median_not_first_scene():
     # 2026-10-26 롱폼: 첫 장면만 높고 밝게 읽었다 — 기준을 첫 장면으로 잡으면 나머지를 다 끌어올려야 한다
     profs = [{"f0": 151.1, "tilt_db": -8.5, "cps": 7.0, "speech_s": 40.0},
