@@ -82,6 +82,10 @@ def _row(label, value, default, env, note) -> dict:
             "overridden": raw is not None and value != default, "note": note}
 
 
+def _pitch_engine(formant_safe: bool) -> str:
+    return "rubberband(음색 보존)" if formant_safe else "asetrate(음색도 같이 바뀜)"
+
+
 def _gemini_rows() -> list[dict]:
     """Gemini 합성·목소리 맞추기 설정. 값은 워커가 실제로 쓰는 모듈 상수."""
     g = gemini_tts
@@ -89,17 +93,24 @@ def _gemini_rows() -> list[dict]:
         _row("월 비용 상한", f"${g.MONTHLY_USD_CAP:g}", "$9", "POPORY_GEMINI_TTS_MONTHLY_USD",
              "이번 달 사용액 + 이번 영상 예상액이 이를 넘으면 그 영상 전체를 폴백 음성으로 만든다."),
         _row("일 요청 상한", f"{g.DAILY_REQUEST_CAP}회", "90회", "POPORY_GEMINI_TTS_DAILY_REQUESTS",
-             "Gemini TTS 는 하루 요청 수 제한이 낮아 장면을 묶어 부른다(롱폼 2~3회·쇼츠 1회)."),
+             "Gemini TTS 는 하루 요청 수 제한이 낮아 장면을 묶어 부른다(롱폼 2회·쇼츠 1회)."),
         _row("한 요청 길이(묶음)", f"{g.CHUNK_SECONDS:g}초", "360초", "POPORY_GEMINI_TTS_CHUNK_SECONDS",
              "연속한 장면을 이 길이까지 묶어 한 번에 합성한다. 출력 상한은 약 655초."),
-        _row("요청 사이 목소리 맞추기", _on_off(g.MATCH_ENABLED), "켜짐", "POPORY_GEMINI_TTS_MATCH",
-             "Gemini 는 요청마다 소리를 새로 만들어 음높이·밝기·말빠르기가 조금씩 다르다. 첫 챕터를 기준으로 이후 요청을 맞춘다."),
-        _row("다시 합성 기준", f"{g.RETRY_SEMITONES:g}반음", "0.7반음", "POPORY_GEMINI_TTS_RETRY_SEMITONES",
-             "기준보다 음높이가 이만큼 넘게 다르면 한 번 더 합성해 가까운 쪽을 고른 뒤 맞춘다."),
-        _row("다시 합성 횟수", f"{g.MATCH_RETRIES}회", "1회", "POPORY_GEMINI_TTS_MATCH_RETRIES",
-             "요청당 최대 재합성 횟수. 롱폼 1회 약 $0.07."),
-        _row("보정 상한", f"±{g.MAX_SHIFT_SEMITONES:g}반음 · ±{(g.MAX_TEMPO - 1) * 100:.0f}% · ±{g.MAX_TILT_DB:g}dB",
-             "±2반음 · ±8% · ±3dB", None, "음높이·말빠르기·밝기를 이 이상 비틀지 않는다(코드 상수)."),
+        _row("묶음 계획 낭독 속도", f"{g.PLAN_CHARS_PER_SEC:g}자/초", "8자/초", "POPORY_GEMINI_TTS_PLAN_CPS",
+             "묶음 길이를 어림하는 속도(공백·부호 포함 글자). 예산 추정은 보수적인 5.3자/초를 따로 쓴다 — 예전엔 그 값으로 "
+             "묶음을 나눠 9분 롱폼이 3요청이 됐다."),
+        _row("장면마다 목소리 맞추기", _on_off(g.MATCH_ENABLED), "켜짐", "POPORY_GEMINI_TTS_MATCH",
+             "Gemini 는 한 요청 안에서도 장면(문단)이 바뀔 때마다 음역대·밝기·음량을 바꿔 읽는다. 장면마다 재서 "
+             "영상 전체 장면의 중앙값에 맞춘다(장면 안의 억양은 그대로)."),
+        _row("음높이 보정 방식", _pitch_engine(video._has_rubberband()), _pitch_engine(True), None,
+             "ffmpeg 에 rubberband 필터가 있으면 음색(포먼트)을 지키며 옮기고, 없으면 asetrate 로 음색까지 같이 옮긴다(상한이 더 낮다)."),
+        _row("보정 상한", f"음높이 ±{g.MAX_SHIFT_FORMANT_SAFE:g}반음(asetrate ±{g.MAX_SHIFT_SEMITONES:g}) · "
+             f"빠르기 ±{(g.MAX_TEMPO - 1) * 100:.0f}% · 밝기 ±{g.MAX_TILT_DB:g}dB · 음량 ±{g.SCENE_MAX_GAIN_DB:g}dB",
+             "음높이 ±4반음(asetrate ±2) · 빠르기 ±8% · 밝기 ±3dB · 음량 ±6dB", None,
+             "이 이상 비틀지 않는다(코드 상수)."),
+        _row("손대지 않는 차이", f"음높이 {g.SCENE_PITCH_DEADZONE:g}반음 · 빠르기 {g.SCENE_TEMPO_DEADZONE * 100:.0f}% · "
+             f"밝기 {g.SCENE_TILT_DEADZONE_DB:g}dB", "음높이 0.3반음 · 빠르기 6% · 밝기 1dB", None,
+             "장면 단위로 잰 값은 내용(질문·인용·숫자)에 따라 조금씩 흔들리므로 이보다 작은 차이는 그대로 둔다."),
     ]
 
 

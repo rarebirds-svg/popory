@@ -1143,27 +1143,64 @@ def test_render_video_gemini_resynthesizes_only_the_suspect_scene(monkeypatch, t
     assert (work / "g0_0.wav").exists() and (work / "g1_1.wav").exists()
 
 
-def test_render_video_gemini_matches_later_requests_to_first_chapter(monkeypatch, tmp_path):
+def test_render_video_gemini_matches_every_scene_to_the_video_median(monkeypatch, tmp_path):
+    # 2026-10-26: Gemini 는 한 요청 안에서도 장면(문단)마다 음역대를 바꿔 읽었다(같은 요청 안 5.7반음). 요청이 아니라
+    # 장면마다 재서 장면들의 중앙값에 맞추고, 요청 단위 재합성은 하지 않는다.
     from popory_content import video, gemini_tts
     _gemini_stub(monkeypatch, tmp_path, video, gemini_tts)
     calls = []
     monkeypatch.setattr(gemini_tts, "synthesize_scene", _fake_gemini(calls))
-    # 요청 순서대로 잰 목소리: 1번(기준) 120Hz, 2번 127Hz(약 1반음 높음 → 다시 합성), 3번 122Hz(가까움 → 채택)
-    f0s = iter([120.0, 127.0, 122.0, 120.0, 120.0])
-    monkeypatch.setattr(gemini_tts, "voice_profile",
-                        lambda pcm, rate, chars: {"f0": next(f0s), "tilt_db": -18.0, "cps": 7.0})
+    monkeypatch.setattr(video, "_has_rubberband", lambda: True)
+    # 처음 세 번은 장면 0·1·2 를 잰 값, 넷째는 장면 0 을 보정한 뒤 다시 잰 값
+    seq = [150.0, 120.0, 122.0, 122.0]
+    monkeypatch.setattr(gemini_tts, "voice_profile", lambda pcm, rate, chars: {
+        "f0": seq.pop(0) if len(seq) > 1 else seq[0], "tilt_db": -12.0, "cps": 7.0, "speech_s": 10.0})
     applied = []
-    monkeypatch.setattr(video, "_match_voice", lambda pcm, rate, af, work, tag: applied.append(af) or pcm)
-    narration = "가" * 180 + ". " + "나" * 6 + "?"
-    scenes = [{"caption": str(i), "narration": narration} for i in range(17)]
+    monkeypatch.setattr(video, "_filter_pieces",
+                        lambda pieces, rate, af, work, tag: applied.append((tag, af)) or pieces)
+    scenes = [{"caption": str(i), "narration": "첫 문장입니다. 두 번째 문장이죠."} for i in range(3)]
     stats = {}
-    video.render_video(scenes, job_id="gemini_match", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
-    assert len(calls) == 3 and stats["gemini_requests"] == 3      # 2묶음 + 차이가 커서 한 번 더
-    assert calls[1] == calls[2]                                     # 같은 묶음을 다시 뽑았다
-    assert len(applied) == 1 and applied[0].startswith("asetrate=")  # 가까운 쪽(122Hz)을 120Hz 로 내림
-    vm = video.tts_meta("gemini-3.8-flash-tts/Iapetus", stats)["voice_match"]
-    assert vm[0]["reference"] is True and vm[0]["f0"] == 120.0
-    assert vm[1]["retried"] is True and vm[1]["f0"] == 122.0 and vm[1]["after_f0"] == 120.0
+    video.render_video(scenes, job_id="scene_match", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
+    assert len(calls) == 1 and stats["gemini_requests"] == 1                # 다시 뽑지 않는다
+    # 기준 = 중앙값 122Hz. 장면 0(150Hz)만 3.6반음 내린다(음색 보존 rubberband, 상한 4반음). 장면 1(120Hz)은 0.29반음 — 그대로
+    assert applied == [("s0_0", f"rubberband=pitch={122 / 150:.6f}:tempo=1.0000:formant=preserved:pitchq=quality")]
+    sm = video.tts_meta("gemini-3.8-flash-tts/Iapetus", stats)["scene_match"]
+    assert sm["engine"] == "rubberband" and sm["target_f0"] == 122.0
+    assert [r["f0"] for r in sm["scenes"]] == [150.0, 120.0, 122.0] and sm["scenes"][0]["after_f0"] == 122.0
+    assert sm["spread_semitones"] == pytest.approx(3.86, abs=0.01) and sm["spread_after_semitones"] == pytest.approx(0.29, abs=0.01)
+    work = video.TMP / "video_scene_match"
+    assert all((work / f"g{i}_{j}.wav").exists() for i in range(3) for j in range(2))
+
+
+def _voiced_pcm(f0, seconds, rate=24000):
+    import math
+    from array import array
+    a = array("h")
+    ph = 0.0
+    for i in range(int(seconds * rate)):
+        ph += 2 * math.pi * f0 * (1 + 0.02 * math.sin(2 * math.pi * 3 * i / rate)) / rate
+        a.append(int(5000 * sum((0.6 / h) * math.sin(h * ph) for h in range(1, 16))))
+    return a.tobytes()
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+@pytest.mark.parametrize("formant_safe", [True, False])
+def test_match_scenes_moves_each_scene_to_the_median_pitch_keeping_pieces(monkeypatch, tmp_path, formant_safe):
+    # 실제 ffmpeg: 장면마다 음높이가 다른 소리(110·125·140Hz)를 가운데(125Hz)로 옮기고, 조각 수·길이는 그대로 둔다
+    from popory_content import video, gemini_tts
+    if formant_safe and not video._has_rubberband():
+        pytest.skip("ffmpeg 에 rubberband 없음")
+    monkeypatch.setattr(video, "_has_rubberband", lambda: formant_safe)
+    raw = {i: ([_voiced_pcm(f0, 2.5), _voiced_pcm(f0, 2.0)], 24000, False) for i, f0 in enumerate((110.0, 125.0, 140.0))}
+    stats = {}
+    out = video._match_scenes(raw, [[20, 16]] * 3, tmp_path, stats)
+    for i in range(3):
+        assert [len(p) / 2 / 24000 for p in out[i][0]] == pytest.approx([2.5, 2.0], abs=0.03)
+        f0 = gemini_tts.voice_profile(b"".join(out[i][0]), 24000, 36)["f0"]
+        assert abs(gemini_tts._semitones(f0 / 125.0)) < 0.35, (i, f0)
+    sm = stats["scene_match"]
+    assert sm["engine"] == ("rubberband" if formant_safe else "asetrate")
+    assert sm["spread_semitones"] > 4 and sm["spread_after_semitones"] < 0.7
 
 
 def test_render_video_gemini_voice_match_can_be_disabled(monkeypatch, tmp_path):
@@ -1177,7 +1214,7 @@ def test_render_video_gemini_voice_match_can_be_disabled(monkeypatch, tmp_path):
     stats = {}
     video.render_video([{"caption": str(i), "narration": narration} for i in range(17)],
                        job_id="gemini_nomatch", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
-    assert len(calls) == 2 and "voice_match" not in stats
+    assert len(calls) == 2 and "scene_match" not in stats
 
 
 def test_split_keeps_name_initials_in_one_sentence():

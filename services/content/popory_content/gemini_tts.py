@@ -42,8 +42,12 @@ DAILY_REQUEST_CAP = int(os.environ.get("POPORY_GEMINI_TTS_DAILY_REQUESTS", "90")
 TOKENS_PER_SEC = 25
 INPUT_OVERHEAD = 1.06
 PRICE_CHANGE_DATE = datetime.date(2027, 1, 1)
-# 예산 추정용 한국어 낭독 속도(자/초). 실제 비용은 합성 뒤 실측 길이로 기록한다.
+# 예산 추정용 한국어 낭독 속도(자/초). 실제 비용은 합성 뒤 실측 길이로 기록한다. 공백·부호까지 센 글자 수에 쓰므로
+# 실제(원본 응답 기준 약 8.5자/초)보다 1.4~1.8배 길게 잡힌다 — 예산은 보수적인 편이 낫지만 묶음 계획엔 쓰지 않는다.
 CHARS_PER_SEC = 5.3
+# 묶음 계획용 낭독 속도 — spoken_text 글자 수(공백·부호 포함)를 원본 응답 1초당으로 잰 값. 2026-10-26 롱폼 실측
+# 6.4~9.5자/초(채널 내레이션 7.6~9.4)에서 조금 보수적으로. 예전엔 예산용 5.3 을 그대로 써 9분 영상이 3요청이 됐다.
+PLAN_CHARS_PER_SEC = float(os.environ.get("POPORY_GEMINI_TTS_PLAN_CPS", "8.0"))
 LEDGER = Path(os.environ.get("POPORY_GEMINI_TTS_LEDGER",
                              str(Path(__file__).resolve().parent.parent / "logs" / "gemini_tts_usage.json")))
 # 6분 묶음 합성은 응답까지 수 분 걸릴 수 있다 — 180초에선 긴 묶음이 시간 초과로 영상 전체 폴백이 됐을 수 있다.
@@ -52,9 +56,9 @@ TIMEOUT_SECONDS = int(os.environ.get("POPORY_GEMINI_TTS_TIMEOUT", "300"))
 # 영상 전체가 무료 음성으로 내려가는 건 손해가 크다. 하루 한도(PerDay) 429·권한·모델명 오류는 다시 보내도 같다.
 ATTEMPTS = 3
 RETRY_WAITS = (15, 45)
-# 여러 장면을 한 요청에 묶는 길이 상한(예상 낭독 초). 요청마다 목소리 톤이 미세하게 달라지므로 묶을수록
-# 일관되지만, 출력 상한(16,384 오디오 토큰 ≈ 655초)과 실패 시 재시도 비용을 생각해 6분으로 둔다.
-# 롱폼(~10분)은 2요청, 쇼츠는 1요청이 된다.
+# 여러 장면을 한 요청에 묶는 길이 상한(plan_seconds 로 어림한 낭독 초). 요청마다 목소리 톤이 미세하게 달라지므로
+# 묶을수록 일관되지만, 출력 상한(16,384 오디오 토큰 ≈ 655초)과 실패 시 재시도 비용을 생각해 6분으로 둔다.
+# 롱폼(~10분)은 2요청(각 약 5분 — 상한의 절반), 쇼츠는 1요청이 된다.
 CHUNK_SECONDS = float(os.environ.get("POPORY_GEMINI_TTS_CHUNK_SECONDS", "360"))
 
 
@@ -81,7 +85,13 @@ def cost_usd(seconds: float, today: "datetime.date | None" = None) -> float:
 
 
 def estimate_seconds(texts: list[str]) -> float:
+    """예산 추정용(보수적) 낭독 초."""
     return sum(len(t) for t in texts) / CHARS_PER_SEC
+
+
+def plan_seconds(texts: list[str]) -> float:
+    """묶음 계획용 낭독 초 — 실제 응답 길이에 가깝게."""
+    return sum(len(t) for t in texts) / PLAN_CHARS_PER_SEC
 
 
 def _load_ledger() -> dict:
@@ -567,25 +577,33 @@ def pause_spans(pcm: bytes, rate: int, min_ms: int = 80) -> list[tuple[float, fl
             if (b - a) * FRAME_MS >= min_ms and a > 0 and b < len(flags)]
 
 
-# --- 요청 사이 목소리 맞추기 ---
-# Gemini TTS 는 화자 이름(prebuiltVoiceConfig)만 고정할 뿐 요청마다 소리를 새로 생성한다. 그래서 같은 화자라도
-# 요청이 바뀌면 음높이·밝기·말빠르기가 조금씩 달라진다(롱폼은 출력 상한 때문에 최소 2요청). 첫 장면(챕터 1)의
-# 음높이(F0 중앙값)·밝기(고역 비중)·말빠르기(초당 글자)를 기준으로 재고, 이후 요청의 오디오를 그 값에 맞춘다.
+# --- 장면마다 목소리 맞추기 ---
+# Gemini TTS 는 화자 이름(prebuiltVoiceConfig)만 고정할 뿐 소리를 새로 생성한다. 요청이 바뀔 때만이 아니라 **한 요청
+# 안에서도 문단(장면)이 바뀔 때마다 음역대·밝기·음량을 바꿔 읽는다** — 2026-10-26 롱폼(16장면, 3요청)을 장면별로 재니
+# 같은 요청 안에서 F0 중앙값이 116.6~161.8Hz(5.7반음), 장면 경계마다 ±1~3반음씩 뛰었다("챕터가 바뀔 때마다 목소리가
+# 바뀐다"). 그래서 요청(묶음) 단위가 아니라 장면 단위로 음높이(F0 중앙값)·밝기(고역 비중)·말빠르기(초당 글자)를 재고,
+# 영상 전체 장면들의 중앙값(발화 길이 가중)에 맞춘다. 장면 안의 억양은 그대로 둔 채 장면 전체를 한 번에 옮기므로
+# 질문·강조의 높낮이는 남는다. 예전(2026-10-05~)엔 둘째 요청부터 첫 장면에만 맞추고 0.7반음 넘게 다르면 한 번 더
+# 합성했는데, 요청 안의 장면별 차이가 요청 사이 차이보다 커서 효과가 없었고 요청만 늘었다(그 롱폼은 3묶음에 5요청).
 PROFILE_RATE = 8000          # 분석용으로 낮춘 샘플레이트 — 남성 음성 F0(60~300Hz)를 재기에 충분하다
 F0_MIN, F0_MAX = 60.0, 300.0
 PROFILE_WINDOW_MS = 40
-PROFILE_FRAMES = 160         # 분석할 유성 구간 수 — 순수 파이썬이라 표본으로 잰다(묶음당 수 초)
+PROFILE_FRAMES = 160         # 분석할 유성 구간 수 — 순수 파이썬이라 표본으로 잰다(장면당 1초 안팎)
 VOICED_CORR = 0.5            # 자기상관이 이보다 낮은 창은 무성음·잡음으로 보고 버린다
-MAX_SHIFT_SEMITONES = 2.0    # 보정 상한 — 이보다 크면 보정보다 다시 합성하는 편이 낫다
+MAX_SHIFT_SEMITONES = 2.0    # asetrate 보정 상한 — 포먼트(음색)까지 같이 옮겨 이보다 크면 다른 사람 목소리가 된다
+MAX_SHIFT_FORMANT_SAFE = 4.0  # rubberband(포먼트 보존) 보정 상한 — 2026-10-26 롱폼에서 가장 벗어난 장면이 3.8반음
 MAX_TEMPO = 1.08
 MAX_TILT_DB = 3.0
 TILT_SHELF_HZ = 1200         # 밝기 측정(1차 차분 에너지)이 주로 보는 대역 — 셸프를 여기서 걸어야 측정과 보정이 맞는다
 PITCH_DEADZONE = 0.15        # 반음. 이보다 작은 차이는 들리지 않으므로 손대지 않는다
 TEMPO_DEADZONE = 0.02
 TILT_DEADZONE_DB = 0.5
-# 기준과 이만큼(반음) 넘게 다르면 한 번 더 합성해 가까운 쪽을 쓴다(보정은 작을수록 자연스럽다).
-RETRY_SEMITONES = float(os.environ.get("POPORY_GEMINI_TTS_RETRY_SEMITONES", "0.7"))
-MATCH_RETRIES = int(os.environ.get("POPORY_GEMINI_TTS_MATCH_RETRIES", "1"))
+# 장면 단위는 내용(질문·인용·숫자)에 따라 잰 값이 조금씩 흔들리므로 데드존을 넓게 둔다.
+SCENE_PITCH_DEADZONE = 0.3
+SCENE_TEMPO_DEADZONE = 0.06
+SCENE_TILT_DEADZONE_DB = 1.0
+SCENE_MIN_SPEECH_S = 4.0     # 발화가 이보다 짧은 장면은 잰 값을 믿지 않는다(음량만 맞춘다)
+SCENE_MAX_GAIN_DB = 6.0
 MATCH_ENABLED = os.environ.get("POPORY_GEMINI_TTS_MATCH", "1") != "0"
 
 
@@ -659,36 +677,43 @@ def voice_profile(pcm: bytes, rate: int, chars: int) -> "dict | None":
         return None
     f0s.sort()
     return {"f0": f0s[len(f0s) // 2], "tilt_db": 10 * math.log10(hi_e / lo_e),
-            "cps": chars / speech_sec if speech_sec else 0.0}
+            "cps": chars / speech_sec if speech_sec else 0.0, "speech_s": speech_sec}
 
 
-def head_pcm(pcm: bytes, share: float) -> bytes:
-    """묶음 오디오의 앞쪽 share 비율(첫 장면 몫) — 기준 목소리를 첫 챕터에서만 재기 위함."""
-    n = len(pcm) // 2
-    return pcm[: max(2, int(n * min(1.0, max(0.0, share)))) * 2]
+def _weighted_median(values: list[float], weights: list[float]) -> float:
+    pairs = sorted(zip(values, weights))
+    half = sum(w for _, w in pairs) / 2
+    acc = 0.0
+    for v, w in pairs:
+        acc += w
+        if acc >= half:
+            return v
+    return pairs[-1][0]
 
 
-def voice_distance(ref: dict, cur: dict) -> float:
-    """기준과 얼마나 다른지(반음 단위로 환산한 합). 다시 합성한 두 후보 중 가까운 쪽을 고를 때 쓴다."""
-    d = abs(_semitones(cur["f0"] / ref["f0"]))
-    d += abs(cur["tilt_db"] - ref["tilt_db"]) / 3
-    if ref["cps"] and cur["cps"]:
-        d += abs(math.log(cur["cps"] / ref["cps"])) / math.log(1.1)
-    return d
+def scene_target(profiles: "list[dict]") -> "dict | None":
+    """장면들의 목소리 기준 — 음높이(로그)·밝기·말빠르기 각각 발화 길이로 가중한 중앙값. 첫 장면(도입부는 더 높고
+    밝게 읽는 일이 잦다)이나 평균(한 장면만 크게 벗어나도 끌려간다)보다 보정 폭이 가장 작다. 둘 미만이면 None."""
+    profs = [p for p in profiles if p]
+    if len(profs) < 2:
+        return None
+    w = [max(0.1, p.get("speech_s", 1.0)) for p in profs]
+    return {"f0": 2 ** _weighted_median([math.log2(p["f0"]) for p in profs], w),
+            "tilt_db": _weighted_median([p["tilt_db"] for p in profs], w),
+            "cps": _weighted_median([p["cps"] for p in profs], w) if all(p["cps"] for p in profs) else 0.0}
 
 
-def needs_retry(ref: dict, cur: dict) -> bool:
-    return abs(_semitones(cur["f0"] / ref["f0"])) > RETRY_SEMITONES
-
-
-def match_filter(ref: dict, cur: dict, rate: int, tilt_only: bool = False) -> "str | None":
+def match_filter(ref: dict, cur: dict, rate: int, tilt_only: bool = False, *, formant_safe: bool = False,
+                 pitch_deadzone: float = PITCH_DEADZONE, tempo_deadzone: float = TEMPO_DEADZONE,
+                 tilt_deadzone: float = TILT_DEADZONE_DB) -> "str | None":
     """cur 오디오를 ref 목소리에 맞추는 ffmpeg -af. 차이가 들리지 않을 만큼 작으면 None.
 
-    음높이는 asetrate(빠르기도 같이 바뀐다) 뒤 atempo 로 빠르기를 되돌리며, 말빠르기 차이도 그 atempo 에
-    함께 싣는다. 밝기는 고역 셸프로 맞춘다. 보정 폭은 상한으로 묶는다 — 크게 비틀면 그 자체가 어색하다.
-    tilt_only 는 2차 보정용 — 셸프가 잡음 바닥을 올려 발화 길이(말빠르기) 측정이 흔들리므로 밝기만 맞춘다."""
-    st = _semitones(ref["f0"] / cur["f0"])
-    st = max(-MAX_SHIFT_SEMITONES, min(MAX_SHIFT_SEMITONES, st))
+    formant_safe 면 rubberband(포먼트 보존, 길이 그대로)로 음높이·빠르기를 함께 옮긴다. 아니면 asetrate(빠르기도
+    같이 바뀐다) 뒤 atempo 로 빠르기를 되돌리며 말빠르기 차이도 그 atempo 에 함께 싣는다 — asetrate 는 포먼트까지
+    옮겨 음색이 바뀌므로 상한을 더 낮게 둔다. 밝기는 고역 셸프로 맞춘다. 보정 폭은 상한으로 묶는다 — 크게 비틀면
+    그 자체가 어색하다. tilt_only 는 2차 보정용 — 셸프만 한 번 더(한 번에 7할 정도만 맞는다)."""
+    cap = MAX_SHIFT_FORMANT_SAFE if formant_safe else MAX_SHIFT_SEMITONES
+    st = max(-cap, min(cap, _semitones(ref["f0"] / cur["f0"])))
     tempo = 1.0
     if ref["cps"] and cur["cps"]:
         tempo = max(1 / MAX_TEMPO, min(MAX_TEMPO, ref["cps"] / cur["cps"]))
@@ -696,13 +721,18 @@ def match_filter(ref: dict, cur: dict, rate: int, tilt_only: bool = False) -> "s
     if tilt_only:
         st, tempo = 0.0, 1.0
     parts: list[str] = []
-    atempo = tempo if abs(tempo - 1) >= TEMPO_DEADZONE else 1.0
-    if abs(st) >= PITCH_DEADZONE:
-        ratio = 2 ** (st / 12)
-        parts += [f"asetrate={round(rate * ratio)}", f"aresample={rate}"]
-        atempo /= ratio
-    if abs(atempo - 1) >= 0.002:
-        parts.append(f"atempo={atempo:.4f}")
-    if abs(tilt) >= TILT_DEADZONE_DB:
+    tempo = tempo if abs(tempo - 1) >= tempo_deadzone else 1.0
+    ratio = 2 ** (st / 12) if abs(st) >= pitch_deadzone else 1.0
+    if formant_safe:
+        if ratio != 1.0 or abs(tempo - 1) >= 0.002:
+            parts.append(f"rubberband=pitch={ratio:.6f}:tempo={tempo:.4f}:formant=preserved:pitchq=quality")
+    else:
+        atempo = tempo
+        if ratio != 1.0:
+            parts += [f"asetrate={round(rate * ratio)}", f"aresample={rate}"]
+            atempo /= ratio
+        if abs(atempo - 1) >= 0.002:
+            parts.append(f"atempo={atempo:.4f}")
+    if abs(tilt) >= tilt_deadzone:
         parts.append(f"treble=g={tilt:.1f}:f={TILT_SHELF_HZ}")
     return ",".join(parts) or None

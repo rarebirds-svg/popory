@@ -150,7 +150,7 @@ export default async function TtsPage() {
                   <pre className={`${CODE} mt-2 whitespace-pre-wrap rounded bg-popory-bg p-3`}>{c.gemini.style}</pre>
                 </details>
                 <p className="mt-2 text-xs text-popory-muted">
-                  영상마다 실제로 쓴 음성·요청 수·목소리 보정 기록은 작업 meta 의 <code className={CODE}>tts</code>(<code className={CODE}>voice_match</code>)에 남습니다.
+                  영상마다 실제로 쓴 음성·요청 수·장면별 목소리 보정 기록은 작업 meta 의 <code className={CODE}>tts</code>(<code className={CODE}>scene_match</code>)에 남습니다.
                 </p>
               </>
             ) : (
