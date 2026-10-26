@@ -83,7 +83,7 @@ def _row(label, value, default, env, note) -> dict:
 
 
 def _pitch_engine(formant_safe: bool) -> str:
-    return "rubberband(음색 보존)" if formant_safe else "asetrate(음색도 같이 바뀜)"
+    return "rubberband(음색 보존)" if formant_safe else "꺼짐 — rubberband 없음(밝기·음량만 맞춤)"
 
 
 def _gemini_rows() -> list[dict]:
@@ -102,15 +102,17 @@ def _gemini_rows() -> list[dict]:
         _row("장면마다 목소리 맞추기", _on_off(g.MATCH_ENABLED), "켜짐", "POPORY_GEMINI_TTS_MATCH",
              "Gemini 는 한 요청 안에서도 장면(문단)이 바뀔 때마다 음역대·밝기·음량을 바꿔 읽는다. 장면마다 재서 "
              "영상 전체 장면의 중앙값에 맞춘다(장면 안의 억양은 그대로)."),
-        _row("음높이 보정 방식", _pitch_engine(video._has_rubberband()), _pitch_engine(True), None,
-             "ffmpeg 에 rubberband 필터가 있으면 음색(포먼트)을 지키며 옮기고, 없으면 asetrate 로 음색까지 같이 옮긴다(상한이 더 낮다)."),
-        _row("보정 상한", f"음높이 ±{g.MAX_SHIFT_FORMANT_SAFE:g}반음(asetrate ±{g.MAX_SHIFT_SEMITONES:g}) · "
-             f"빠르기 ±{(g.MAX_TEMPO - 1) * 100:.0f}% · 밝기 ±{g.MAX_TILT_DB:g}dB · 음량 ±{g.SCENE_MAX_GAIN_DB:g}dB",
-             "음높이 ±4반음(asetrate ±2) · 빠르기 ±8% · 밝기 ±3dB · 음량 ±6dB", None,
-             "이 이상 비틀지 않는다(코드 상수)."),
-        _row("손대지 않는 차이", f"음높이 {g.SCENE_PITCH_DEADZONE:g}반음 · 빠르기 {g.SCENE_TEMPO_DEADZONE * 100:.0f}% · "
-             f"밝기 {g.SCENE_TILT_DEADZONE_DB:g}dB", "음높이 0.3반음 · 빠르기 6% · 밝기 1dB", None,
+        _row("음높이 보정 방식", _pitch_engine(video._has_rubberband()), _pitch_engine(True), "POPORY_MATCH_FFMPEG_BIN",
+             f"보정용 ffmpeg: {video.MATCH_FFMPEG_BIN}. rubberband 필터가 있어야 음색(포먼트)을 지키며 장면 음높이를 옮긴다. "
+             "Homebrew 기본 ffmpeg 에는 없다 — `brew install ffmpeg-full` 후 워커 재시작(경로는 자동으로 찾는다)."),
+        _row("보정 상한", f"음높이 ±{g.MAX_SHIFT_FORMANT_SAFE:g}반음 · 밝기 ±{g.MAX_TILT_DB:g}dB · 음량 ±{g.SCENE_MAX_GAIN_DB:g}dB",
+             "음높이 ±4반음 · 밝기 ±3dB · 음량 ±6dB", None,
+             "이 이상 비틀지 않는다(코드 상수). 말빠르기는 장면마다 재기만 하고 맞추지 않는다."),
+        _row("손대지 않는 차이", f"음높이 {g.SCENE_PITCH_DEADZONE:g}반음 · 밝기 {g.SCENE_TILT_DEADZONE_DB:g}dB",
+             "음높이 0.3반음 · 밝기 1dB", None,
              "장면 단위로 잰 값은 내용(질문·인용·숫자)에 따라 조금씩 흔들리므로 이보다 작은 차이는 그대로 둔다."),
+        _row("음높이를 옮기지 않는 장면", f"옮길 폭 {g.SCENE_TRUST_SEMITONES:g}반음 초과", "옮길 폭 6반음 초과", None,
+             "측정 오류(옥타브)로 보이는 장면은 밝기·음량만 맞춘다."),
     ]
 
 

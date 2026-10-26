@@ -114,7 +114,8 @@ def test_config_reports_gemini_and_subtitle_rows():
     labels = {r["label"]: r for r in c["gemini"]["rows"]}
     assert labels["장면마다 목소리 맞추기"]["value"] == "켜짐"
     assert labels["장면마다 목소리 맞추기"]["env"] == "POPORY_GEMINI_TTS_MATCH"
-    assert labels["음높이 보정 방식"]["value"] in ("rubberband(음색 보존)", "asetrate(음색도 같이 바뀜)")
+    assert labels["음높이 보정 방식"]["value"] in ("rubberband(음색 보존)", "꺼짐 — rubberband 없음(밝기·음량만 맞춤)")
+    assert labels["음높이 보정 방식"]["env"] == "POPORY_MATCH_FFMPEG_BIN" and "ffmpeg-full" in labels["음높이 보정 방식"]["note"]
     assert "다시 합성 기준" not in labels      # 요청 단위 재합성은 없앴다(장면 단위로 맞춘다)
     assert labels["월 비용 상한"]["value"] == "$9" and not labels["월 비용 상한"]["overridden"]
     subs = {r["label"]: r for r in c["subtitles"]["rows"]}

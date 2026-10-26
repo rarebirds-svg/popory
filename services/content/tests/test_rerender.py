@@ -165,3 +165,14 @@ def test_tts_fallback_is_logged_as_failure(monkeypatch, tmp_path):
     worker._log_tts_fallback("j2", {"tts": {"voice": "gemini-3.8-flash-tts/Iapetus"}})
     assert len(logged) == 1 and logged[0]["status"] == "gemini_tts_failed" and logged[0]["job"] == "j1"
     assert "429" in logged[0]["error"]
+
+
+def test_scene_pitch_match_off_is_logged_as_failure(monkeypatch):
+    # 보정용 ffmpeg 에 rubberband 가 없어 장면 음높이를 못 맞췄으면 /admin/errors 로 알린다(조용히 넘어가지 않게)
+    logged = []
+    monkeypatch.setattr(worker, "append_log", lambda d, rec: logged.append(rec))
+    worker._log_scene_match("j1", {"tts": {"scene_match": {"engine": "pitch_off", "spread_semitones": 5.7}}})
+    worker._log_scene_match("j2", {"tts": {"scene_match": {"engine": "rubberband"}}})
+    worker._log_scene_match("j3", {"tts": {}})
+    assert [r["job"] for r in logged] == ["j1"] and logged[0]["status"] == "scene_pitch_match_failed"
+    assert "ffmpeg-full" in logged[0]["error"] and "5.7" in logged[0]["error"]

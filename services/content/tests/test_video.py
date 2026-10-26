@@ -1163,13 +1163,49 @@ def test_render_video_gemini_matches_every_scene_to_the_video_median(monkeypatch
     video.render_video(scenes, job_id="scene_match", voice="gemini-3.8-flash-tts/Iapetus", tts_stats=stats)
     assert len(calls) == 1 and stats["gemini_requests"] == 1                # 다시 뽑지 않는다
     # 기준 = 중앙값 122Hz. 장면 0(150Hz)만 3.6반음 내린다(음색 보존 rubberband, 상한 4반음). 장면 1(120Hz)은 0.29반음 — 그대로
-    assert applied == [("s0_0", f"rubberband=pitch={122 / 150:.6f}:tempo=1.0000:formant=preserved:pitchq=quality")]
+    assert applied == [("s0_0", f"rubberband=pitch={122 / 150:.6f}:tempo=1.0000:transients=smooth:formant=preserved:pitchq=quality")]
     sm = video.tts_meta("gemini-3.8-flash-tts/Iapetus", stats)["scene_match"]
     assert sm["engine"] == "rubberband" and sm["target_f0"] == 122.0
     assert [r["f0"] for r in sm["scenes"]] == [150.0, 120.0, 122.0] and sm["scenes"][0]["after_f0"] == 122.0
     assert sm["spread_semitones"] == pytest.approx(3.86, abs=0.01) and sm["spread_after_semitones"] == pytest.approx(0.29, abs=0.01)
     work = video.TMP / "video_scene_match"
     assert all((work / f"g{i}_{j}.wav").exists() for i in range(3) for j in range(2))
+
+
+def test_match_scenes_caps_total_shelf_and_leaves_tempo(monkeypatch, tmp_path):
+    # 검토 지적: 셸프 상한이 패스마다 따로라 두 번 합쳐 ±6dB 까지 걸렸다. 또 장면 단위 말빠르기는 음량에 끌려
+    # 잘못 재므로 맞추지 않는다.
+    from popory_content import video, gemini_tts
+    monkeypatch.setattr(video, "_has_rubberband", lambda: True)
+    prof = {0: {"f0": 120.0, "tilt_db": -18.0, "cps": 6.0, "speech_s": 10.0},
+            1: {"f0": 120.0, "tilt_db": -10.0, "cps": 8.0, "speech_s": 10.0},
+            2: {"f0": 120.0, "tilt_db": -10.0, "cps": 8.0, "speech_s": 10.0}}
+    calls = iter([prof[0], prof[1], prof[2], {**prof[0], "tilt_db": -16.0}])
+    monkeypatch.setattr(gemini_tts, "voice_profile", lambda pcm, rate, chars: next(calls, {**prof[0], "tilt_db": -16.0}))
+    applied = []
+    monkeypatch.setattr(video, "_filter_pieces", lambda pieces, rate, af, work, tag: applied.append(af) or pieces)
+    raw = {i: ([b"\x10\x00" * 24000], 24000, False) for i in range(3)}
+    video._match_scenes(raw, [[20]] * 3, tmp_path, {})
+    # 장면 0: 1차 셸프 +3dB(상한) 뒤에도 6dB 어두우면 2차는 남은 폭 0 — 걸지 않는다. 빠르기(6 vs 8자/초)도 그대로.
+    assert applied == ["treble=g=3.0:f=1200"]
+
+
+def test_match_scenes_leaves_pitch_of_mismeasured_scenes(monkeypatch, tmp_path):
+    # 옥타브 오측정처럼 옮길 폭이 6반음을 넘는 장면은 음높이를 두고 기록만 남긴다. 문장마다 음높이가 크게 오르내리는
+    # 장면은 그대로 옮긴다 — 실제 Gemini 낭독은 정상 장면도 문장 사이 사분위 범위가 5반음까지 갔다(2026-10-26 실측).
+    from popory_content import video
+    monkeypatch.setattr(video, "_has_rubberband", lambda: True)
+    applied = []
+    monkeypatch.setattr(video, "_filter_pieces", lambda pieces, rate, af, work, tag: applied.append((tag, af)) or pieces)
+    same = lambda f0: [_voiced_pcm(f0, 2.0) for _ in range(3)]
+    raw = {0: (same(120.0), 24000, False), 1: (same(121.0), 24000, False), 2: (same(119.0), 24000, False),
+           3: ([_voiced_pcm(f, 2.0) for f in (100.0, 125.0, 150.0, 115.0)], 24000, False),   # 문장마다 크게 오르내림
+           4: (same(250.0), 24000, False)}                                                     # 한 옥타브 위로 잰 장면
+    stats = {}
+    video._match_scenes(raw, [[10] * 4] * 5, tmp_path, stats)
+    recs = {r["scene"]: r for r in stats["scene_match"]["scenes"]}
+    assert recs[4]["pitch_skipped"] < -6 and not any(t.startswith("s4_") and "rubberband" in af for t, af in applied)
+    assert "pitch_skipped" not in recs[3]
 
 
 def _voiced_pcm(f0, seconds, rate=24000):
@@ -1185,7 +1221,7 @@ def _voiced_pcm(f0, seconds, rate=24000):
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
 @pytest.mark.parametrize("formant_safe", [True, False])
-def test_match_scenes_moves_each_scene_to_the_median_pitch_keeping_pieces(monkeypatch, tmp_path, formant_safe):
+def test_match_scenes_moves_pitch_only_with_rubberband_keeping_pieces(monkeypatch, tmp_path, formant_safe):
     # 실제 ffmpeg: 장면마다 음높이가 다른 소리(110·125·140Hz)를 가운데(125Hz)로 옮기고, 조각 수·길이는 그대로 둔다
     from popory_content import video, gemini_tts
     if formant_safe and not video._has_rubberband():
@@ -1194,13 +1230,15 @@ def test_match_scenes_moves_each_scene_to_the_median_pitch_keeping_pieces(monkey
     raw = {i: ([_voiced_pcm(f0, 2.5), _voiced_pcm(f0, 2.0)], 24000, False) for i, f0 in enumerate((110.0, 125.0, 140.0))}
     stats = {}
     out = video._match_scenes(raw, [[20, 16]] * 3, tmp_path, stats)
-    for i in range(3):
+    for i, f0_in in enumerate((110.0, 125.0, 140.0)):
         assert [len(p) / 2 / 24000 for p in out[i][0]] == pytest.approx([2.5, 2.0], abs=0.03)
         f0 = gemini_tts.voice_profile(b"".join(out[i][0]), 24000, 36)["f0"]
-        assert abs(gemini_tts._semitones(f0 / 125.0)) < 0.35, (i, f0)
+        # rubberband 가 없으면 음높이는 옮기지 않는다 — asetrate 로 장면마다 옮기면 음색(포먼트)이 장면마다 튄다
+        assert abs(gemini_tts._semitones(f0 / (125.0 if formant_safe else f0_in))) < 0.35, (i, f0)
     sm = stats["scene_match"]
-    assert sm["engine"] == ("rubberband" if formant_safe else "asetrate")
-    assert sm["spread_semitones"] > 4 and sm["spread_after_semitones"] < 0.7
+    assert sm["engine"] == ("rubberband" if formant_safe else "pitch_off")
+    assert sm["spread_semitones"] > 4
+    assert sm["spread_after_semitones"] < 0.7 if formant_safe else sm["spread_after_semitones"] > 4
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")

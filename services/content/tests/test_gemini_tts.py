@@ -314,12 +314,21 @@ def test_match_filter_formant_safe_uses_rubberband_with_wider_cap():
     ref = {"f0": 120.0, "tilt_db": -18.0, "cps": 7.0}
     up = g.match_filter(ref, {**ref, "f0": 160.0}, 24000, formant_safe=True)
     # 음색(포먼트)을 지키는 rubberband 는 4반음까지 — asetrate 처럼 길이가 바뀌지 않아 atempo 로 되돌릴 필요가 없다
-    assert up == f"rubberband=pitch={2 ** (-4 / 12):.6f}:tempo=1.0000:formant=preserved:pitchq=quality"
+    assert up == f"rubberband=pitch={2 ** (-4 / 12):.6f}:tempo=1.0000:transients=smooth:formant=preserved:pitchq=quality"
     assert g.match_filter(ref, {**ref, "f0": 150.0}, 24000, formant_safe=True).startswith(f"rubberband=pitch={120 / 150:.6f}:")
     assert g.match_filter(ref, {**ref, "cps": 7.5}, 24000, formant_safe=True).startswith("rubberband=pitch=1.000000:tempo=")
     # 장면 단위 데드존(0.3반음)은 요청 단위(0.15)보다 넓다
     assert g.match_filter(ref, {**ref, "f0": 121.8}, 24000, pitch_deadzone=g.SCENE_PITCH_DEADZONE) is None
     assert g.match_filter(ref, {**ref, "f0": 121.8}, 24000) is not None          # 0.26반음
+
+
+def test_match_filter_can_skip_tempo_and_limit_tilt():
+    ref = {"f0": 120.0, "tilt_db": -18.0, "cps": 7.0}
+    # 장면 단위는 빠르기를 맞추지 않는다 — 7% 차이라도 손대지 않는다
+    assert g.match_filter(ref, {**ref, "cps": 7.5}, 24000, formant_safe=True, match_tempo=False) is None
+    # 2차 셸프는 1차에서 쓰고 남은 폭까지만
+    assert g.match_filter(ref, {**ref, "tilt_db": -12.0}, 24000, tilt_only=True, max_tilt=1.0) == "treble=g=-1.0:f=1200"
+    assert g.match_filter(ref, {**ref, "tilt_db": -12.0}, 24000, tilt_only=True, max_tilt=0.0) is None
 
 
 def test_scene_target_is_speech_weighted_median_not_first_scene():
