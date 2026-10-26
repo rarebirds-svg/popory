@@ -253,6 +253,16 @@ def test_plan_chunks_balances_and_respects_limit():
     assert [i for c in chunks for i in c] == list(range(20)) and len(chunks) == 3
 
 
+def test_real_longform_script_plans_two_requests_not_three():
+    # 2026-10-26 롱폼(16장면, 원본 응답 약 601초)이 예산용 5.3자/초로 어림돼 3요청(요청 경계 2개)이 됐다.
+    # 장면당 spoken_text 약 300자(공백·부호 포함) — 계획용 속도로는 약 600초 → 2묶음.
+    texts = ["가나다라 마바사아 자차카. " * 20] * 16
+    assert 290 <= len(texts[0]) <= 320
+    assert len(g.plan_chunks([g.plan_seconds([t]) for t in texts])) == 2
+    assert len(g.plan_chunks([g.estimate_seconds([t]) for t in texts])) == 3     # 예전 방식
+    assert len(g.plan_chunks([g.plan_seconds([t]) for t in texts[:5]])) == 1       # 3·5분 영상·쇼츠는 1요청
+
+
 def test_pause_spans_reports_inner_pauses_only():
     pcm = _build([("s", 0.2), ("t", 0.5), ("s", 0.3), ("t", 0.5), ("s", 0.2)])
     spans = g.pause_spans(pcm, 24000, 80)
@@ -275,7 +285,7 @@ def test_voice_profile_measures_pitch_within_a_fraction_of_a_semitone():
     for f0 in (100.0, 125.0, 160.0):
         prof = g.voice_profile(_voiced(f0), 24000, chars=20)
         assert abs(g._semitones(prof["f0"] / f0)) < 0.15
-        assert prof["cps"] > 0
+        assert prof["cps"] > 0 and 2.0 < prof["speech_s"] <= 3.0   # 쉼(1/4)은 발화 길이에서 뺀다
 
 
 def test_voice_profile_is_none_for_silence():
@@ -300,17 +310,28 @@ def test_match_filter_deadzone_pitch_tempo_and_tilt():
     assert g.match_filter(ref, {"f0": 127.0, "tilt_db": -16.0, "cps": 7.5}, 24000, tilt_only=True) == "treble=g=-2.0:f=1200"
 
 
-def test_needs_retry_and_distance():
+def test_match_filter_formant_safe_uses_rubberband_with_wider_cap():
     ref = {"f0": 120.0, "tilt_db": -18.0, "cps": 7.0}
-    assert not g.needs_retry(ref, {**ref, "f0": 124.0})                     # 0.57반음
-    assert g.needs_retry(ref, {**ref, "f0": 126.0})                         # 0.84반음
-    assert g.voice_distance(ref, {**ref, "f0": 122.0}) < g.voice_distance(ref, {**ref, "f0": 127.0})
+    up = g.match_filter(ref, {**ref, "f0": 160.0}, 24000, formant_safe=True)
+    # 음색(포먼트)을 지키는 rubberband 는 4반음까지 — asetrate 처럼 길이가 바뀌지 않아 atempo 로 되돌릴 필요가 없다
+    assert up == f"rubberband=pitch={2 ** (-4 / 12):.6f}:tempo=1.0000:formant=preserved:pitchq=quality"
+    assert g.match_filter(ref, {**ref, "f0": 150.0}, 24000, formant_safe=True).startswith(f"rubberband=pitch={120 / 150:.6f}:")
+    assert g.match_filter(ref, {**ref, "cps": 7.5}, 24000, formant_safe=True).startswith("rubberband=pitch=1.000000:tempo=")
+    # 장면 단위 데드존(0.3반음)은 요청 단위(0.15)보다 넓다
+    assert g.match_filter(ref, {**ref, "f0": 121.8}, 24000, pitch_deadzone=g.SCENE_PITCH_DEADZONE) is None
+    assert g.match_filter(ref, {**ref, "f0": 121.8}, 24000) is not None          # 0.26반음
 
 
-def test_head_pcm_takes_leading_share():
-    pcm = bytes(range(200))
-    assert g.head_pcm(pcm, 0.25) == pcm[:50]
-    assert g.head_pcm(pcm, 2.0) == pcm
+def test_scene_target_is_speech_weighted_median_not_first_scene():
+    # 2026-10-26 롱폼: 첫 장면만 높고 밝게 읽었다 — 기준을 첫 장면으로 잡으면 나머지를 다 끌어올려야 한다
+    profs = [{"f0": 151.1, "tilt_db": -8.5, "cps": 7.0, "speech_s": 40.0},
+             {"f0": 137.6, "tilt_db": -11.3, "cps": 7.2, "speech_s": 30.0},
+             {"f0": 133.9, "tilt_db": -12.3, "cps": 7.4, "speech_s": 30.0},
+             {"f0": 141.1, "tilt_db": -13.9, "cps": 7.1, "speech_s": 30.0},
+             {"f0": 116.6, "tilt_db": -12.8, "cps": 6.8, "speech_s": 5.0}]
+    t = g.scene_target(profs)
+    assert t["f0"] == pytest.approx(141.1) and t["tilt_db"] == pytest.approx(-11.3) and t["cps"] == pytest.approx(7.1)
+    assert g.scene_target(profs[:1]) is None and g.scene_target([]) is None
 
 
 def test_prepay_depleted_402_is_explained_and_remembered(monkeypatch):

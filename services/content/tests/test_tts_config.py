@@ -112,8 +112,10 @@ def test_config_reports_gemini_and_subtitle_rows():
     from popory_content.tts_config import build_tts_config
     c = build_tts_config()
     labels = {r["label"]: r for r in c["gemini"]["rows"]}
-    assert labels["요청 사이 목소리 맞추기"]["value"] == "켜짐"
-    assert labels["다시 합성 기준"]["env"] == "POPORY_GEMINI_TTS_RETRY_SEMITONES"
+    assert labels["장면마다 목소리 맞추기"]["value"] == "켜짐"
+    assert labels["장면마다 목소리 맞추기"]["env"] == "POPORY_GEMINI_TTS_MATCH"
+    assert labels["음높이 보정 방식"]["value"] in ("rubberband(음색 보존)", "asetrate(음색도 같이 바뀜)")
+    assert "다시 합성 기준" not in labels      # 요청 단위 재합성은 없앴다(장면 단위로 맞춘다)
     assert labels["월 비용 상한"]["value"] == "$9" and not labels["월 비용 상한"]["overridden"]
     subs = {r["label"]: r for r in c["subtitles"]["rows"]}
     assert subs["한 줄 길이"]["value"] == "동영상 30자 · 쇼츠 18자"

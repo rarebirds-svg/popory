@@ -8,6 +8,7 @@ import subprocess
 import textwrap
 import wave
 import zlib
+from array import array
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -1163,8 +1164,8 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
     """장면 내레이션을 Gemini 로 합성해 장면별·문장별 WAV 조각으로 나눠 둔다.
 
     목소리는 요청마다 미세하게 달라지므로(화자 이름만 고정되고 소리는 매번 새로 생성된다) 연속한 장면을 묶어
-    (롱폼 2요청·쇼츠 1요청) 한 번에 합성하고, 둘째 요청부터는 첫 장면(챕터 1)의 음높이·밝기·말빠르기에 맞춘다
-    (gemini_tts.match_filter). 차이가 크면 한 번 더 합성해 가까운 쪽을 고른 뒤 맞춘다.
+    (롱폼 2요청·쇼츠 1요청) 한 번에 합성한다. 한 요청 안에서도 장면(문단)마다 음역대·밝기·음량이 달라지므로,
+    다 받은 뒤 장면마다 영상 전체 기준에 맞춘다(_match_scenes).
     묶음 오디오의 숨에서 문장 경계를 되찾아 장면별로 나눈다(gemini_tts.split_chunk — 문장 조각의 말빠르기가
     주변과 맞는지로 고른다). 장면 사이는 빈 줄로 넘겨 모델이 문단 호흡을 둔다. 말빠르기가 주변과 크게 다른
     조각이 있는 장면만 따로 다시 합성하고, 그래도 안 되면 장면 통째로 쓴다.
@@ -1178,77 +1179,29 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
         weights.append([len(s) for s in spoken])
     live = [i for i, t in enumerate(texts) if t]
     chunks = [[live[k] for k in grp] for grp in
-              gemini_tts.plan_chunks([gemini_tts.estimate_seconds([texts[i]]) for i in live])]
+              gemini_tts.plan_chunks([gemini_tts.plan_seconds([texts[i]]) for i in live])]
     reason = gemini_tts.budget_block_reason(["\n\n".join(texts[i] for i in grp) for grp in chunks])
     if reason:
         tts_stats["engine_fallback"] = reason
         return None
     out: list[dict[str, Any] | None] = [None] * len(scenes)
-    ref: "dict[str, Any] | None" = None
-    matches: list[dict[str, Any]] = []
+    # 장면 → (조각 PCM 목록, 샘플레이트, 통째 여부). 모든 묶음을 받은 뒤 장면마다 목소리를 맞추고 파일로 쓴다.
+    raw: dict[int, tuple[list[bytes], int, bool]] = {}
     align: dict[str, Any] = {}      # 문장 정렬에서 가장 벗어난 말빠르기 비(진단용 — meta.tts.align)
     requests_made = 0
 
     def save(i: int, pieces: "list[bytes]", rate: int) -> None:
-        paths = []
-        for j, piece in enumerate(pieces):
-            path = work / f"g{i}_{j}.wav"
-            gemini_tts.write_wav(piece, rate, path)
-            paths.append(path)
-        out[i] = {"segments": paths}
+        raw[i] = (list(pieces), rate, False)
 
     def save_whole(i: int, pcm: bytes, rate: int) -> None:
         whole = gemini_tts.split_sentences(pcm, rate, [sum(weights[i])])
-        path = work / f"g{i}.wav"
-        gemini_tts.write_wav(whole[0] if whole else pcm, rate, path)
-        out[i] = {"whole": path, "weights": weights[i]}
+        raw[i] = ([whole[0] if whole else pcm], rate, True)
         tts_stats["split_fallback_scenes"] = tts_stats.get("split_fallback_scenes", 0) + 1
 
     def synth(grp: list[int]) -> tuple[bytes, int]:
-        """한 요청 합성 + 첫 챕터 목소리에 맞추기."""
-        nonlocal ref, requests_made
-        text = "\n\n".join(texts[i] for i in grp)
-        chars = sum(sum(weights[i]) for i in grp)
-        pcm, rate = gemini_tts.synthesize_scene(text, voice)
+        nonlocal requests_made
+        pcm, rate = gemini_tts.synthesize_scene("\n\n".join(texts[i] for i in grp), voice)
         requests_made += 1
-        if not gemini_tts.MATCH_ENABLED:
-            return pcm, rate
-        if ref is None:
-            # 기준 = 첫 장면(챕터 1). 묶음 앞쪽에서 첫 장면 글자 몫만큼만 잰다.
-            first = sum(weights[grp[0]])
-            ref = gemini_tts.voice_profile(gemini_tts.head_pcm(pcm, first / max(1, chars)), rate, first)
-            if ref is not None:
-                matches.append({"request": requests_made, "reference": True, "f0": round(ref["f0"], 1)})
-            return pcm, rate
-        prof = gemini_tts.voice_profile(pcm, rate, chars)
-        if prof is None:
-            return pcm, rate
-        retried = False
-        for _ in range(gemini_tts.MATCH_RETRIES):
-            if not gemini_tts.needs_retry(ref, prof):
-                break
-            try:
-                pcm2, rate2 = gemini_tts.synthesize_scene(text, voice)
-            except gemini_tts.GeminiTTSError:
-                break  # 다시 뽑기는 덤 — 실패해도 첫 결과를 맞춰 쓴다
-            requests_made += 1
-            retried = True
-            prof2 = gemini_tts.voice_profile(pcm2, rate2, chars)
-            if prof2 and gemini_tts.voice_distance(ref, prof2) < gemini_tts.voice_distance(ref, prof):
-                pcm, rate, prof = pcm2, rate2, prof2
-        record: dict[str, Any] = {"request": requests_made, "f0": round(prof["f0"], 1),
-                                  "shift_semitones": round(12 * math.log2(ref["f0"] / prof["f0"]), 2),
-                                  "retried": retried, "filters": []}
-        # 셸프 한 번으로는 밝기 차이가 7할 정도만 맞는다 — 다시 재서 남은 차이를 한 번 더 맞춘다.
-        for k in range(2):
-            af = gemini_tts.match_filter(ref, prof, rate, tilt_only=k > 0)
-            if not af:
-                break
-            pcm = _match_voice(pcm, rate, af, work, f"{requests_made}_{k}")
-            record["filters"].append(af)
-            prof = gemini_tts.voice_profile(pcm, rate, chars) or prof
-        record["after_f0"] = round(prof["f0"], 1)
-        matches.append(record)
         return pcm, rate
 
     try:
@@ -1263,7 +1216,7 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
                     save(i, pieces, rate)
                     continue
                 # 이 장면 조각의 말빠르기가 주변과 크게 달랐다 — 모델이 문장을 건너뛰었거나 붙여 읽었을 수 있어
-                # 그 장면만 다시 합성한다(이때도 첫 챕터 목소리에 맞춘다). 그래도 안 되면 장면 통째로 쓴다.
+                # 그 장면만 다시 합성한다(목소리는 아래에서 다른 장면과 똑같이 맞춘다). 그래도 안 되면 장면 통째로 쓴다.
                 tts_stats["rechunked_scenes"] = tts_stats.get("rechunked_scenes", 0) + 1
                 pcm1, rate1 = synth([i])
                 pieces = gemini_tts.split_sentences(pcm1, rate1, weights[i])
@@ -1275,11 +1228,157 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
         tts_stats["engine_fallback"] = f"합성 실패 — {e}"
         return None
     tts_stats["gemini_requests"] = requests_made
-    if matches:
-        tts_stats["voice_match"] = matches
     if align:
         tts_stats["align"] = align
+    if gemini_tts.MATCH_ENABLED:
+        raw = _match_scenes(raw, weights, work, tts_stats)
+    for i, (pieces, rate, whole) in raw.items():
+        if whole:
+            path = work / f"g{i}.wav"
+            gemini_tts.write_wav(pieces[0], rate, path)
+            out[i] = {"whole": path, "weights": weights[i]}
+            continue
+        paths = []
+        for j, piece in enumerate(pieces):
+            path = work / f"g{i}_{j}.wav"
+            gemini_tts.write_wav(piece, rate, path)
+            paths.append(path)
+        out[i] = {"segments": paths}
     return out
+
+
+# 장면 사이에 끼워 함께 보정하는 무음 — rubberband·셸프가 조각 경계 너머로 번지는 소리를 여기서 받아 내고 잘라 버린다.
+SCENE_FILTER_SPACER_S = 0.25
+
+
+@functools.lru_cache(maxsize=1)
+def _has_rubberband() -> bool:
+    """ffmpeg 에 rubberband(포먼트 보존 음높이 보정) 필터가 있는지. 없으면 asetrate 로 낮은 상한까지만 맞춘다."""
+    try:
+        r = subprocess.run([FFMPEG_BIN, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return " rubberband " in r.stdout
+
+
+def _filter_pieces(pieces: "list[bytes]", rate: int, af: str, work: Path, tag: str) -> "list[bytes] | None":
+    """조각들을 무음 사이에 이어 붙여 한 번에 ffmpeg 필터를 건 뒤 같은 자리에서 다시 자른다(빠르기가 바뀌면 비례해서).
+    한 장면을 한 덩어리로 걸어야 장면 안 조각끼리 보정이 같다. 실패하면 None(호출측이 원본을 쓴다)."""
+    gap = array("h", [0] * int(rate * SCENE_FILTER_SPACER_S)).tobytes()
+    spans, buf, pos = [], [gap], len(gap) // 2
+    for p in pieces:
+        n = len(p) // 2
+        spans.append((pos, pos + n))
+        buf += [p[: n * 2], gap]
+        pos += n + len(gap) // 2
+    pcm = b"".join(buf)
+    got = _match_voice(pcm, rate, af, work, tag)
+    if got is pcm or not got:
+        return None
+    scale = (len(got) // 2) / max(1, len(pcm) // 2)
+    samples = array("h")
+    samples.frombytes(got[: len(got) // 2 * 2])
+    out = []
+    for a, b in spans:
+        piece = samples[round(a * scale):round(b * scale)]
+        gemini_tts._fade(piece, rate)
+        out.append(piece.tobytes())
+    return out
+
+
+def _speech_level(pieces: "list[bytes]", rate: int) -> tuple[float, int]:
+    """장면 발화 프레임의 RMS 와 전체 피크(절댓값)."""
+    s = _pcm16(b"".join(pieces))
+    if not s:
+        return 0.0, 0
+    flags, frame = gemini_tts._quiet_frames(s, rate)
+    energy = count = 0
+    for k, quiet in enumerate(flags):
+        if not quiet:
+            chunk = s[k * frame:(k + 1) * frame]
+            energy += sum(x * x for x in chunk)
+            count += len(chunk)
+    return (math.sqrt(energy / count) if count else 0.0), max(abs(x) for x in s)
+
+
+def _scale_pieces(pieces: "list[bytes]", gain: float) -> "list[bytes]":
+    return [array("h", (max(-32768, min(32767, int(x * gain))) for x in _pcm16(p))).tobytes() for p in pieces]
+
+
+def _match_scenes(raw: "dict[int, tuple[list[bytes], int, bool]]", weights: "list[list[int]]", work: Path,
+                  tts_stats: dict[str, Any]) -> "dict[int, tuple[list[bytes], int, bool]]":
+    """장면마다 음높이·밝기·말빠르기·음량을 영상 전체 기준(장면들의 발화 길이 가중 중앙값)에 맞춘다.
+
+    Gemini 는 한 요청 안에서도 문단(장면)이 바뀔 때마다 음역대를 바꿔 읽는다(2026-10-26 실측: 같은 요청 안
+    5.7반음). 장면 전체를 한 번에 옮기므로 장면 안의 억양(질문·강조)은 그대로다. 음높이는 rubberband(포먼트 보존)가
+    있으면 그것으로 ±MAX_SHIFT_FORMANT_SAFE 반음까지, 없으면 asetrate 로 ±MAX_SHIFT_SEMITONES 까지. 결과는
+    meta.tts.scene_match(장면별 잰 값·보정·보정 뒤 음높이, 장면 사이 음높이 폭 전후)."""
+    g = gemini_tts
+    formant_safe = _has_rubberband()
+    profs: dict[int, dict] = {}
+    for i, (pieces, rate, _) in raw.items():
+        p = g.voice_profile(b"".join(pieces), rate, sum(weights[i]))
+        if p and p["speech_s"] >= g.SCENE_MIN_SPEECH_S:
+            profs[i] = p
+    target = g.scene_target(list(profs.values()))
+    limits = {"formant_safe": formant_safe, "pitch_deadzone": g.SCENE_PITCH_DEADZONE,
+              "tempo_deadzone": g.SCENE_TEMPO_DEADZONE, "tilt_deadzone": g.SCENE_TILT_DEADZONE_DB}
+    out: dict[int, tuple[list[bytes], int, bool]] = {}
+    records = []
+    target_rms = 32768 * 10 ** (g.TARGET_RMS_DBFS / 20)
+    lim = 10 ** (g.SCENE_MAX_GAIN_DB / 20)
+    for i in sorted(raw):
+        pieces, rate, whole = raw[i]
+        rms0, peak0 = _speech_level(pieces, rate)
+        rec: dict[str, Any] = {"scene": i}
+        p = profs.get(i)
+        if target and p:
+            rec.update(f0=round(p["f0"], 1), tilt_db=round(p["tilt_db"], 1), cps=round(p["cps"], 2), filters=[])
+            # 셸프 한 번으로는 밝기 차이가 7할 정도만 맞는다 — 다시 재서 남은 차이를 한 번 더 맞춘다.
+            for k in range(2):
+                af = g.match_filter(target, p, rate, tilt_only=k > 0, **limits)
+                if not af:
+                    break
+                if k == 0 and peak0 > 16000:
+                    # 셸프·음높이 보정이 피크를 올리므로 여유(-6dBFS)를 두고 건다 — 음량은 아래에서 다시 맞춘다
+                    pieces = _scale_pieces(pieces, 16000 / peak0)
+                got = _filter_pieces(pieces, rate, af, work, f"s{i}_{k}")
+                if got is None:
+                    break
+                pieces = got
+                rec["filters"].append(af)
+                p = g.voice_profile(b"".join(pieces), rate, sum(weights[i])) or p
+            rec["after_f0"] = round(p["f0"], 1)
+        # 음량은 필터를 다 건 뒤에 맞춘다(셸프·음높이 보정이 음량·피크를 바꾼다). 목표는 발화 RMS -20 dBFS,
+        # 원래 음량에서 ±SCENE_MAX_GAIN_DB 안, 피크 32000 아래.
+        rms1, peak1 = _speech_level(pieces, rate)
+        gain = 1.0
+        if rms0 and rms1:
+            want = max(rms0 / lim, min(rms0 * lim, target_rms))
+            gain = min(want / rms1, 32000 / max(1, peak1))
+            if abs(20 * math.log10(gain)) >= 0.1:
+                pieces = _scale_pieces(pieces, gain)
+            rec["gain_db"] = round(20 * math.log10(rms1 * gain / rms0), 1)
+        records.append(rec)
+        out[i] = (pieces, rate, whole)
+
+    def spread(key: str) -> "float | None":
+        f0s = [r[key] for r in records if r.get(key)]
+        return round(12 * math.log2(max(f0s) / min(f0s)), 2) if len(f0s) > 1 else None
+
+    tts_stats["scene_match"] = {
+        "engine": "rubberband" if formant_safe else "asetrate",
+        "target_f0": round(target["f0"], 1) if target else None,
+        "spread_semitones": spread("f0"), "spread_after_semitones": spread("after_f0"),
+        "scenes": records,
+    }
+    return out
+
+
+def _pcm16(pcm: bytes) -> array:
+    a = array("h")
+    a.frombytes(pcm[: len(pcm) // 2 * 2])
+    return a
 
 
 def tts_meta(voice: str, stats: "dict[str, Any]") -> dict[str, Any]:
@@ -1305,8 +1404,8 @@ def tts_meta(voice: str, stats: "dict[str, Any]") -> dict[str, Any]:
     for key in ("split_fallback_scenes", "rechunked_scenes", "gemini_requests"):
         if stats.get(key):
             meta[key] = int(stats[key])
-    if stats.get("voice_match"):
-        meta["voice_match"] = stats["voice_match"]
+    if stats.get("scene_match"):
+        meta["scene_match"] = stats["scene_match"]
     if stats.get("sync"):
         meta["sync"] = stats["sync"]
     if stats.get("align"):
