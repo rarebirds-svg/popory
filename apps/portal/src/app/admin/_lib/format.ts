@@ -17,6 +17,15 @@ export function formatKst(ts: number | null | undefined): string {
   return `${at("year")}.${at("month")}.${at("day")} ${at("hour")}:${at("minute")}:${at("second")}`;
 }
 
+// 비었거나(null·"") 해석이 안 되거나 1970-01-01(유닉스 0초) 이하이면 null — 호출부가 "없음" 을 직접 말하게 한다.
+// new Date(null) 은 1970-01-01T00:00Z 라 KST 로 "1. 1. 오전 09:00" 이 찍혔다(Claude 세션 리셋 시각이 비어 올 때, 2026-10).
+export function formatKstIsoOrNull(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t) || t <= 0) return null;
+  return formatKstIso(iso);
+}
+
 export function formatKstIso(iso: string): string {
   try {
     return new Date(iso).toLocaleString("ko-KR", {

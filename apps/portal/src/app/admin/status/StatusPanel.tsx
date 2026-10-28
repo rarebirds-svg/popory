@@ -2,20 +2,30 @@
 // 콘텐츠 생성 상태를 10초마다 폴링해 readiness·트래픽을 표시하는 client 컴포넌트.
 import { useEffect, useState } from "react";
 import { platformLabel } from "../_lib/labels";
-import { formatKst, formatKstIso } from "../_lib/format";
+import { formatKst, formatKstIsoOrNull } from "../_lib/format";
 
-interface UsageItem { percent: number; resets_at: string; severity: string }
+interface UsageItem { percent: number; resets_at: string | null; severity: string }
 interface ClaudeUsage { session?: UsageItem; weekly_all?: UsageItem; weekly_fable?: UsageItem }
 
 interface TtsVoice { voice: string; family: string }
 
 // 워커가 실제로 쓰는 음성을 보여 준다. 예전엔 "Google Chirp3-HD (ko-KR)" 로 고정돼 있어 실제 기본값(Neural2-C)과 달랐다.
+// 엔진도 음성 계열에서 정한다 — 앞에 "Google TTS" 를 박아 두면 Gemini 음성일 때 "Google TTS · gemini-…(Gemini)" 로 틀리게 보였다(2026-10).
+function ttsEngine(family: string): string {
+  return family === "Gemini" ? "Gemini TTS" : "Google Cloud TTS";
+}
+
+function ttsVoiceLabel(x: TtsVoice | null): string {
+  if (!x) return "알 수 없음";
+  // Gemini 는 엔진 이름이 곧 계열이라 괄호를 반복하지 않는다.
+  return x.family === "Gemini" ? `${ttsEngine(x.family)} · ${x.voice}` : `${ttsEngine(x.family)} · ${x.voice} (${x.family})`;
+}
+
 function ttsLine(t: Status["tts"]): string {
   if (!t) return "미보고 — 워커 재시작 후 표시";
-  const v = (x: TtsVoice | null) => (x ? `${x.voice} (${x.family})` : "알 수 없음");
   const same = t.longform && t.shorts && t.longform.voice === t.shorts.voice;
-  const voices = same ? v(t.longform) : `동영상 ${v(t.longform)} · 쇼츠 ${v(t.shorts)}`;
-  return `Google TTS · ${voices}${t.speaking_rate != null ? ` · 말속도 ${t.speaking_rate}×` : ""}`;
+  const voices = same ? ttsVoiceLabel(t.longform) : `동영상 ${ttsVoiceLabel(t.longform)} · 쇼츠 ${ttsVoiceLabel(t.shorts)}`;
+  return `${voices}${t.speaking_rate != null ? ` · 말속도 ${t.speaking_rate}×` : ""}`;
 }
 
 // 워커가 실제로 돌리는 코드 버전 + 뒤처짐 경고(판정은 API 가 한다 — summarizeRuntime).
@@ -74,6 +84,13 @@ interface Status {
 const SEV_BAR: Record<string, string> = { normal: "bg-popory-success", warning: "bg-popory-warn", critical: "bg-popory-danger" };
 const SEV_TEXT: Record<string, string> = { normal: "text-popory-success", warning: "text-popory-warn", critical: "text-popory-danger" };
 
+// 리셋 시각이 비어 오면(사용 기록이 없는 5시간 세션 등) 1970-01-01 로 보이지 않게 "없음" 을 말한다.
+function resetLabel(pct: number, resetsAt: string | null): string {
+  const at = formatKstIsoOrNull(resetsAt);
+  if (at) return `${at} 리셋`;
+  return pct === 0 ? "사용 전(리셋 시각 없음)" : "리셋 시각 미보고";
+}
+
 function UsageRow({ label, item }: { label: string; item?: UsageItem }) {
   if (!item) {
     return (
@@ -90,7 +107,7 @@ function UsageRow({ label, item }: { label: string; item?: UsageItem }) {
     <li className="border-b border-popory-muted/20 pb-2">
       <div className="flex justify-between">
         <span className="text-popory-muted">{label}</span>
-        <span className={SEV_TEXT[item.severity] ?? "text-popory-fg"}>{pct}% · {formatKstIso(item.resets_at)} 리셋</span>
+        <span className={SEV_TEXT[item.severity] ?? "text-popory-fg"}>{pct}% · {resetLabel(pct, item.resets_at)}</span>
       </div>
       <div className="mt-1 flex gap-0.5">
         {Array.from({ length: 10 }, (_, i) => (
