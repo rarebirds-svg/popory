@@ -17,7 +17,7 @@ from popory_content.generate import (generate, GenerateError, generate_youtube_p
                                      set_model_overrides, model_for, is_usage_limit,
                                      usage_limited)
 from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
-from popory_content.video import make_video, VideoError, render_thumbnail, render_video, tts_meta, TMP
+from popory_content.video import make_video, media_tools_problem, VideoError, render_thumbnail, render_video, tts_meta, TMP
 from popory_content.rerender import (parse_script, load_backgrounds, build_scenes, scene_records,
                                      image_fetcher as rerender_fetcher)
 from popory_content.subtitles import to_srt
@@ -124,6 +124,12 @@ def run_once(client) -> bool:
     job_id = job["id"]
     platform = job.get("platform", "naver-blog")
     try:
+        if platform in ("youtube", "shorts"):
+            # 영상 도구가 고장 났으면 대본·이미지를 만들기 전에 실패시킨다 — 끝에서 ffprobe 가 죽으면 claude 사용량과
+            # 이미지 뉴런만 쓰고 실패한다. 고장은 맥미니에서 고쳐야 풀리므로 기다려도 소용없다(release 하지 않는다).
+            problem = media_tools_problem()
+            if problem:
+                raise VideoError(problem)
         if platform in ("youtube", "shorts") and _is_rerender(job):
             _rerender_video(client, job, data.get("draft"), portrait=platform == "shorts")
         elif platform == "youtube":

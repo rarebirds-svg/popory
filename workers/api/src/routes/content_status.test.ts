@@ -256,6 +256,19 @@ describe("status 의 워커 버전 경고", () => {
     expect(r?.warnings[0]).toContain("재시작되지 않았습니다");
   });
 
+  it("영상 도구(ffmpeg)가 고장이면 가장 먼저 경고한다", async () => {
+    await beat({ runtime: runtime({ media_problem: "ffprobe 실행 불가 — 영상 도구 라이브러리 누락(libx265.216.dylib).", branch: "x" }) });
+    const w = (await rt())?.warnings ?? [];
+    expect(w[0]).toContain("영상 도구 고장");
+    expect(w[0]).toContain("libx265.216.dylib");
+    expect(w).toHaveLength(2);
+  });
+
+  it("영상 도구가 정상(media_problem 없음·null)이면 경고하지 않는다", async () => {
+    await beat({ runtime: runtime({ media_problem: null }) });
+    expect((await rt())?.warnings).toEqual([]);
+  });
+
   it("main 이 아닌 브랜치에서 돌면 경고", async () => {
     await beat({ runtime: runtime({ branch: "claude/old-feature" }) });
     expect((await rt())?.warnings[0]).toContain("claude/old-feature");

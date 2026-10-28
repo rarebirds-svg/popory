@@ -8,6 +8,15 @@ export interface FriendlyError {
 
 export function friendlyError(status: number, raw: string): FriendlyError {
   const r = (raw || "").toLowerCase();
+  // 맥미니의 영상 도구(ffmpeg·ffprobe)가 고장 난 경우 — 일시적인 문제가 아니라 고쳐야 풀린다. 같은 오류로 다시 시도만 반복되지 않게
+  // 무엇이 문제인지 말한다. 워커가 "영상 도구 라이브러리 누락" 으로 적고, 예전 메시지는 dylib 경로만 남아 있다.
+  if (r.includes("영상 도구") || r.includes(".dylib") || (r.includes("ffprobe") && r.includes("exit -6"))) {
+    return {
+      message: "영상을 만드는 프로그램(ffmpeg)이 맥미니에서 고장 나 만들지 못했어요. 관리자가 고친 뒤 다시 시도해 주세요.",
+      detail: raw,
+      retryable: true,
+    };
+  }
   const transient = r.includes("d1_error") || r.includes("timeout") || r.includes("object to be reset") || r.includes("internal error");
   if (status >= 500 || transient) {
     return { message: "일시적인 문제로 처리하지 못했어요. 잠시 후 다시 시도해 주세요.", detail: raw, retryable: true };

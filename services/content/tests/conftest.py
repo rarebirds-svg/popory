@@ -35,3 +35,11 @@ def _no_real_hook_check(monkeypatch):
     hook_check 자체를 시험하는 테스트는 ENABLED 를 다시 켜고 runner 를 직접 넘긴다."""
     from popory_content import hook_check
     monkeypatch.setattr(hook_check, "ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
+def _media_tools_ok(monkeypatch):
+    """워커의 영상 작업 전 도구 확인이 테스트 환경의 실제 ffmpeg 유무에 기대지 않게 한다(CI 에는 없을 수 있다).
+    도구 고장 경로를 시험하는 테스트는 이 값을 다시 바꾼다."""
+    from popory_content import worker
+    monkeypatch.setattr(worker, "media_tools_problem", lambda: None)

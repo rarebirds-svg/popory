@@ -9,6 +9,7 @@ from popory_content import names, options, pronunciation, tts, tts_config, video
 @pytest.fixture(autouse=True)
 def _no_git_network(monkeypatch):
     """build_tts_config 는 runtime_snapshot 으로 git ls-remote(네트워크)를 부른다 — 단위 테스트가 원격에 기대면 느리고 불안정하다."""
+    monkeypatch.setattr(tts_config.video, "media_tools_problem", lambda: None)   # 실제 ffmpeg 를 부르지 않는다
     monkeypatch.setattr(tts_config.runtime_info, "runtime_snapshot",
                         lambda: {"loaded_commit": "abc1234", "head_commit": "abc1234", "branch": "main", "started_at": 1,
                                  "loaded_subject": "x", "pulled_not_restarted": False,
@@ -121,3 +122,10 @@ def test_config_reports_gemini_and_subtitle_rows():
     subs = {r["label"]: r for r in c["subtitles"]["rows"]}
     assert subs["한 줄 길이"]["value"] == "동영상 30자 · 쇼츠 18자"
     assert any(r["label"] == "이름 이니셜 → 알파벳 이름" and "이 에이치 카는" in r["spoken"] for r in c["normalization"])
+
+
+def test_snapshot_reports_broken_media_tools(monkeypatch):
+    monkeypatch.setattr(tts_config.video, "media_tools_problem", lambda: "ffprobe 실행 불가 — 영상 도구 라이브러리 누락(libx265.216.dylib).")
+    c = tts_config.build_tts_config()
+    assert "libx265.216.dylib" in c["runtime"]["media_problem"]
+    assert c["runtime"]["loaded_commit"] == "abc1234"          # 기존 런타임 정보는 그대로 실린다
