@@ -118,10 +118,29 @@ def generate_scenes(*, topic: str, sources: list[dict[str, Any]], style_samples:
                           model=model_for(feature))
 
 
+_DYLD_MISSING = re.compile(r"Library not loaded:\s*(\S+)")
+_DYLIB_NAME = re.compile(r"(lib[\w.+-]+\.dylib)")
+
+
+def _tool_failure(name: str, returncode: int, stderr: str, tail: int = 300) -> str:
+    """외부 도구(ffmpeg·ffprobe) 실패 메시지. 실행 파일이 **아예 뜨지 못한** 경우(동적 라이브러리 누락)는 원인과 조치를 말한다.
+
+    2026-10-27 Homebrew 가 x265 를 4.3 으로 올리면서 ffmpeg 가 링크한 libx265.216.dylib 이 사라져, ffprobe 가 시작하자마자
+    abort(exit -6)했다. 예전 메시지는 stderr 꼬리만 잘라 'mebrew/opt/x265/...' 처럼 핵심 줄(Library not loaded)이 잘려
+    나갔고, 포털은 '일시적인 문제' 로 안내해 다시 시도만 반복됐다 — 고장은 맥미니에서 고쳐야 풀린다."""
+    err = stderr or ""
+    if "Library not loaded" in err or ("dyld" in err and ".dylib" in err):
+        m = _DYLD_MISSING.search(err) or _DYLIB_NAME.search(err)
+        lib = Path(m.group(1)).name if m else "알 수 없음"
+        return (f"{name} 실행 불가 — 영상 도구 라이브러리 누락({lib}). Homebrew 업그레이드로 ffmpeg 링크가 깨졌습니다. "
+                f"맥미니에서 `brew upgrade ffmpeg`(안 되면 `brew reinstall ffmpeg`) 후 다시 시도하세요.")
+    return f"{name} exit {returncode}: {err[-tail:]}"
+
+
 def _run(cmd: list[str]) -> None:
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise VideoError(f"{Path(cmd[0]).name} exit {r.returncode}: {r.stderr[-400:]}")
+        raise VideoError(_tool_failure(Path(cmd[0]).name, r.returncode, r.stderr, tail=400))
 
 
 def _duration(path: Path) -> float:
@@ -130,8 +149,25 @@ def _duration(path: Path) -> float:
         capture_output=True, text=True,
     )
     if r.returncode != 0:
-        raise VideoError(f"ffprobe exit {r.returncode}: {r.stderr[-300:]}")
+        raise VideoError(_tool_failure("ffprobe", r.returncode, r.stderr))
     return float(r.stdout.strip())
+
+
+def media_tools_problem() -> "str | None":
+    """ffmpeg·ffprobe 가 실행되는지 -version 으로 확인한다. 정상이면 None, 아니면 사람이 읽을 원인.
+
+    영상 작업은 대본(claude)·이미지(Cloudflare 뉴런)를 다 만든 뒤에야 ffprobe 를 처음 부른다. 도구가 고장 난 채로 돌면
+    작업마다 사용량만 쓰고 실패한다(2026-10-27~28 영상·쇼츠 4건 이상). 생성 전에 한 번 확인해 바로 실패시키는 데 쓴다."""
+    for name, binary in (("ffmpeg", FFMPEG_BIN), ("ffprobe", FFPROBE_BIN)):
+        try:
+            r = subprocess.run([binary, "-hide_banner", "-version"], capture_output=True, text=True, timeout=20)
+        except FileNotFoundError:
+            return f"{name} 없음({binary}) — 맥미니에 ffmpeg 가 설치돼 있지 않습니다(`brew install ffmpeg`)."
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"{name} 확인 실패: {str(e)[:160]}"
+        if r.returncode != 0:
+            return _tool_failure(name, r.returncode, (r.stderr or "") + (r.stdout or ""), tail=200)
+    return None
 
 
 def _cover(im: Image.Image, w: int, h: int) -> Image.Image:

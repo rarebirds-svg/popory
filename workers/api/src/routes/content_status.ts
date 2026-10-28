@@ -68,6 +68,10 @@ export function summarizeRuntime(json: string | null, reportedAt: number | null,
   const loaded = str(r.loaded_commit), head = str(r.head_commit), branch = str(r.branch);
   const behind = (r.behind ?? {}) as { state?: unknown; count?: unknown; worker_files?: unknown };
   const warnings: string[] = [];
+  // 영상 도구(ffmpeg·ffprobe)가 실행되지 않으면 영상·쇼츠가 전부 실패한다(2026-10-27 Homebrew 가 x265 를 올려 링크가 깨졌다).
+  // 다른 경고보다 먼저 — 이게 고장이면 나머지는 의미가 없다.
+  const media = str(r.media_problem);
+  if (media) warnings.push(`영상 도구 고장: ${media}`);
   if (r.pulled_not_restarted === true) {
     warnings.push(`pull 은 됐지만 워커가 재시작되지 않았습니다 (실행 중 ${loaded ?? "?"} → 디스크 ${head ?? "?"}). 재시작하세요.`);
   }

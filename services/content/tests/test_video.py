@@ -2,6 +2,7 @@
 import io
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -1349,3 +1350,57 @@ def test_scene_clips_use_pcm_audio_without_shortest(monkeypatch, tmp_path):
         assert c[c.index("-c:a") + 1] == "pcm_s16le" and "-shortest" not in c and "[aout]" in c
     join = [c for c in cmds if any(str(x).endswith("joined.mkv") for x in c)]
     assert join and join[0][join[0].index("-c:a") + 1] == "pcm_s16le"
+
+
+# ---- 영상 도구(ffmpeg·ffprobe) 고장: 원인이 보이는 메시지, 생성 전 확인 ----
+
+DYLD_STDERR = ("dyld[1234]: Library not loaded: /opt/homebrew/opt/x265/lib/libx265.216.dylib\n"
+               "  Referenced from: <ABC> /opt/homebrew/Cellar/ffmpeg/8.0/lib/libavcodec.62.dylib\n"
+               "  Reason: tried: '/opt/homebrew/opt/x265/lib/libx265.216.dylib' (no such file), "
+               "'/opt/homebrew/Cellar/x265/4.3/lib/libx265.216.dylib' (no such file)")
+
+
+def test_tool_failure_names_the_missing_library_and_the_fix():
+    from popory_content.video import _tool_failure
+    msg = _tool_failure("ffprobe", -6, DYLD_STDERR)
+    assert "ffprobe 실행 불가" in msg and "libx265.216.dylib" in msg
+    assert "brew upgrade ffmpeg" in msg
+    assert "mebrew/opt" not in msg                     # 예전처럼 잘린 경로 꼬리가 아니다
+
+
+def test_tool_failure_finds_the_library_even_when_the_head_line_was_cut():
+    from popory_content.video import _tool_failure
+    cut = DYLD_STDERR[DYLD_STDERR.index("Reason"):]     # "Library not loaded" 줄이 잘린 경우
+    msg = _tool_failure("ffprobe", -6, "dyld: " + cut)
+    assert "libx265.216.dylib" in msg
+
+
+def test_tool_failure_keeps_the_tail_for_ordinary_errors():
+    from popory_content.video import _tool_failure
+    assert _tool_failure("ffmpeg", 1, "x" * 500 + "Invalid argument", tail=50).endswith("Invalid argument")
+    assert _tool_failure("ffmpeg", 1, "boom").startswith("ffmpeg exit 1: ")
+
+
+def test_duration_raises_the_readable_message(monkeypatch, tmp_path):
+    from popory_content import video
+    monkeypatch.setattr(video.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], -6, "", DYLD_STDERR))
+    with pytest.raises(video.VideoError, match="libx265.216.dylib"):
+        video._duration(tmp_path / "x.mp3")
+
+
+def test_media_tools_problem_ok_broken_and_missing(monkeypatch):
+    from popory_content import video
+    monkeypatch.setattr(video.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "ffmpeg version 8", ""))
+    assert video.media_tools_problem() is None
+
+    def broken(cmd, **k):
+        return subprocess.CompletedProcess(cmd, -6, "", DYLD_STDERR) if "ffprobe" in cmd[0] else subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(video, "FFPROBE_BIN", "/opt/homebrew/bin/ffprobe")
+    monkeypatch.setattr(video.subprocess, "run", broken)
+    assert "ffprobe 실행 불가" in video.media_tools_problem()
+
+    def missing(cmd, **k):
+        raise FileNotFoundError(cmd[0])
+    monkeypatch.setattr(video.subprocess, "run", missing)
+    assert "ffmpeg 없음" in video.media_tools_problem()

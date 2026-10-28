@@ -142,7 +142,9 @@ def build_tts_config() -> dict:
     return {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         # 설정 스냅샷과 같은 보고에 실어 보낸다(마이그레이션 없이). 워커가 어떤 코드로 도는지 — runtime_info.py 참고.
-        "runtime": runtime_info.runtime_snapshot(),
+        "runtime": {**runtime_info.runtime_snapshot(),
+                    # 영상 도구(ffmpeg·ffprobe)가 실행되는지 — Homebrew 업그레이드로 링크가 깨지면 영상 작업이 전부 실패한다.
+                    "media_problem": video.media_tools_problem()},
         "engine": {
             "provider": "Google Cloud Text-to-Speech",
             "language": tts.LANGUAGE,

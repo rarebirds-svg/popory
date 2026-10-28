@@ -987,3 +987,30 @@ def test_auth_notify_defaults_to_login_hint(monkeypatch):
     monkeypatch.setattr(worker.subprocess, "run", lambda cmd, **kw: sent.append(cmd))
     worker._notify_auth_failure()
     assert "claude /login" in sent[0][-1]
+
+
+@pytest.mark.parametrize("platform", ["youtube", "shorts"])
+def test_broken_media_tools_fail_video_jobs_before_spending_claude_and_images(monkeypatch, platform):
+    """ffmpeg·ffprobe 가 고장이면 대본·이미지를 만들기 전에 원인과 함께 실패한다 — 예전엔 다 만든 뒤 끝에서 죽었다."""
+    calls = []
+    monkeypatch.setattr(worker, "make_video", lambda **kw: calls.append("make_video"))
+    monkeypatch.setattr(worker, "media_tools_problem",
+                        lambda: "ffprobe 실행 불가 — 영상 도구 라이브러리 누락(libx265.216.dylib).")
+    client = FakeClient({"job": {"id": "v1", "topic": "t", "platform": platform, "params_json": None},
+                         "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    assert calls == []                                   # 생성 자체를 시작하지 않았다
+    path, body = client.patched[-1]
+    assert body["status"] == "failed" and "libx265.216.dylib" in body["error"]
+    assert client.released == []                         # 기다려도 안 풀리니 큐로 돌려주지 않는다
+
+
+def test_blog_jobs_do_not_check_media_tools(monkeypatch):
+    def boom():
+        raise AssertionError("블로그 작업은 영상 도구를 확인하지 않는다")
+    monkeypatch.setattr(worker, "media_tools_problem", boom)
+    monkeypatch.setattr(worker, "generate", lambda **kw: ("<p>본문</p>", {"title": "T"}))
+    monkeypatch.setattr(worker, "review_blog", lambda d, m, **kw: (d, m), raising=False)
+    client = FakeClient({"job": {"id": "b1", "topic": "t", "platform": "naver-blog"}, "sources": [], "style_samples": []})
+    worker.run_once(client)
+    assert "영상 도구를 확인하지 않는다" not in str(client.patched)   # boom 이 불렸다면 그 메시지로 실패했을 것이다
