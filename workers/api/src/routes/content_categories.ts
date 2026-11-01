@@ -21,13 +21,19 @@ export function mountContentCategories(app: Hono<{ Bindings: Env; Variables: Var
   app.get("/api/content/categories", async (c) => {
     const unauth = requireAuth(c); if (unauth) return unauth;
     const u = c.get("user")!;
+    // 인스타는 카테고리별 연결 기능이 없고 업로드도 계정 연결(instagram_connections)을 쓴다. 그래서 카테고리 칸
+    // (마이그레이션 0013, 쓰는 곳 없음)이 비면 계정 연결을 보여 준다. 유튜브는 카테고리별 채널로 올리므로
+    // 계정 연결로 대신하지 않는다.
     const { results } = await c.env.DB.prepare(
       `SELECT c.id, c.name, c.slug, c.icon, c.sort_order,
-              c.youtube_channel_id, c.youtube_channel_title, c.instagram_account_id, c.instagram_username, c.created_at,
+              c.youtube_channel_id, c.youtube_channel_title,
+              COALESCE(c.instagram_account_id, ic.ig_user_id) AS instagram_account_id,
+              COALESCE(c.instagram_username, ic.username) AS instagram_username, c.created_at,
               (SELECT COUNT(*) FROM content_topics t WHERE t.category_id=c.id) AS topic_count,
               (SELECT COUNT(*) FROM content_jobs j WHERE j.category_id=c.id AND j.topic_id IS NULL) AS job_count,
               (SELECT COUNT(*) FROM content_jobs j WHERE j.category_id=c.id AND j.status IN ('queued','running')) AS running_count
-       FROM content_categories c WHERE c.owner_sub=? ORDER BY c.sort_order, c.created_at`,
+       FROM content_categories c LEFT JOIN instagram_connections ic ON ic.sub=c.owner_sub
+       WHERE c.owner_sub=? ORDER BY c.sort_order, c.created_at`,
     ).bind(u.sub).all();
     return c.json({ categories: results });
   });

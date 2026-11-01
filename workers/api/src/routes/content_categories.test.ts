@@ -18,6 +18,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM content_topics");
   await env.DB.exec("DELETE FROM content_jobs");
   await env.DB.exec("DELETE FROM youtube_connections");
+  await env.DB.exec("DELETE FROM instagram_connections");
 });
 
 describe("카테고리 채널 폴백", () => {
@@ -42,6 +43,27 @@ describe("카테고리 채널 폴백", () => {
     const list = await (await SELF.fetch("https://e.com/api/content/categories", { headers: { cookie: ck } })).json<{ categories: { youtube_channel_title: string | null; youtube_channel_id: string | null }[] }>();
     expect(list.categories[0].youtube_channel_title).toBe("포포리 책방");
     expect(list.categories[0].youtube_channel_id).toBe("UCx");
+  });
+});
+
+describe("카테고리 인스타 표시 — 계정 연결", () => {
+  it("카테고리 칸이 비어 있으면 계정의 인스타 연결(username)을 보여 준다", async () => {
+    const ck = await userCookie("u1", "u1@e.com");
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO instagram_connections (sub,ig_user_id,username,enc_token,connected_at) VALUES ('u1','ig1','popory_books','enc',1)").run();
+    const list = await (await SELF.fetch("https://e.com/api/content/categories", { headers: { cookie: ck } })).json<{ categories: { instagram_username: string | null; instagram_account_id: string | null }[] }>();
+    expect(list.categories[0]!.instagram_username).toBe("popory_books");
+    expect(list.categories[0]!.instagram_account_id).toBe("ig1");
+  });
+
+  it("인스타 연결이 없으면 null, 다른 계정의 연결은 보이지 않는다", async () => {
+    const ck = await userCookie("u1", "u1@e.com");
+    await userCookie("u2", "u2@e.com");
+    await env.DB.prepare("INSERT INTO content_categories (id,owner_sub,name,slug,sort_order,created_at,updated_at) VALUES ('c1','u1','책','book-review',0,1,1)").run();
+    await env.DB.prepare("INSERT INTO instagram_connections (sub,ig_user_id,username,enc_token,connected_at) VALUES ('u2','ig2','someone_else','enc',1)").run();
+    const list = await (await SELF.fetch("https://e.com/api/content/categories", { headers: { cookie: ck } })).json<{ categories: { instagram_username: string | null }[] }>();
+    expect(list.categories).toHaveLength(1);
+    expect(list.categories[0]!.instagram_username).toBeNull();
   });
 });
 
