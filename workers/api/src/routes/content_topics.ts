@@ -154,7 +154,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     if (!topic || topic.owner_sub !== u.sub) return c.text("not found", 404);
     const parsed = TopicAddJobsSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.text(zodDetail(parsed.error), 400);
-    const { platforms, style_profile_id } = parsed.data;
+    const { platforms: requested, style_profile_id } = parsed.data;
     if (style_profile_id) {
       const sp = await c.env.DB.prepare("SELECT id FROM style_profiles WHERE id=? AND owner_sub=?")
         .bind(style_profile_id, u.sub).first();
@@ -168,6 +168,40 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
     const stmts: D1PreparedStatement[] = [];
     const addedJobIds: string[] = [];
     const skippedPlatforms: string[] = [];
+    const updatedJobIds: string[] = [];
+
+    // 인스타그램 릴스는 같은 주제의 쇼츠 영상을 그대로 올린다 — 저장되는 플랫폼이 아니라 쇼츠의 업로드 대상(instagram)이다.
+    // 이미 쇼츠가 있으면 그 업로드 대상에 instagram 을 더하고, 이번 요청에 쇼츠가 같이 오면 그 쇼츠에 더하고,
+    // 둘 다 없으면 인스타 전용 쇼츠(upload_targets=["instagram"])를 만든다. 쇼츠가 이미 있는 주제에서도 릴스를 따로 고를 수 있게.
+    const reels = requested.find((p) => p.platform === "instagram-reels");
+    let platforms = requested.filter((p) => p.platform !== "instagram-reels");
+    if (reels) {
+      const shortsJob = await c.env.DB.prepare(
+        "SELECT id, params_json FROM content_jobs WHERE topic_id=? AND platform='shorts' ORDER BY created_at LIMIT 1",
+      ).bind(topicId).first<{ id: string; params_json: string | null }>();
+      if (shortsJob) {
+        let params: Record<string, unknown> = {};
+        try { params = shortsJob.params_json ? (JSON.parse(shortsJob.params_json) as Record<string, unknown>) : {}; } catch { params = {}; }
+        const targets = Array.isArray(params.upload_targets) ? (params.upload_targets as string[]) : [];
+        // 업로드 대상이 비어 있으면 예전 규칙상 전부(인스타 포함)다 — 이미 릴스로 올릴 수 있다.
+        if (targets.length === 0 || targets.includes("instagram")) {
+          skippedPlatforms.push("instagram-reels");
+        } else {
+          stmts.push(c.env.DB.prepare("UPDATE content_jobs SET params_json=?, updated_at=? WHERE id=?")
+            .bind(JSON.stringify({ ...params, upload_targets: [...targets, "instagram"] }), now, shortsJob.id));
+          updatedJobIds.push(shortsJob.id);
+        }
+      } else {
+        const inRequest = platforms.find((p) => p.platform === "shorts");
+        if (inRequest) {
+          const t = inRequest.options?.upload_targets ?? [];
+          inRequest.options = { ...(inRequest.options ?? {}), upload_targets: t.includes("instagram") ? t : [...t, "instagram"] };
+        } else {
+          platforms = [...platforms, { platform: "shorts", options: { ...(reels.options ?? {}), upload_targets: ["instagram"] } }];
+        }
+      }
+    }
+
     for (const p of platforms) {
       if (present.has(p.platform)) { skippedPlatforms.push(p.platform); continue; }
       present.add(p.platform); // 같은 요청 내 중복도 1회만
@@ -182,7 +216,7 @@ export function mountContentTopics(app: Hono<{ Bindings: Env; Variables: Vars }>
       addedJobIds.push(jobId);
     }
     if (stmts.length > 0) await withD1Retry(() => c.env.DB.batch(stmts));
-    return c.json({ added_job_ids: addedJobIds, skipped_platforms: skippedPlatforms }, 201);
+    return c.json({ added_job_ids: addedJobIds, skipped_platforms: skippedPlatforms, updated_job_ids: updatedJobIds }, 201);
   });
 
   app.delete("/api/content/topics/:id", async (c) => {

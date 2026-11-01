@@ -214,14 +214,17 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
               <YoutubeUpload jobId={job.id} connected={ytConnected} initialStatus={job.youtube_status} initialVideoId={job.youtube_video_id} initialError={job.youtube_error} />
             )}
             {job.platform === "shorts" && (uploadTargets.includes("instagram") || uploadTargets.length === 0) && (
-              <InstagramUpload
-                jobId={job.id}
-                platform={job.platform}
-                connected={igConnected}
-                initialStatus={job.instagram_status}
-                initialMediaId={job.instagram_media_id}
-                initialError={job.instagram_error}
-              />
+              // 주제 화면의 '인스타그램 릴스' 카드가 #instagram 으로 바로 내려온다(릴스 = 이 쇼츠 영상).
+              <div id="instagram" className="scroll-mt-20">
+                <InstagramUpload
+                  jobId={job.id}
+                  platform={job.platform}
+                  connected={igConnected}
+                  initialStatus={job.instagram_status}
+                  initialMediaId={job.instagram_media_id}
+                  initialError={job.instagram_error}
+                />
+              </div>
             )}
             {job.platform === "shorts" && uploadTargets.includes("facebook") && (
               <FacebookUpload
