@@ -875,7 +875,11 @@ def _xfade_graph(durations: list[float], td: float = XFADE_TD) -> tuple[str, str
         parts.append(
             f"[{v_prev}][{i}:v]xfade=transition=fade:duration={td}:offset={off:.3f}[{v_out}]"
         )
-        parts.append(f"[{a_prev}][{i}:a]acrossfade=d={td}[{a_out}]")
+        # 다음 클립 오디오는 페이드인하지 않는다(c2=nofade) — 장면 첫 발화가 클립 맨 앞(40ms 여유)에서 시작해, 기본 tri
+        # 곡선이면 첫 음절이 0부터 0.4초에 걸쳐 커져 '장면이 바뀔 때마다 첫 단어가 작게' 들렸다(40ms -15dB, 200ms -5dB).
+        # 앞 클립 끝은 장면 사이 무음(CHAPTER_GAP)이나 다 줄인 카드 차임이라 겹쳐도 소리가 포개지지 않는다. 겹침 길이는
+        # 그대로라 영상·자막 시점은 바뀌지 않는다.
+        parts.append(f"[{a_prev}][{i}:a]acrossfade=d={td}:c1=tri:c2=nofade[{a_out}]")
         v_prev, a_prev = v_out, a_out
         total += durations[i] - td
     return ";".join(parts), v_prev, a_prev

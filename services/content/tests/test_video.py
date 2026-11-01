@@ -315,8 +315,35 @@ def test_xfade_graph_offsets_and_labels():
     # 첫 전환 offset = 3.0-0.4 = 2.6, 둘째 = (3.0-0.4)+(4.0-0.4) = 2.6+3.6 = 6.2
     assert "offset=2.600" in graph
     assert "offset=6.200" in graph
-    assert "acrossfade=d=0.4" in graph
+    assert "acrossfade=d=0.4:c1=tri:c2=nofade" in graph       # 다음 장면 첫 단어를 페이드인하지 않는다
     assert vlabel == "v2" and alabel == "a2"
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+def test_scene_crossfade_keeps_next_scene_first_word_at_full_level(tmp_path):
+    # 2026-11-01: 장면이 바뀔 때마다 첫 단어가 작게 들렸다 — 0.4초 겹침에서 다음 클립 소리를 0부터 키웠다.
+    # 앞 클립 = 끝이 무음인 1초, 다음 클립 = 40ms 뒤 바로 말이 시작되는 1초. 겹친 뒤 첫 100ms 가 제 음량이어야 한다.
+    import math
+    import subprocess
+    from array import array
+    from popory_content.video import _xfade_graph
+    graph, _, alabel = _xfade_graph([1.0, 1.0], td=0.4)
+    afilter = [p for p in graph.split(";") if "acrossfade" in p][0]
+    pcm = subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=channel_layout=mono:sample_rate=24000:d=1",
+        "-f", "lavfi", "-i", "aevalsrc='if(gt(t,0.04),0.5*sin(2*PI*200*t),0)':s=24000:d=1",
+        "-filter_complex", afilter, "-map", f"[{alabel}]", "-f", "s16le", "-ac", "1", "-ar", "24000", "-"],
+        capture_output=True, check=True).stdout
+    s = array("h")
+    s.frombytes(pcm)
+
+    def rms(a, b):
+        seg = s[int(a * 24000):int(b * 24000)]
+        return math.sqrt(sum(x * x for x in seg) / len(seg))
+
+    start = 0.6 + 0.04                                   # 다음 클립은 0.6초에 시작(1.0 - 0.4), 말은 40ms 뒤
+    assert len(s) == pytest.approx(1.6 * 24000, abs=5)   # 겹침 길이는 그대로
+    assert 20 * math.log10(rms(start, start + 0.1) / rms(1.3, 1.5)) > -1.0
 
 
 def test_xfade_graph_single_clip_is_empty():
