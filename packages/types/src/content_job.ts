@@ -77,8 +77,14 @@ export const TopicCreateSchema = z.object({
 export type TopicCreate = z.infer<typeof TopicCreateSchema>;
 export type TopicPlatform = z.infer<typeof TopicPlatformSchema>;
 
+// 주제에 유형을 추가할 때만 쓰는 '인스타그램 릴스'. 저장되는 플랫폼이 아니다 — 릴스는 같은 주제의 쇼츠 영상을 그대로 올리므로,
+// 서버가 쇼츠의 업로드 대상에 instagram 을 더하거나(쇼츠가 없으면) 인스타 전용 쇼츠를 만든다(content_topics.ts).
+export const TopicAddPlatformSchema = TopicPlatformSchema.extend({
+  platform: z.enum(["naver-blog", "youtube", "shorts", "instagram-image", "youtube-post", "instagram-reels"]),
+});
+
 export const TopicAddJobsSchema = z.object({
-  platforms: z.array(TopicPlatformSchema).min(1).max(5),
+  platforms: z.array(TopicAddPlatformSchema).min(1).max(6),
   style_profile_id: z.string().max(64).optional(),
 });
 export type TopicAddJobs = z.infer<typeof TopicAddJobsSchema>;

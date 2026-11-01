@@ -1,6 +1,6 @@
 // content_job 스키마의 zod 검증 동작.
 import { describe, it, expect } from "vitest";
-import { ContentJobCreateSchema, ContentJobResultSchema, StyleProfileCreateSchema, JobServiceCreateSchema, TopicServiceCreateSchema, TopicPlatformSchema } from "./content_job";
+import { ContentJobCreateSchema, ContentJobResultSchema, StyleProfileCreateSchema, JobServiceCreateSchema, TopicServiceCreateSchema, TopicPlatformSchema, TopicAddJobsSchema } from "./content_job";
 
 describe("ContentJobCreateSchema", () => {
   it("topic만으로 platform 기본값 적용", () => {
@@ -80,6 +80,13 @@ describe("JobServiceCreateSchema", () => {
 });
 
 describe("youtube-post platform", () => {
+  it("instagram-reels 는 주제에 유형을 추가할 때만 받는다(저장 플랫폼이 아니다)", () => {
+    expect(TopicAddJobsSchema.safeParse({ platforms: [{ platform: "instagram-reels" }] }).success).toBe(true);
+    expect(TopicPlatformSchema.safeParse({ platform: "instagram-reels" }).success).toBe(false);
+    const six = ["naver-blog", "youtube", "shorts", "instagram-image", "youtube-post", "instagram-reels"].map((platform) => ({ platform }));
+    expect(TopicAddJobsSchema.safeParse({ platforms: six }).success).toBe(true);   // 여섯 가지를 한 번에 고를 수 있다
+  });
+
   it("TopicPlatformSchema가 youtube-post 허용", () => {
     expect(TopicPlatformSchema.safeParse({ platform: "youtube-post" }).success).toBe(true);
   });

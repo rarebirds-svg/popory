@@ -306,6 +306,89 @@ describe("POST /api/content/topics/:id/jobs", () => {
   });
 });
 
+describe("POST /api/content/topics/:id/jobs — 인스타그램 릴스(쇼츠 영상 재사용)", () => {
+  async function makeTopic(ck: string, platforms: object[]) {
+    const r = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "릴스주제", platforms }),
+    });
+    return (await r.json<{ topic_id: string }>()).topic_id;
+  }
+  async function add(ck: string, topicId: string, platforms: object[]) {
+    const res = await SELF.fetch(`https://example.com/api/content/topics/${topicId}/jobs`, {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ platforms }),
+    });
+    expect(res.status).toBe(201);
+    return res.json<{ added_job_ids: string[]; skipped_platforms: string[]; updated_job_ids: string[] }>();
+  }
+  async function shortsRows(topicId: string) {
+    const { results } = await env.DB.prepare("SELECT id, params_json FROM content_jobs WHERE topic_id=? AND platform='shorts'")
+      .bind(topicId).all<{ id: string; params_json: string | null }>();
+    return results.map((r) => ({ id: r.id, targets: r.params_json ? (JSON.parse(r.params_json).upload_targets ?? []) : [] }));
+  }
+
+  it("쇼츠가 없으면 인스타 전용 쇼츠를 만든다 — 'instagram-reels' 플랫폼은 저장하지 않는다", async () => {
+    const ck = await userCookie();
+    const topicId = await makeTopic(ck, [{ platform: "naver-blog" }]);
+    const out = await add(ck, topicId, [{ platform: "instagram-reels", options: { length: "30", voice: "male", image_style: "photo" } }]);
+    expect(out.added_job_ids).toHaveLength(1);
+    const rows = await shortsRows(topicId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.targets).toEqual(["instagram"]);
+    const job = await env.DB.prepare("SELECT params_json FROM content_jobs WHERE id=?").bind(out.added_job_ids[0]).first<{ params_json: string }>();
+    expect(JSON.parse(job!.params_json).length).toBe("30");           // 고른 길이·음성은 그대로 쇼츠 옵션이 된다
+    const { results } = await env.DB.prepare("SELECT platform FROM content_jobs WHERE platform='instagram-reels'").all();
+    expect(results).toHaveLength(0);
+  });
+
+  it("쇼츠가 이미 있으면 그 쇼츠의 업로드 대상에 instagram 을 더한다(새 작업 없음)", async () => {
+    const ck = await userCookie();
+    const topicId = await makeTopic(ck, [{ platform: "shorts", options: { length: "60", upload_targets: ["youtube"] } }]);
+    const [before] = await shortsRows(topicId);
+    const out = await add(ck, topicId, [{ platform: "instagram-reels" }]);
+    expect(out.added_job_ids).toEqual([]);
+    expect(out.updated_job_ids).toEqual([before!.id]);
+    const [after] = await shortsRows(topicId);
+    expect(after!.targets).toEqual(["youtube", "instagram"]);
+    const job = await env.DB.prepare("SELECT params_json FROM content_jobs WHERE id=?").bind(before!.id).first<{ params_json: string }>();
+    expect(JSON.parse(job!.params_json).length).toBe("60");            // 기존 옵션은 지우지 않는다
+  });
+
+  it("쇼츠가 이미 인스타 대상(또는 대상 미지정=전부)이면 건너뛴다", async () => {
+    const ck = await userCookie();
+    for (const targets of [["youtube", "instagram"], undefined]) {
+      const topicId = await makeTopic(ck, [{ platform: "shorts", options: targets ? { upload_targets: targets } : undefined }]);
+      const out = await add(ck, topicId, [{ platform: "instagram-reels" }]);
+      expect(out.skipped_platforms).toEqual(["instagram-reels"]);
+      expect(out.added_job_ids).toEqual([]);
+      expect(out.updated_job_ids).toEqual([]);
+    }
+  });
+
+  it("같은 요청에 쇼츠와 릴스가 함께 오면 쇼츠 하나에 instagram 을 더한다", async () => {
+    const ck = await userCookie();
+    const topicId = await makeTopic(ck, [{ platform: "naver-blog" }]);
+    const out = await add(ck, topicId, [
+      { platform: "shorts", options: { upload_targets: ["youtube", "facebook"] } },
+      { platform: "instagram-reels" },
+    ]);
+    expect(out.added_job_ids).toHaveLength(1);
+    const rows = await shortsRows(topicId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.targets).toEqual(["youtube", "facebook", "instagram"]);
+  });
+
+  it("주제를 처음 만들 때는 'instagram-reels' 를 받지 않는다(저장 플랫폼이 아니다)", async () => {
+    const ck = await userCookie();
+    const r = await SELF.fetch("https://example.com/api/content/topics", {
+      method: "POST", headers: { cookie: ck, "content-type": "application/json" },
+      body: JSON.stringify({ topic: "x", platforms: [{ platform: "instagram-reels" }] }),
+    });
+    expect(r.status).toBe(400);
+  });
+});
+
 describe("POST /api/content/topics — category_id 상속", () => {
   it("자식 잡이 토픽의 category_id를 상속한다", async () => {
     const ck = await userCookie();

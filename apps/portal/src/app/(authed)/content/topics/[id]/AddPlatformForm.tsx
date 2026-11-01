@@ -1,5 +1,7 @@
 "use client";
 // 주제 상세에서 아직 없는 컨텐츠 유형(플랫폼)을 추가하는 폼.
+// 인스타그램은 따로 묶는다 — 릴스는 같은 주제의 쇼츠 영상을 그대로 올리고(서버가 'instagram-reels' 를 쇼츠 업로드 대상으로 바꾼다),
+// 캐러셀(카드뉴스)은 별도 이미지 작업이다.
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/env";
@@ -11,8 +13,8 @@ const CHECK_DISABLED = "flex items-center gap-2 text-sm text-popory-muted opacit
 
 interface StyleProfile { id: string; name: string; }
 
-export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
-  topicId: string; existingPlatforms: string[]; profiles: StyleProfile[];
+export function AddPlatformForm({ topicId, existingPlatforms, hasReels, profiles }: {
+  topicId: string; existingPlatforms: string[]; hasReels: boolean; profiles: StyleProfile[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -25,17 +27,18 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   const shortsDisabled = present.has("shorts");
   const instaImageDisabled = present.has("instagram-image");
   const ytPostDisabled = present.has("youtube-post");
-  const allPresent = naverDisabled && youtubeDisabled && shortsDisabled && instaImageDisabled && ytPostDisabled;
+  const reelsDisabled = hasReels;
+  const allPresent = naverDisabled && youtubeDisabled && shortsDisabled && instaImageDisabled && ytPostDisabled && reelsDisabled;
 
   const [styleId, setStyleId] = useState("");
   const [naverBlog, setNaverBlog] = useState(false);
   const [youtube, setYoutube] = useState(false);
   const [shorts, setShorts] = useState(false);
   const [shToYoutube, setShToYoutube] = useState(true);
-  const [shToInsta, setShToInsta] = useState(true);
   const [shToFacebook, setShToFacebook] = useState(true);
   const [instaImage, setInstaImage] = useState(false);
   const [ytPost, setYtPost] = useState(false);
+  const [reels, setReels] = useState(false);
 
   const [ytLength, setYtLength] = useState<"3"|"5"|"7"|"10">("5");
   const [ytVoice, setYtVoice] = useState<"female-calm"|"female-bright"|"male">("female-calm");
@@ -45,13 +48,15 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
   const [shStyle, setShStyle] = useState<"photo"|"illust"|"watercolor"|"minimal">("photo");
   const [slideCount, setSlideCount] = useState(7);
 
-  const showShorts = shorts;
-  const noneSelected = !naverBlog && !youtube && !shorts && !instaImage && !ytPost;
+  // 쇼츠가 아직 없는 주제에서 릴스만 고르면 릴스용 쇼츠를 새로 만든다 — 그때도 길이·목소리·배경을 고를 수 있어야 한다.
+  const reelsMakesShorts = reels && !shortsDisabled && !shorts;
+  const showShorts = shorts || reelsMakesShorts;
+  const noneSelected = !naverBlog && !youtube && !shorts && !instaImage && !ytPost && !reels;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (noneSelected) { setErr({ message: "하나 이상의 유형을 선택해 주세요.", detail: "", retryable: false }); return; }
-    if (shorts && !shToYoutube && !shToInsta && !shToFacebook) { setErr({ message: "쇼츠 업로드 대상을 하나 이상 선택해 주세요.", detail: "", retryable: false }); return; }
+    if (shorts && !shToYoutube && !shToFacebook && !reels) { setErr({ message: "쇼츠 업로드 대상(유튜브·페이스북)이나 인스타그램 릴스를 하나 이상 선택해 주세요.", detail: "", retryable: false }); return; }
     setErr(null);
     setSubmitting(true);
     try {
@@ -61,9 +66,14 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
       if (shorts) {
         const targets: string[] = [];
         if (shToYoutube) targets.push("youtube");
-        if (shToInsta) targets.push("instagram");
         if (shToFacebook) targets.push("facebook");
+        // 인스타그램은 아래 '인스타그램 릴스' 로 고른다(같이 고르면 서버가 이 쇼츠에 instagram 을 더한다).
         platforms.push({ platform: "shorts", options: { length: shLength, voice: shVoice, image_style: shStyle, upload_targets: targets } });
+      }
+      if (reels) {
+        platforms.push(reelsMakesShorts
+          ? { platform: "instagram-reels", options: { length: shLength, voice: shVoice, image_style: shStyle } }
+          : { platform: "instagram-reels" });
       }
       if (instaImage) platforms.push({ platform: "instagram-image", options: { slide_count: slideCount } });
       if (ytPost) platforms.push({ platform: "youtube-post" });
@@ -75,7 +85,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
         body: JSON.stringify({ platforms, style_profile_id: styleId || undefined }),
       });
       if (!res.ok) { setErr(friendlyError(res.status, (await res.text()).slice(0, 200))); return; }
-      setNaverBlog(false); setYoutube(false); setShorts(false); setInstaImage(false); setYtPost(false);
+      setNaverBlog(false); setYoutube(false); setShorts(false); setInstaImage(false); setYtPost(false); setReels(false);
       startTransition(() => router.refresh());
     } catch (e) {
       setErr({ message: "네트워크 연결을 확인하고 다시 시도해 주세요.", detail: String(e).slice(0, 200), retryable: true });
@@ -116,15 +126,27 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
         </label>
         <label className={shortsDisabled ? CHECK_DISABLED : CHECK_LABEL}>
           <input type="checkbox" checked={shorts} disabled={shortsDisabled} onChange={(e) => setShorts(e.target.checked)} />
-          쇼츠 영상{shortsDisabled ? " (이미 있음)" : <span className="text-popory-muted"> · 유튜브·인스타·페이스북 업로드</span>}
-        </label>
-        <label className={instaImageDisabled ? CHECK_DISABLED : CHECK_LABEL}>
-          <input type="checkbox" checked={instaImage} disabled={instaImageDisabled} onChange={(e) => setInstaImage(e.target.checked)} />
-          인스타 이미지 (캐러셀){instaImageDisabled && " (이미 있음)"}
+          쇼츠 영상{shortsDisabled ? " (이미 있음)" : <span className="text-popory-muted"> · 유튜브·페이스북 업로드</span>}
         </label>
         <label className={ytPostDisabled ? CHECK_DISABLED : CHECK_LABEL}>
           <input type="checkbox" checked={ytPost} disabled={ytPostDisabled} onChange={(e) => setYtPost(e.target.checked)} />
           유튜브 게시물{ytPostDisabled ? " (이미 있음)" : <span className="text-popory-muted"> · 오늘의 한 문장</span>}
+        </label>
+      </div>
+
+      <div className="space-y-2 rounded-md border border-popory-border p-3">
+        <p className="text-xs font-semibold text-popory-muted">인스타그램</p>
+        <label className={reelsDisabled ? CHECK_DISABLED : CHECK_LABEL}>
+          <input type="checkbox" checked={reels} disabled={reelsDisabled} onChange={(e) => setReels(e.target.checked)} />
+          인스타그램 릴스{reelsDisabled ? " (이미 있음)" : (
+            <span className="text-popory-muted">
+              {shortsDisabled ? " · 이 주제의 쇼츠 영상을 그대로 올립니다" : " · 쇼츠 영상을 만들어 릴스로 올립니다"}
+            </span>
+          )}
+        </label>
+        <label className={instaImageDisabled ? CHECK_DISABLED : CHECK_LABEL}>
+          <input type="checkbox" checked={instaImage} disabled={instaImageDisabled} onChange={(e) => setInstaImage(e.target.checked)} />
+          인스타그램 캐러셀 (카드뉴스){instaImageDisabled && " (이미 있음)"}
         </label>
       </div>
 
@@ -156,24 +178,22 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
 
       {showShorts && (
         <div className="rounded-md border border-popory-border p-3 space-y-3">
-          <p className="text-xs font-semibold text-popory-muted">쇼츠 옵션</p>
-          <div>
-            <span className="block text-xs text-popory-muted mb-1.5">업로드 대상</span>
-            <div className="flex gap-4">
-              <label className={CHECK_LABEL}>
-                <input type="checkbox" checked={shToYoutube} onChange={(e) => setShToYoutube(e.target.checked)} />
-                유튜브
-              </label>
-              <label className={CHECK_LABEL}>
-                <input type="checkbox" checked={shToInsta} onChange={(e) => setShToInsta(e.target.checked)} />
-                인스타
-              </label>
-              <label className={CHECK_LABEL}>
-                <input type="checkbox" checked={shToFacebook} onChange={(e) => setShToFacebook(e.target.checked)} />
-                페이스북
-              </label>
+          <p className="text-xs font-semibold text-popory-muted">{shorts ? "쇼츠 옵션" : "릴스용 쇼츠 옵션"}</p>
+          {shorts && (
+            <div>
+              <span className="block text-xs text-popory-muted mb-1.5">업로드 대상 <span className="text-popory-muted">(인스타그램은 &lsquo;인스타그램 릴스&rsquo;로 고르세요)</span></span>
+              <div className="flex gap-4">
+                <label className={CHECK_LABEL}>
+                  <input type="checkbox" checked={shToYoutube} onChange={(e) => setShToYoutube(e.target.checked)} />
+                  유튜브
+                </label>
+                <label className={CHECK_LABEL}>
+                  <input type="checkbox" checked={shToFacebook} onChange={(e) => setShToFacebook(e.target.checked)} />
+                  페이스북
+                </label>
+              </div>
             </div>
-          </div>
+          )}
           <div className="grid grid-cols-3 gap-3">
             <label className="block">
               <span className="block text-xs text-popory-muted mb-1">길이</span>
@@ -199,7 +219,7 @@ export function AddPlatformForm({ topicId, existingPlatforms, profiles }: {
 
       {instaImage && (
         <div className="rounded-md border border-popory-border p-3">
-          <p className="text-xs font-semibold text-popory-muted mb-2">인스타 이미지 옵션</p>
+          <p className="text-xs font-semibold text-popory-muted mb-2">인스타그램 캐러셀 옵션</p>
           <label className="block">
             <span className="block text-xs text-popory-muted mb-1">슬라이드 수 ({slideCount}장)</span>
             <input type="range" min={3} max={10} value={slideCount} onChange={(e) => setSlideCount(Number(e.target.value))} className="w-full" />
