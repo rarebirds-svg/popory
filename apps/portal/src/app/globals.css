@@ -4,4 +4,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 자체 호스팅 폰트(@fontsource, layout.tsx 에서 import)의 글꼴 이름. tailwind fontFamily 가 이 변수를 쓴다. */
+:root {
+  --font-serif: "Fraunces";
+  --font-sans: "Inter";
+  --font-sans-kr: "Noto Sans KR";
+}
+
 html, body { background: var(--popory-bg); color: var(--popory-fg); }
