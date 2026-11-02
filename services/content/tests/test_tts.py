@@ -324,6 +324,19 @@ def test_synthesize_uses_ssml_and_rate(monkeypatch):
     assert payload["voice"]["name"] == "ko-KR-Chirp3-HD-Aoede"
 
 
+@responses.activate
+def test_synthesize_rate_overrides_the_default(monkeypatch):
+    """비교 도구(tools/chapter_voices.py)가 후보 계열의 말속도(Chirp3-HD 1.06)로 들려줄 때 — 운영 기본값은 그대로."""
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", "k")
+    responses.add(responses.POST, tts.TTS_URL,
+                  json={"audioContent": base64.b64encode(b"x").decode()}, status=200)
+    tts.synthesize("문장이다.", voice="ko-KR-Chirp3-HD-Iapetus", rate=1.06)
+    tts.synthesize("문장이다.", voice="ko-KR-Chirp3-HD-Iapetus")
+    import json as _json
+    rates = [_json.loads(c.request.body)["audioConfig"]["speakingRate"] for c in responses.calls]
+    assert rates == [1.06, tts.SPEAKING_RATE]
+
+
 def test_speaking_rate_matches_default_voice_family():
     """말속도는 기본 남성 화자의 계열과 짝이 맞아야 한다 — 1.0=Neural2, 1.06=Chirp3-HD.
 
