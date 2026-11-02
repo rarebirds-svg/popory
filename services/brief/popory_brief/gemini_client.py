@@ -167,6 +167,13 @@ def _raise_for_status(resp: requests.Response, now: datetime.datetime) -> None:
                 exit_code=3)
         raise GeminiError(f"Gemini 쿼터 초과(429) — {detail}", exit_code=6, retryable=True,
                           is_limit=True, reset_epoch=_reset_epoch_from(resp, payload, now))
+    if code == 402:
+        # 선불(prepay) 크레딧 소진. 2026-11-01 부터 Google 이 429(billing 문구) 대신 402 로 돌려준다 —
+        # "그 외 4xx(exit 4)" 로 흘리면 모델 id 오류처럼 보이고 알림에도 원인이 안 드러났다(7개 카테고리가
+        # 이틀 동안 claude 대체로만 발행). 충전해야만 풀리므로 결제 미연결 429 와 같은 반열(exit 3)이다.
+        raise GeminiError(
+            f"Gemini 선불 크레딧 소진(402) — AI Studio(https://ai.studio/projects)에서 충전·결제 확인 필요. {detail}",
+            exit_code=3)
     if code in (401, 403):
         raise GeminiError(f"Gemini 인증 실패({code}) — API 키 확인 필요. {detail}", exit_code=3)
     if code >= 500:

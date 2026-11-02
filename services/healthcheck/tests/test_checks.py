@@ -634,6 +634,48 @@ def test_brief_run_warns_when_published_only_through_claude_fallback(tmp_path):
     assert "realestate-pick5(Gemini 응답에 candidates 없음)" in msg
 
 
+_PREPAY_402 = ('{"ts": "2026-11-02T08:20:00+09:00", "cli": "generate_brief", "status": "gemini_fail", '
+               '"category": "%s", "date": "2026-11-02", "exit_code": 3, '
+               '"error": "Gemini 선불 크레딧 소진(402) — AI Studio(https://ai.studio/projects)에서 충전·결제 확인 필요. '
+               'Your prepayment credits are depleted.", "fallback": "claude-sonnet-4-6"}')
+
+
+def test_brief_run_puts_a_shared_fallback_cause_first(tmp_path):
+    """모든 대체가 같은 원인(선불 크레딧 소진)이면 원인을 한 번만, 맨 앞에 적는다 — 요약 줄이 잘려도 보이게.
+
+    2026-11-02 알림은 "브리핑 7개 발행 — Gemini 실패 7건 Claude 대체 (geo…" 에서 잘려 원인이 안 보였다."""
+    slugs = ["geopolitics", "antitrust", "naver"]
+    lines = []
+    for slug in slugs:
+        lines.append(_PREPAY_402 % slug)
+        lines.append('{"cli": "generate_brief", "status": "ok", "category": "%s", '
+                     '"fallback": "claude-sonnet-4-6"}' % slug)
+    log = tmp_path / "d.log"
+    log.write_text("\n".join(lines + [_DONE_OK]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert msg.startswith("Gemini 선불 크레딧 소진(402) — 브리핑 7개 발행")
+    assert "Gemini 실패 3건 모두 Claude 대체 (geopolitics, antitrust, naver)" in msg
+    assert msg.count("크레딧") == 1
+
+
+def test_brief_run_lists_causes_per_slug_when_they_differ(tmp_path):
+    """원인이 카테고리마다 다르면 예전처럼 슬러그별로 적는다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        _PREPAY_402 % "geopolitics",
+        '{"cli": "generate_brief", "status": "ok", "category": "geopolitics", "fallback": "claude-sonnet-4-6"}',
+        _GEMINI_EMPTY % ("realestate-pick5", ', "fallback": "claude-sonnet-4-6"'),
+        '{"cli": "generate_brief", "status": "ok", "category": "realestate-pick5", "fallback": "claude-sonnet-4-6"}',
+        _DONE_OK,
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert msg.startswith("브리핑 7개 발행 — Gemini 실패 2건 Claude 대체")
+    assert "geopolitics(Gemini 선불 크레딧 소진(402))" in msg
+    assert "realestate-pick5(Gemini 응답에 candidates 없음)" in msg
+
+
 def test_brief_run_does_not_call_retry_recovery_a_claude_fallback(tmp_path):
     """대체가 실패한 뒤 재시도에서 Gemini 로 복구된 날은 Claude 대체가 아니다 — ok 로 끝난다."""
     log = tmp_path / "d.log"

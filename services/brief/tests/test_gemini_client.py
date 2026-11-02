@@ -387,6 +387,29 @@ def test_billing_429_is_not_treated_as_retryable_limit():
     assert "결제" in str(err)
 
 
+# 2026-11-01 실측. 선불 크레딧이 바닥나면 429 가 아니라 402 로 온다 — "그 외 4xx(exit 4)" 로 흘리면
+# 모델 id 오류처럼 보이고 알림에도 원인이 안 드러난다.
+_PREPAY_402 = {
+    "error": {
+        "code": 402,
+        "message": ("Your prepayment credits are depleted. Please go to AI Studio at "
+                    "https://ai.studio/projects to manage your project and billing. Learn more at "
+                    "https://ai.google.dev/gemini-api/docs/billing#prepay."),
+    }
+}
+
+
+def test_prepay_402_is_a_billing_failure_not_a_bad_request():
+    with pytest.raises(gc.GeminiError) as e:
+        gc._raise_for_status(_Resp(402, _PREPAY_402), NOW)
+    err = e.value
+    assert err.exit_code == 3          # 결제 미연결 429 와 같은 반열 — 충전해야 풀린다
+    assert err.is_limit is False and err.retryable is False
+    # 헬스체크는 " — " 앞부분만 원인으로 띄운다 — 거기에 '크레딧 소진' 이 들어 있어야 한다.
+    assert str(err).split(" — ")[0] == "Gemini 선불 크레딧 소진(402)"
+    assert "prepayment credits are depleted" in str(err)
+
+
 def test_rate_limit_429_with_retry_info_stays_a_limit():
     """분·일 단위 rate limit 은 details 로 회복 시각을 알려준다 — 이건 그대로 한도로 재시도."""
     payload = {"error": {"code": 429, "message": "Quota exceeded for quota metric ... billing",

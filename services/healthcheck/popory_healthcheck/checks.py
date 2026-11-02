@@ -229,21 +229,39 @@ def _cause(rec: dict) -> str:
     return err[:_CAUSE_MAX]
 
 
+def _cause_chain(records: list[dict], slug: str, *, fallback_only: bool = False) -> str:
+    """한 카테고리의 실패 원인을 시간순으로 이어 붙인다. 같은 원인이 반복되면 한 번만 적는다."""
+    seen: list[str] = []
+    for rec in records:
+        if rec.get("category") != slug or not str(rec.get("status", "")).endswith("_fail"):
+            continue
+        if fallback_only and not rec.get("fallback"):
+            continue
+        c = _cause(rec)
+        if c and c not in seen:
+            seen.append(c)
+    return " → ".join(seen)
+
+
 def _causes_by_slug(records: list[dict], slugs: list[str], *, fallback_only: bool = False) -> str:
-    """카테고리별 실패 원인을 시간순으로 이어 붙인다. 같은 원인이 반복되면 한 번만 적는다."""
+    """카테고리별 실패 원인 — "슬러그(원인 → 원인), …"."""
     parts = []
     for slug in slugs:
-        seen: list[str] = []
-        for rec in records:
-            if rec.get("category") != slug or not str(rec.get("status", "")).endswith("_fail"):
-                continue
-            if fallback_only and not rec.get("fallback"):
-                continue
-            c = _cause(rec)
-            if c and c not in seen:
-                seen.append(c)
-        parts.append(f"{slug}({' → '.join(seen)})" if seen else slug)
+        chain = _cause_chain(records, slug, fallback_only=fallback_only)
+        parts.append(f"{slug}({chain})" if chain else slug)
     return ", ".join(parts)
+
+
+def _shared_cause(records: list[dict], slugs: list[str], *, fallback_only: bool = False) -> str:
+    """여러 카테고리가 모두 같은 원인으로 실패했으면 그 원인, 아니면 빈 문자열.
+
+    키·결제처럼 공급자 쪽 공통 원인이면 카테고리마다 같은 문구가 반복돼 알림이 길어지고, 요약 줄이
+    잘려 원인이 아예 안 보였다(2026-11-02 "Gemini 실패 7건 Claude 대체 (geo…" — 실제 원인은 선불
+    크레딧 소진). 공통 원인은 한 번만, 맨 앞에 적는다."""
+    if len(slugs) < 2:
+        return ""
+    chains = {_cause_chain(records, slug, fallback_only=fallback_only) for slug in slugs}
+    return chains.pop() if len(chains) == 1 else ""
 
 
 def check_brief_run(log_path: str, mode: str = "pm", token_mode: bool = False) -> tuple[str, str]:
@@ -308,6 +326,10 @@ def _brief_run_verdict(text: str, mode: str, token_mode: bool = False) -> tuple[
                 if rec.get("status") == "ok" and rec.get("fallback") and slug not in fb_slugs:
                     fb_slugs.append(slug)
             if fb_slugs:
+                shared = _shared_cause(records, fb_slugs, fallback_only=True)
+                if shared:
+                    return ("warn", f"{shared} — 브리핑 {ok}개 발행, Gemini 실패 {len(fb_slugs)}건 모두 "
+                                    f"Claude 대체 ({', '.join(fb_slugs)})")
                 return ("warn", f"브리핑 {ok}개 발행 — Gemini 실패 {len(fb_slugs)}건 Claude 대체 "
                                 f"({_causes_by_slug(records, fb_slugs, fallback_only=True)})")
             return ("ok", f"브리핑 데일리 잡 완료 — {ok}개 발행")

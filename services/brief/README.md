@@ -171,6 +171,7 @@ ${BRIEF_DIR}/.venv/bin/python ${BRIEF_DIR}/publish_to_portal.py \
 | 429 (RetryInfo·QuotaFailure 동반) | 6 | 분·일 단위 rate limit. `Retry-After`·`retryDelay` 로 리셋 epoch 계산, 없으면 15분 뒤 |
 | 401·403 | 3 | 키 문제. stdout 에 `__BRIEF_AUTH_FAIL__=gemini` 를 남겨 run_daily 가 즉시 알린다 |
 | 429 (plan·billing) | 3 | 쿼터 미할당 — 결제 미연결 프로젝트의 키. 재시도로 안 풀리므로 위와 같이 즉시 알린다 |
+| 402 | 3 | 선불(prepay) 크레딧 소진. AI Studio 에서 충전해야 풀린다(2026-11-01 실측, 전에는 429 로 왔다) |
 | 5xx·타임아웃·네트워크 | 5 | 백오프 재시도 후 |
 | 그 외 4xx | 4 | 도구 이름·모델 id 오류 등. 서버 메시지를 로그에 싣는다 |
 | candidates 없음·본문 없음 | 5 | 백오프 재시도 후. 토큰 사용량(`thoughtsTokenCount`·`toolUsePromptTokenCount` 등)·`modelVersion`·`finishReason` 을 로그 `diag` 에 싣는다 |
