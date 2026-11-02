@@ -275,7 +275,8 @@ def voice_family(voice_name: str) -> str:
     return "기타"
 
 
-def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
+def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede", rate: "float | None" = None) -> bytes | None:
+    """한 문장 → MP3. rate 를 주면 SPEAKING_RATE 대신 쓴다(비교 도구가 후보 계열의 말속도로 들려줄 때)."""
     key = os.environ.get("GOOGLE_TTS_API_KEY")
     if not key:
         return None
@@ -285,7 +286,8 @@ def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
             json={
                 "input": {"ssml": _to_ssml(_prep_text(text))},
                 "voice": {"languageCode": LANGUAGE, "name": voice},
-                "audioConfig": {"audioEncoding": "MP3", "speakingRate": SPEAKING_RATE},
+                "audioConfig": {"audioEncoding": "MP3",
+                                "speakingRate": SPEAKING_RATE if rate is None else rate},
             },
             timeout=30,
         )

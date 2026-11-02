@@ -15,6 +15,10 @@
 #   .venv/bin/pip install mlx-audio && .venv/bin/python scripts/compare_voices.py   # Qwen 자동 포함
 #
 # 출력: ~/Downloads/popory_voice_ab/<timestamp>/ 에 MP3 + index.html(브라우저에서 바로 재생)
+#
+# 원고 한 장면(40초)만 읽는다 — 챕터가 바뀔 때 목소리가 같은지는 여기서 보이지 않는다(2026-10-05 이 도구로 고른
+# Gemini 가 10분 영상에선 챕터마다 다른 목소리였다). 화자를 바꾸기 전엔 tools/chapter_voices.py 로 롱폼 원고
+# 전체를 읽혀 챕터 경계를 들어 볼 것.
 import argparse
 import base64
 import datetime
