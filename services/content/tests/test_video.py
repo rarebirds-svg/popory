@@ -315,8 +315,70 @@ def test_xfade_graph_offsets_and_labels():
     # 첫 전환 offset = 3.0-0.4 = 2.6, 둘째 = (3.0-0.4)+(4.0-0.4) = 2.6+3.6 = 6.2
     assert "offset=2.600" in graph
     assert "offset=6.200" in graph
-    assert "acrossfade=d=0.4" in graph
+    assert "acrossfade=d=0.4:c1=tri:c2=nofade" in graph       # 다음 장면 첫 단어를 페이드인하지 않는다
     assert vlabel == "v2" and alabel == "a2"
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+def test_scene_crossfade_keeps_next_scene_first_word_at_full_level(tmp_path):
+    # 2026-11-01: 장면이 바뀔 때마다 첫 단어가 작게 들렸다 — 0.4초 겹침에서 다음 클립 소리를 0부터 키웠다.
+    # 앞 클립 = 끝이 무음인 1초, 다음 클립 = 40ms 뒤 바로 말이 시작되는 1초. 겹친 뒤 첫 100ms 가 제 음량이어야 한다.
+    import math
+    import subprocess
+    from array import array
+    from popory_content.video import _xfade_graph
+    graph, _, alabel = _xfade_graph([1.0, 1.0], td=0.4)
+    afilter = [p for p in graph.split(";") if "acrossfade" in p][0]
+    pcm = subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=channel_layout=mono:sample_rate=24000:d=1",
+        "-f", "lavfi", "-i", "aevalsrc='if(gt(t,0.04),0.5*sin(2*PI*200*t),0)':s=24000:d=1",
+        "-filter_complex", afilter, "-map", f"[{alabel}]", "-f", "s16le", "-ac", "1", "-ar", "24000", "-"],
+        capture_output=True, check=True).stdout
+    s = array("h")
+    s.frombytes(pcm)
+
+    def rms(a, b):
+        seg = s[int(a * 24000):int(b * 24000)]
+        return math.sqrt(sum(x * x for x in seg) / len(seg))
+
+    start = 0.6 + 0.04                                   # 다음 클립은 0.6초에 시작(1.0 - 0.4), 말은 40ms 뒤
+    assert len(s) == pytest.approx(1.6 * 24000, abs=5)   # 겹침 길이는 그대로
+    assert 20 * math.log10(rms(start, start + 0.1) / rms(1.3, 1.5)) > -1.0
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+def test_scene_crossfade_overlap_is_next_clip_bit_exact(tmp_path):
+    # 묶음 안 둘째 장면부터는 첫 발화가 클립 0ms 에서 시작한다(숨 끝에서 잘림). 겹침 0.4초 동안 나오는 소리가 다음
+    # 클립 원본과 샘플 하나까지 같아야 한다 — 앞 클립 끝은 장면 사이 무음이라 더해지는 것이 없다.
+    import subprocess
+    from array import array
+    from popory_content import gemini_tts
+    from popory_content.video import _xfade_graph
+    R = 24000
+    tone = lambda sec: [int(6000 * __import__("math").sin(2 * 3.14159 * 180 * t / R)) for t in range(int(sec * R))]
+    prev = array("h", tone(0.6) + [0] * int(1.4 * R))
+    nxt = array("h", tone(2.0))
+    for i in range(240):                                 # 조각처럼 첫 10ms 만 선형으로 들어간다
+        nxt[i] = int(nxt[i] * i / 240)
+    a, b = tmp_path / "a.wav", tmp_path / "b.wav"
+    gemini_tts.write_wav(prev.tobytes(), R, a)
+    gemini_tts.write_wav(nxt.tobytes(), R, b)
+    graph, _, alabel = _xfade_graph([2.0, 2.0], td=0.4)
+    afilter = [p for p in graph.split(";") if "acrossfade" in p][0]
+    pcm = subprocess.run(["ffmpeg", "-v", "error", "-i", str(a), "-i", str(b), "-filter_complex", afilter,
+                          "-map", f"[{alabel}]", "-f", "s16le", "-ac", "1", "-ar", str(R), "-"],
+                         capture_output=True, check=True).stdout
+    out = array("h")
+    out.frombytes(pcm)
+    assert len(out) == int(3.6 * R)
+    assert out[int(1.6 * R):int(2.0 * R)] == nxt[:int(0.4 * R)]
+
+
+def test_crossfade_overlaps_only_silence_or_faded_chime():
+    # c2=nofade 는 앞 클립 끝 XFADE_TD 가 무음이라는 전제에 기댄다(acrossfade 는 s16 — 소리가 겹치면 넘쳐 뒤집힌다).
+    assert _video.CHAPTER_GAP > _video.XFADE_TD
+    quiet_from = max(0.0, _video.CARD_SECONDS - _video.XFADE_TD - _video.CARD_SFX_QUIET_S)
+    assert _video.CARD_SECONDS - quiet_from >= _video.XFADE_TD
 
 
 def test_xfade_graph_single_clip_is_empty():
@@ -702,6 +764,31 @@ def test_card_clip_uses_silence_or_chime_and_matches_scene_audio_format(monkeypa
     assert m and float(m[2]) == pytest.approx(_video.CARD_SFX_FADE_S)
     assert float(m[1]) + float(m[2]) == pytest.approx(
         _video.CARD_SECONDS - _video.XFADE_TD - _video.CARD_SFX_QUIET_S, abs=1e-3)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+def test_card_chime_starts_without_click(monkeypatch, tmp_path):
+    # 장면→카드 전환은 카드 오디오를 페이드인하지 않는다(c2=nofade) — 첫 샘플이 큰 효과음이면 전환 순간 '틱' 한다.
+    import math
+    import subprocess
+    from array import array
+    from popory_content import gemini_tts
+    monkeypatch.setattr(_video, "_render_graphic_card_png",
+                        lambda card, png, portrait=False: _Image.new("RGB", (64, 36)).save(png))
+    rate = 24000
+    ring = array("h", (int(26000 * math.exp(-t / rate / 0.6) * math.cos(2 * math.pi * 1200 * t / rate))
+                       for t in range(2 * rate)))           # 첫 샘플이 최댓값인 종소리
+    chime = tmp_path / "chime.wav"
+    gemini_tts.write_wav(ring.tobytes(), rate, chime)
+    monkeypatch.setattr(_video, "CARD_SFX", chime)
+    clip = _video._card_clip({"type": "quote", "text": "x"}, 0, tmp_path)
+    pcm = subprocess.run(["ffmpeg", "-v", "error", "-i", str(clip), "-f", "s16le", "-ac", "1", "-ar", str(rate), "-"],
+                         capture_output=True, check=True).stdout
+    s = array("h")
+    s.frombytes(pcm)
+    assert abs(s[0]) < 500
+    assert max(abs(s[k + 1] - s[k]) for k in range(rate // 200)) < 10000   # 처음 5ms 안에 큰 점프가 없다
+    assert max(abs(x) for x in s[: rate // 10]) > 10000                     # 종소리 어택은 살아 있다
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
@@ -1218,6 +1305,27 @@ def _voiced_pcm(f0, seconds, rate=24000):
         ph += 2 * math.pi * f0 * (1 + 0.02 * math.sin(2 * math.pi * 3 * i / rate)) / rate
         a.append(int(5000 * sum((0.6 / h) * math.sin(h * ph) for h in range(1, 16))))
     return a.tobytes()
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+def test_filter_pieces_keeps_sentence_ends_when_rubberband_drops_tail(tmp_path):
+    # rubberband 는 입력 길이가 1024 의 배수면 끝에서 약 80ms 를 버린다(ffmpeg 6.1 실측). 예전엔 길이 비율로 다시 잘라
+    # 장면 마지막 문장 끝이 그만큼 깎였다 — 길이를 바꾸지 않는 필터는 같은 자리에서 잘라야 한다.
+    import math
+    from array import array
+    from popory_content import video
+    if not video._has_rubberband():
+        pytest.skip("ffmpeg 에 rubberband 없음")
+    spacer = int(24000 * video.SCENE_FILTER_SPACER_S)
+    n1 = 48000
+    n2 = 1024 * 100 - 3 * spacer - n1                     # 이어 붙인 길이가 1024 의 배수
+    p1, p2 = _voiced_pcm(130.0, n1 / 24000), _voiced_pcm(130.0, n2 / 24000)
+    af = "rubberband=pitch=1.059463:tempo=1.0000:transients=smooth:formant=preserved:pitchq=quality"
+    out = video._filter_pieces([p1, p2], 24000, af, tmp_path, "trunc")
+    assert [len(x) // 2 for x in out] == [n1, n2]
+    tail = array("h")
+    tail.frombytes(out[1][-2 * 2400:-2 * 720])             # 끝 30ms 페이드 앞 70ms
+    assert math.sqrt(sum(x * x for x in tail) / len(tail)) > 1000            # 마지막 문장 끝이 살아 있다
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")

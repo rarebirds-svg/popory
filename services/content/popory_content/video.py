@@ -82,6 +82,9 @@ CARD_SFX = SFX_DIR / "chime.mp3"
 # 전부터는 완전히 조용하게 한다(_card_clip).
 CARD_SFX_FADE_S = 1.0
 CARD_SFX_QUIET_S = 0.3
+# 장면→카드 전환은 카드 오디오를 페이드인하지 않으므로(_xfade_graph c2=nofade) 첫 샘플이 0 이 아닌 효과음이면 전환
+# 순간 '틱' 한다 — 처음 5ms 만 키워 들어간다(종소리 어택은 그대로).
+CARD_SFX_ATTACK_S = 0.005
 
 
 class VideoError(Exception):
@@ -348,7 +351,8 @@ def _card_clip(card: dict[str, Any], index: int, work: Path, portrait: bool = Fa
         # 발화 시작을 찾지 못해 첫 숨 뒤 소리를 시작으로 잡았다(로컬 재현: 카드 뒤 첫 자막 +743ms).
         end = max(0.0, seconds - XFADE_TD - CARD_SFX_QUIET_S)
         start = max(0.0, end - CARD_SFX_FADE_S)
-        afilt += f",afade=t=out:st={start:.3f}:d={max(0.05, end - start):.3f}"
+        afilt += (f",afade=t=in:d={CARD_SFX_ATTACK_S}"
+                  f",afade=t=out:st={start:.3f}:d={max(0.05, end - start):.3f}")
     else:
         audio_in = ["-f", "lavfi", "-i", f"anullsrc=channel_layout=mono:sample_rate={AUDIO_RATE}"]
     afilt += "[a]"
@@ -875,7 +879,12 @@ def _xfade_graph(durations: list[float], td: float = XFADE_TD) -> tuple[str, str
         parts.append(
             f"[{v_prev}][{i}:v]xfade=transition=fade:duration={td}:offset={off:.3f}[{v_out}]"
         )
-        parts.append(f"[{a_prev}][{i}:a]acrossfade=d={td}[{a_out}]")
+        # 다음 클립 오디오는 페이드인하지 않는다(c2=nofade) — 장면 첫 발화는 클립 맨 앞에서 시작한다(묶음 첫 장면만 40ms
+        # 여유, 나머지는 숨 끝에서 잘려 0ms). 기본 tri 곡선이면 첫 음절이 0부터 0.4초에 걸쳐 커져 '장면이 바뀔 때마다 첫
+        # 단어가 작게' 들렸다(0ms 시작 기준 첫 50ms -23dB, 100ms 까지 -15dB, 200ms 까지 -7dB).
+        # 앞 클립 끝은 장면 사이 무음(CHAPTER_GAP)이나 다 줄인 카드 차임이라 겹쳐도 소리가 포개지지 않는다. 겹침 길이는
+        # 그대로라 영상·자막 시점은 바뀌지 않는다.
+        parts.append(f"[{a_prev}][{i}:a]acrossfade=d={td}:c1=tri:c2=nofade[{a_out}]")
         v_prev, a_prev = v_out, a_out
         total += durations[i] - td
     return ";".join(parts), v_prev, a_prev
@@ -1243,6 +1252,11 @@ def _gemini_scene_audio(scenes: list[dict[str, Any]], voice: str, work: Path,
         nonlocal requests_made
         pcm, rate = gemini_tts.synthesize_scene("\n\n".join(texts[i] for i in grp), voice)
         requests_made += 1
+        # 응답 원본을 남긴다 — 모델의 자연 숨 길이·장면별 목소리를 나중에 요청 없이 다시 잴 수 있게(작업 폴더라 곧 지워진다)
+        try:
+            gemini_tts.write_wav(pcm, rate, work / f"gemini_req_{requests_made}.wav")
+        except OSError:
+            pass
         return pcm, rate
 
     try:
@@ -1317,15 +1331,29 @@ def _filter_pieces(pieces: "list[bytes]", rate: int, af: str, work: Path, tag: s
     got = _match_voice(pcm, rate, af, work, tag)
     if got is pcm or not got:
         return None
-    scale = (len(got) // 2) / max(1, len(pcm) // 2)
+    n_in, n_out = len(pcm) // 2, len(got) // 2
     samples = array("h")
-    samples.frombytes(got[: len(got) // 2 * 2])
+    samples.frombytes(got[: n_out * 2])
+    if _changes_length(af):
+        scale = n_out / max(1, n_in)
+    else:
+        # 길이를 바꾸지 않는 필터(음높이·셸프)는 같은 자리에서 자른다. rubberband 는 입력 길이가 1024 의 배수면 끝에서
+        # 약 80ms 를 버리는데(ffmpeg 6.1 실측), 예전처럼 길이 비율로 다시 자르면 장면 마지막 문장 끝이 그만큼 깎였다.
+        # 빠진 끝은 뒤 무음 칸(SCENE_FILTER_SPACER_S) 안이라 무음으로 채운다.
+        scale = 1.0
+        if n_out < n_in:
+            samples.extend([0] * (n_in - n_out))
     out = []
     for a, b in spans:
         piece = samples[round(a * scale):round(b * scale)]
         gemini_tts._fade(piece, rate)
         out.append(piece.tobytes())
     return out
+
+
+def _changes_length(af: str) -> bool:
+    """필터가 길이(말빠르기)를 바꾸는지 — atempo, 또는 tempo 가 1 이 아닌 rubberband."""
+    return "atempo=" in af or bool(re.search(r"rubberband=[^,]*tempo=(?!1\.0000\b)", af))
 
 
 def _speech_level(pieces: "list[bytes]", rate: int) -> tuple[float, int]:
