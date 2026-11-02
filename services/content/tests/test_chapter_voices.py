@@ -157,3 +157,82 @@ def test_dry_run_sends_nothing(monkeypatch, capsys):
     assert cv.main(["--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "장면 16개" in out and "문장 93개" in out
+
+
+def test_list_voices_sends_the_key_in_a_header_and_never_prints_it(monkeypatch):
+    """키를 쿼리에 두면 requests 오류 문구(…for url: …?key=…)에 그대로 찍힌다 — 머리글로 보내고 오류엔 상태·문구만."""
+    seen = {}
+
+    class Resp:
+        status_code = 403
+        text = '{"error": {"message": "API key not valid. Please pass a valid API key."}}'
+
+        def json(self):
+            return {"error": {"message": "API key not valid. Please pass a valid API key."}}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        seen.update(url=url, params=params, headers=headers)
+        return Resp()
+
+    monkeypatch.setattr(cv.requests, "get", fake_get)
+    with pytest.raises(cv.VoiceListError) as ei:
+        cv.list_voices("AIzaSECRET")
+    assert "AIzaSECRET" not in str(ei.value) and "403" in str(ei.value) and "not valid" in str(ei.value)
+    assert "key" not in seen["params"] and seen["headers"] == {"X-Goog-Api-Key": "AIzaSECRET"}
+
+    def boom(*a, **k):
+        raise cv.requests.ConnectionError("Max retries exceeded with url: /v1/voices?key=AIzaSECRET")
+
+    monkeypatch.setattr(cv.requests, "get", boom)
+    with pytest.raises(cv.VoiceListError) as ei:
+        cv.list_voices("AIzaSECRET")
+    assert "AIzaSECRET" not in str(ei.value)
+
+
+def test_cache_key_follows_what_is_actually_sent():
+    """정규화(숫자 읽기 등)가 같은 SSML 을 만들면 같은 키, 화자·말속도가 다르면 다른 키."""
+    k = cv.cache_key("v", 1.06, "16년 동안.")
+    assert k == cv.cache_key("v", 1.06, "16년 동안.")
+    assert k != cv.cache_key("v", 1.0, "16년 동안.") and k != cv.cache_key("w", 1.06, "16년 동안.")
+
+
+def test_context_must_be_positive():
+    with pytest.raises(SystemExit):
+        cv.main(["--dry-run", "--context", "0"])
+    with pytest.raises(SystemExit):
+        cv.main(["--dry-run", "--scenes", "20-30"])          # 16장면 원고 밖
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg 필요")
+def test_scene_subset_still_gets_the_current_video(tmp_path, monkeypatch):
+    """--scenes 로 일부만 읽어도 지금 영상의 자막은 원고 전체와 맞춘 뒤 그 장면만 잘라 쓴다. 칩은 원고의 장면 번호."""
+    scenes = cv.load_scenes(cv.DEFAULT_DRAFT)
+    sentences = cv.scene_sentences(scenes)
+    cues, t = [], 0.0
+    for sc in sentences:
+        for s in sc:
+            cues.append((t, t + 1.0, s))
+            t += 1.7
+        t += 1.0
+    total = round((t + 1.0) * cv.RATE)
+    # 문장 구간마다 소리, 나머지는 무음 — 지금 영상 흉내
+    buf = bytearray(total * 2)
+    tone = _voiced(118, 1.0)
+    for st, _, _ in cues:
+        a = round(st * cv.RATE) * 2
+        buf[a:a + len(tone)] = tone
+    ref = bytes(buf)
+    fetched = []
+    monkeypatch.setattr(cv, "fetch_reference", lambda job: (fetched.append(job), (ref, cues))[1])
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", "k")
+    monkeypatch.setattr(cv, "list_voices", lambda key: [{"name": "ko-KR-Chirp3-HD-Iapetus", "gender": "MALE"}])
+    monkeypatch.setattr(cv.tts, "synthesize", lambda text, voice, rate=None: str(len(text)).encode())
+    monkeypatch.setattr(cv, "decode_mp3", lambda d: _voiced(110, max(0.5, int(d) * 0.05)))
+    monkeypatch.setattr(cv, "OUT_ROOT", tmp_path / "root")
+    out = tmp_path / "out"
+    assert cv.main(["--voices", "iapetus", "--scenes", "3-5", "--out", str(out)]) == 0
+    assert fetched == [cv.DEFAULT_JOB]
+    page = (out / "index.html").read_text(encoding="utf-8")
+    assert 'class="ref"' in page and "맞지 않아" not in page                     # 참조 카드가 있다
+    assert "4→5" in page and "5→6" in page and "1→2" not in page            # 원고 장면 번호(3·4·5 → 사람 번호 4·5·6)
+    assert (out / "current_boundaries.mp3").exists()

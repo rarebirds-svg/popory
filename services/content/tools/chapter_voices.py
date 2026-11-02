@@ -35,7 +35,9 @@
 
 읽는 법 — 장면마다 F0(음높이)·밝기·말빠르기·음량을 재서 장면 사이 폭(최고-최저)과 이웃 장면 차이의 평균을 보인다.
   고정 화자면 음높이 폭이 1반음 안팎, 밝기 폭이 수 dB 안이어야 한다. 숫자는 보조다 — 경계 모음을 귀로 듣고 고른다.
-  지금 영상 숫자는 장면별 보정을 건 뒤의 값이다(음높이는 맞춰져 있고 밝기·말빠르기 차이가 남아 있다).
+  지금 영상 숫자는 장면별 보정을 건 뒤의 값이다(음높이·음량은 맞춰져 있고 밝기·말빠르기 차이가 남아 있다).
+  Chirp3-HD 는 운영에서도 장면 보정 없이 마스터 loudnorm 만 거치므로(장면 사이 몇 dB 차이는 그대로 남는다) 후보의
+  음량 폭이 영상에서 들릴 폭이다.
 """
 from __future__ import annotations
 
@@ -52,6 +54,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import wave
 from array import array
@@ -81,6 +84,7 @@ SCENE_GAP_S = CHAPTER_GAP - XFADE_TD
 BOUNDARY_GAP_S = 2.5      # 경계 모음에서 경계와 경계 사이(다른 경계로 넘어간다는 표시)
 TARGET_RMS_DBFS = -20.0   # 파일마다 발화 음량을 이 값으로(선형 이득 하나 — 장면 사이 차이는 그대로)
 ATTEMPTS = 3
+RETRY_WAITS = (3, 10)   # 실패한 문장을 다시 보내기 전 기다림(초) — Chirp3-HD 분당 요청 한도에 걸렸을 때 풀리게
 
 # 별칭 → (Cloud TTS 이름, 한 줄 설명). 설명은 Google 이 화자에 붙인 성격(괄호 안 원문)을 옮긴 것이다.
 # Charon 은 취향 사유로 두 번 기각됐다(options.py·SKILL.md) — 목록엔 두되 기본 후보엔 넣지 않는다.
@@ -107,14 +111,22 @@ DEFAULT_PICKS = ["iapetus", "algieba", "schedar", "sadaltager", "orus", "umbriel
 
 # --- 원고 -----------------------------------------------------------------------------------------------------
 
+def parse_range(scene_range: "str | None", n: int) -> tuple[int, int]:
+    """'0-5'·'3' → (처음, 끝) 장면 번호(0부터, 끝 포함). 없으면 전체. 범위를 벗어나면 ValueError."""
+    if not scene_range:
+        return 0, n - 1
+    a, _, b = scene_range.partition("-")
+    lo, hi = int(a), int(b or a)
+    if not 0 <= lo <= hi < n:
+        raise ValueError(f"장면 범위 {scene_range} 가 0-{n - 1} 밖이다")
+    return lo, hi
+
+
 def load_scenes(draft: Path, scene_range: "str | None" = None) -> list[dict[str, str]]:
     """포털 '전체 대본' 형식([제목] 줄 + 내레이션) → 장면 목록. scene_range 는 '0-5' 나 '3'."""
     scenes = parse_script(draft.read_text(encoding="utf-8"))
-    if scene_range:
-        a, _, b = scene_range.partition("-")
-        lo, hi = int(a), int(b or a)
-        scenes = scenes[lo:hi + 1]
-    return scenes
+    lo, hi = parse_range(scene_range, len(scenes))
+    return scenes[lo:hi + 1]
 
 
 def scene_sentences(scenes: list[dict[str, str]]) -> list[list[str]]:
@@ -129,11 +141,30 @@ def billed_chars(sentences: list[list[str]]) -> int:
 
 # --- 화자 -------------------------------------------------------------------------------------------------------
 
+class VoiceListError(Exception):
+    pass
+
+
 def list_voices(key: str) -> list[dict[str, str]]:
-    """계정에서 쓸 수 있는 ko-KR Chirp3-HD 화자(이름·성별)."""
-    resp = requests.get(VOICES_URL, params={"languageCode": "ko-KR", "key": key}, timeout=30)
-    resp.raise_for_status()
-    return [{"name": v["name"], "gender": v.get("ssmlGender", "")} for v in resp.json().get("voices", [])
+    """계정에서 쓸 수 있는 ko-KR Chirp3-HD 화자(이름·성별). 실패하면 VoiceListError(상태 코드·Google 오류 문구).
+
+    키는 머리글(X-Goog-Api-Key)로 보낸다 — 쿼리에 두면 requests 오류 문구(…for url: …?key=…)에 키가 그대로 찍힌다."""
+    try:
+        resp = requests.get(VOICES_URL, params={"languageCode": "ko-KR"}, headers={"X-Goog-Api-Key": key},
+                            timeout=30)
+    except requests.RequestException as e:
+        raise VoiceListError(f"연결 실패({type(e).__name__})") from None
+    if resp.status_code != 200:
+        try:
+            msg = str(resp.json()["error"]["message"])
+        except (ValueError, KeyError, TypeError):
+            msg = re.sub(r"\s+", " ", resp.text or "")[:200]
+        raise VoiceListError(f"{resp.status_code} {msg}".replace(key, "***"))
+    try:
+        voices = resp.json().get("voices", [])
+    except ValueError:
+        raise VoiceListError("응답이 JSON 이 아니다") from None
+    return [{"name": v["name"], "gender": v.get("ssmlGender", "")} for v in voices
             if "Chirp3-HD" in v.get("name", "")]
 
 
@@ -156,14 +187,20 @@ def resolve_picks(picks: list[str], available: "list[dict[str, str]] | None") ->
 # --- 합성 -------------------------------------------------------------------------------------------------------
 
 def decode_mp3(data: bytes) -> bytes:
-    """MP3 → 24kHz 모노 16비트 PCM(영상의 _to_wav 와 같은 변환)."""
-    r = subprocess.run([FFMPEG_BIN, "-v", "error", "-i", "pipe:0", "-f", "s16le", "-ac", "1", "-ar", str(RATE),
-                        "pipe:1"], input=data, capture_output=True, check=True)
+    """MP3 → 24kHz 모노 16비트 PCM. 영상의 _to_wav 처럼 파일로 읽는다 — 파이프로 읽으면 ffmpeg 가 LAME 헤더의
+    끝 채움 정보를 못 써서 문장마다 수십 ms 의 꼬리가 남는다."""
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "s.mp3"
+        src.write_bytes(data)
+        r = subprocess.run([FFMPEG_BIN, "-v", "error", "-i", str(src), "-f", "s16le", "-ac", "1", "-ar", str(RATE),
+                            "pipe:1"], capture_output=True, check=True)
     return r.stdout
 
 
 def cache_key(voice: str, rate: float, text: str) -> str:
-    return hashlib.sha1(f"{voice}|{rate:.3f}|{text}".encode()).hexdigest()
+    """실제로 보내는 SSML 로 센다 — 정규화·발음 사전·콤마 쉼이 바뀌면 다시 합성한다."""
+    ssml = tts._to_ssml(tts._prep_text(text))
+    return hashlib.sha1(f"{voice}|{rate:.3f}|{ssml}".encode()).hexdigest()
 
 
 def synth_sentence(text: str, voice: str, rate: float, cache: Path) -> "bytes | None":
@@ -173,12 +210,12 @@ def synth_sentence(text: str, voice: str, rate: float, cache: Path) -> "bytes | 
         return path.read_bytes()
     for attempt in range(ATTEMPTS):
         if attempt:
-            time.sleep(2 * attempt)
+            time.sleep(RETRY_WAITS[min(attempt, len(RETRY_WAITS)) - 1])
         mp3 = tts.synthesize(text, voice=voice, rate=rate)
         if mp3:
             pcm = decode_mp3(mp3)
             cache.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".part")
+            tmp = path.with_suffix(f".{os.getpid()}-{threading.get_ident()}.part")   # 같은 문장을 동시에 써도 안 겹치게
             tmp.write_bytes(pcm)
             tmp.replace(path)
             return pcm
@@ -444,12 +481,13 @@ def _num(v: "float | None", unit: str) -> str:
 def render_page(entries: list[dict], scenes: list[dict[str, str]], info: dict) -> str:
     """index.html — 화자마다 측정값 + 경계 모음(경계 칩으로 이동) + 전체 낭독."""
     caps = [s["caption"] for s in scenes]
+    first = info.get("first_scene", 0)       # --scenes 로 일부만 읽으면 칩 번호를 원고의 장면 번호에 맞춘다
     cards = []
     for n, e in enumerate(entries):
         s = e.get("measure", {}).get("summary", {})
         chips = "".join(
             f'<button onclick="seek({n},{t:.2f})" title="{html.escape(caps[k])} → {html.escape(caps[k + 1])}">'
-            f'{k + 1}→{k + 2} <small>{_fmt_t(t)}</small></button>' for t, k in e.get("marks", []))
+            f'{first + k + 1}→{first + k + 2} <small>{_fmt_t(t)}</small></button>' for t, k in e.get("marks", []))
         stats = (f"<dl><dt>음높이 폭</dt><dd>{_num(s.get('pitch_spread_st'), '반음')}</dd>"
                  f"<dt>경계 음높이 차</dt><dd>{_num(s.get('pitch_jump_st'), '반음')}</dd>"
                  f"<dt>밝기 폭</dt><dd>{_num(s.get('tilt_spread_db'), 'dB')}</dd>"
@@ -515,6 +553,13 @@ def build_entry(label: str, desc: str, pieces: list[list["bytes | None"]], sente
             "marks": marks, "missing": missing, "measure": measure(pieces, sentences)}
 
 
+def _positive_int(value: str) -> int:
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError("1 이상이어야 한다")
+    return n
+
+
 def main(argv: "list[str] | None" = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--voices", help=f"비교할 별칭 쉼표 구분(기본 {','.join(DEFAULT_PICKS)})")
@@ -523,7 +568,7 @@ def main(argv: "list[str] | None" = None) -> int:
     ap.add_argument("--job", help=f"'지금 영상' 으로 쓸 작업 ID(기본 원고면 {DEFAULT_JOB[:8]})")
     ap.add_argument("--no-reference", action="store_true", help="지금 영상을 받지 않는다")
     ap.add_argument("--rate", type=float, default=CHIRP_RATE, help=f"말속도(기본 {CHIRP_RATE} = Chirp3-HD 기준값)")
-    ap.add_argument("--context", type=int, default=1, help="경계 앞뒤로 들을 문장 수(기본 1)")
+    ap.add_argument("--context", type=_positive_int, default=1, help="경계 앞뒤로 들을 문장 수(기본 1)")
     ap.add_argument("--scenes", help="일부 장면만(예: 0-5)")
     ap.add_argument("--workers", type=int, default=4, help="동시에 보낼 요청 수")
     ap.add_argument("--out", type=Path, help="출력 폴더(기본 ~/Downloads/popory_chapter_voices/<시각>)")
@@ -535,7 +580,7 @@ def main(argv: "list[str] | None" = None) -> int:
     if key:
         try:
             available = list_voices(key)
-        except (requests.RequestException, ValueError) as e:
+        except VoiceListError as e:
             print(f"화자 목록 조회 실패 — 별칭을 그대로 믿고 진행: {e}", file=sys.stderr)
     if args.list:
         if available is None:
@@ -551,8 +596,14 @@ def main(argv: "list[str] | None" = None) -> int:
 
     picks = [p.strip().lower() for p in (args.voices.split(",") if args.voices else DEFAULT_PICKS) if p.strip()]
     voices, notes = resolve_picks(picks, available)
-    scenes = load_scenes(args.draft, args.scenes)
-    sentences = scene_sentences(scenes)
+    all_scenes = load_scenes(args.draft)
+    try:
+        lo, hi = parse_range(args.scenes, len(all_scenes))
+    except ValueError as e:
+        ap.error(str(e))
+    scenes = all_scenes[lo:hi + 1]
+    all_sentences = scene_sentences(all_scenes)   # 지금 영상 자막은 원고 전체와 맞춘 뒤 잘라 쓴다
+    sentences = all_sentences[lo:hi + 1]
     chars = billed_chars(sentences)
     n_sent = sum(len(s) for s in sentences)
     print(f"원고 {args.draft.name}: 장면 {len(scenes)}개 · 문장 {n_sent}개 · 화자당 {chars:,}자")
@@ -575,19 +626,20 @@ def main(argv: "list[str] | None" = None) -> int:
     cache = OUT_ROOT / "cache"
     entries: list[dict] = []
 
-    job = args.job or (DEFAULT_JOB if args.draft == DEFAULT_DRAFT and not args.scenes else None)
+    job = args.job or (DEFAULT_JOB if args.draft.resolve() == DEFAULT_DRAFT else None)
     if job and not args.no_reference:
         print(f"지금 영상(작업 {job[:8]}) 받는 중…")
         try:
             ref_pcm, cues = fetch_reference(job)
-            spans = map_cues(cues, sentences)
+            spans = map_cues(cues, all_sentences)
             if spans is None:
-                notes.append(f"지금 영상의 자막 {len(cues)}개가 원고 문장 {n_sent}개와 맞지 않아 경계를 자르지 못했다"
+                n_all = sum(len(s) for s in all_sentences)
+                notes.append(f"지금 영상의 자막 {len(cues)}개가 원고 문장 {n_all}개와 맞지 않아 경계를 자르지 못했다"
                              " — 다른 원고면 --job 을 그 작업으로 주세요")
             else:
-                pieces = scene_pieces_from(ref_pcm, spans)
+                pieces = scene_pieces_from(ref_pcm, spans[lo:hi + 1])
                 # 카드·차임을 빼고 문장 구간만 영상과 같은 쉼으로 다시 잇는다(후보와 같은 조건)
-                entries.append({**build_entry("지금 영상 (Gemini 3.8 Flash · Iapetus, 장면별 보정)",
+                entries.append({**build_entry("지금 영상 (Gemini 3.8 Flash · Iapetus, 장면별 음높이·밝기·음량 보정)",
                                               f"작업 {job[:8]} 완성 영상에서 같은 문장 구간을 잘라 이었다",
                                               pieces, sentences, out, "current", args.context),
                                 "reference": True})
@@ -607,8 +659,8 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"  {alias}: 파일·측정…")
         entries.append(build_entry(f"{alias} · {name}", desc, pieces, sentences, out, alias, args.context))
 
-    info = {"title": "2026-11-01 롱폼 『모리와 함께한 화요일』" if args.draft == DEFAULT_DRAFT else args.draft.stem,
-            "rate": args.rate, "made": made, "notes": notes}
+    info = {"title": "2026-11-01 롱폼 『모리와 함께한 화요일』" if args.draft.resolve() == DEFAULT_DRAFT
+            else args.draft.stem, "rate": args.rate, "made": made, "notes": notes, "first_scene": lo}
     (out / "index.html").write_text(render_page(entries, scenes, info), encoding="utf-8")
     report = {"draft": str(args.draft), "job": job, "rate": args.rate, "context": args.context, "made": made,
               "notes": notes, "entries": [{k: v for k, v in e.items() if k != "marks"} for e in entries]}
