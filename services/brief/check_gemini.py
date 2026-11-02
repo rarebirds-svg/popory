@@ -38,9 +38,14 @@ def main() -> int:
         )
     except gemini_client.GeminiError as e:
         print(f"[2/3] 호출 실패 — {e}")
-        print(f"      모델 id 를 지적하면 --model 로 바꿔 보세요 (지금: {args.model}).")
-        print(f"      검색 도구 이름을 지적하면 BRIEF_GEMINI_SEARCH_TOOL 로 교정할 수 있습니다 "
-              f"(지금: {gemini_client.SEARCH_TOOL}).")
+        if e.exit_code == 3:
+            # 키·결제 문제는 모델·도구를 바꿔도 안 풀린다 — 엉뚱한 처방을 내지 않는다.
+            print("      키·결제 문제입니다. AI Studio(https://ai.studio/projects)에서 키가 속한 프로젝트의")
+            print("      결제 연결·선불 크레딧 잔액을 확인하세요. 모델·검색 도구 설정과는 상관없습니다.")
+        else:
+            print(f"      모델 id 를 지적하면 --model 로 바꿔 보세요 (지금: {args.model}).")
+            print(f"      검색 도구 이름을 지적하면 BRIEF_GEMINI_SEARCH_TOOL 로 교정할 수 있습니다 "
+                  f"(지금: {gemini_client.SEARCH_TOOL}).")
         return e.exit_code
 
     print(f"[2/3] 호출·검색 정상 — 모델 {args.model}, 도구 {gemini_client.SEARCH_TOOL}, 응답 {len(out)}자")
