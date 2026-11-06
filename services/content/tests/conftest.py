@@ -43,3 +43,11 @@ def _media_tools_ok(monkeypatch):
     도구 고장 경로를 시험하는 테스트는 이 값을 다시 바꾼다."""
     from popory_content import worker
     monkeypatch.setattr(worker, "media_tools_problem", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_alerts(monkeypatch):
+    """인증 실패 경로를 타는 테스트가 실제 텔레그램 경보를 보내지 못하게 막는다.
+    NOTIFY_SH 는 절대경로라 임시 복사본·워크트리에서 돌려도 운영 스크립트를 부른다. /dev/null 은 bash 가 빈 스크립트로 실행한다."""
+    from popory_content import worker
+    monkeypatch.setattr(worker, "NOTIFY_SH", "/dev/null")

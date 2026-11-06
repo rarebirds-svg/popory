@@ -989,6 +989,15 @@ def test_auth_notify_defaults_to_login_hint(monkeypatch):
     assert "claude /login" in sent[0][-1]
 
 
+def test_auth_notify_under_test_never_targets_the_real_notify_script(monkeypatch):
+    """NOTIFY_SH 는 절대경로라 막지 않으면 임시 복사본·워크트리의 테스트도 실제 텔레그램 경보를 보낸다.
+    2026-11-06 test_auth_failure_reports_failed_then_exits 가 가짜 '인증 만료' 경보를 냈다."""
+    sent = []
+    monkeypatch.setattr(worker.subprocess, "run", lambda cmd, **kw: sent.append(cmd))
+    worker._notify_auth_failure()
+    assert "services/healthcheck/notify.sh" not in sent[0][1]
+
+
 @pytest.mark.parametrize("platform", ["youtube", "shorts"])
 def test_broken_media_tools_fail_video_jobs_before_spending_claude_and_images(monkeypatch, platform):
     """ffmpeg·ffprobe 가 고장이면 대본·이미지를 만들기 전에 원인과 함께 실패한다 — 예전엔 다 만든 뒤 끝에서 죽었다."""
