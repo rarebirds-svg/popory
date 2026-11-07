@@ -52,3 +52,10 @@ def test_falls_back_without_portal_base(monkeypatch):
     # 키·base 가 없는 환경(개발·테스트)에서 토큰 서명까지 가지 않는다.
     monkeypatch.delenv("POPORY_PORTAL_API_BASE", raising=False)
     assert llm_model.resolve_model("brief_issue", FALLBACK) == FALLBACK
+
+
+def test_ignores_gemini_setting(signed, monkeypatch):
+    # 포털에 gemini 행이 남아 있어도 Gemini API(선불 크레딧)를 부르지 않고 기본 claude 로 돈다.
+    monkeypatch.setattr(llm_model.requests, "get",
+                        lambda *a, **k: _Resp(200, {"models": {"brief_issue": "gemini-3.8-flash"}}))
+    assert llm_model.resolve_model("brief_issue", FALLBACK) == FALLBACK
