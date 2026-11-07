@@ -22,7 +22,7 @@ from pathlib import Path
 from popory_brief import limit_detect
 from popory_brief import gemini_client
 from popory_brief import link_check
-from popory_brief.fallback import fallback_model, restore_gemini_contract
+from popory_brief.fallback import fallback_model, fallback_skip_reason, restore_gemini_contract
 from popory_brief.response import ResponseFormatError, parse_response
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_title import date_label, normalize_title, RECOMMENDED_MAX
@@ -154,6 +154,9 @@ def _gemini_failed(e: "gemini_client.GeminiError", prompts, topic_id: str,
             restore_gemini_contract(e, 5)
             sys.exit(5)
         return _parse_or_exit(text, "claude", on_fail=lambda: restore_gemini_contract(e, 4))
+    skipped = fallback_skip_reason(CLAUDE_BIN)
+    if skipped:
+        print(f"--- Gemini 실패(exit {e.exit_code}) — claude 대체 불가: {skipped} ---", file=sys.stderr)
     if e.is_limit:
         # 쿼터는 claude 한도와 같은 규약으로 넘긴다 — retry 잡이 그대로 복구한다.
         reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())

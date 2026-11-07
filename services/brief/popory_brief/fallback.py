@@ -39,6 +39,22 @@ def fallback_model(claude_bin: str) -> str | None:
     return model
 
 
+def fallback_skip_reason(claude_bin: str) -> str:
+    """fallback_model 이 None 일 때 왜 대체를 못 하는지 — 로그·알림용 한 줄.
+
+    2026-11-07 대체 claude 가 조용히 꺼져(이유 기록 없음) 7개 카테고리가 Gemini 402 로만 실패했다.
+    대체가 왜 안 됐는지 남아 있어야 "Gemini 결제" 가 아니라 "claude 경로" 를 고치러 간다."""
+    raw = os.environ.get("BRIEF_FALLBACK_MODEL")
+    model = DEFAULT_FALLBACK_MODEL if raw is None else raw.strip()
+    if model.lower() in _OFF:
+        return "BRIEF_FALLBACK_MODEL=off 로 꺼 둠"
+    if gemini_client.is_gemini_model(model):
+        return f"BRIEF_FALLBACK_MODEL 이 Gemini 모델({model})"
+    if not Path(claude_bin).exists():
+        return f"claude CLI 없음({claude_bin})"
+    return ""
+
+
 def restore_gemini_contract(err: "gemini_client.GeminiError", fallback_code: int) -> None:
     """대체까지 실패했을 때 원래 Gemini 실패의 복구 경로를 되살린다.
 
