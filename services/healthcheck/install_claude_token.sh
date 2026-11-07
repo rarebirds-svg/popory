@@ -18,6 +18,7 @@ set -uo pipefail
 HC_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOKEN_FILE="${POPORY_CLAUDE_TOKEN_FILE:-${HOME}/.popory/claude_oauth_token}"
 CLAUDE_BIN="${CLAUDE_BIN:-/opt/homebrew/bin/claude}"
+[ -x "${CLAUDE_BIN}" ] || [ ! -x "${HOME}/.local/bin/claude" ] || CLAUDE_BIN="${HOME}/.local/bin/claude"
 [ -x "${CLAUDE_BIN}" ] || CLAUDE_BIN="$(command -v claude || true)"
 if [ -z "${CLAUDE_BIN}" ] || [ ! -x "${CLAUDE_BIN}" ]; then
   echo "claude CLI 를 찾을 수 없습니다 (CLAUDE_BIN 으로 경로를 지정하세요)."

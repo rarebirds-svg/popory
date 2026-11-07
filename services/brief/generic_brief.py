@@ -22,6 +22,7 @@ from pathlib import Path
 from popory_brief import limit_detect
 from popory_brief import gemini_client
 from popory_brief import link_check
+from popory_brief.claude_bin import find_claude_bin
 from popory_brief.fallback import fallback_model, restore_gemini_contract
 from popory_brief.response import ResponseFormatError, parse_response
 from popory_brief.llm_model import resolve_model
@@ -29,8 +30,8 @@ from popory_brief.seo_title import date_label, normalize_title, RECOMMENDED_MAX
 
 BRIEF_DIR = Path(__file__).resolve().parent
 VENV_PY = BRIEF_DIR / ".venv" / "bin" / "python"
-# 기본 claude CLI 경로. BRIEF_CLAUDE_BIN 환경변수로 오버라이드 가능(E2E 테스트용 스텁 주입).
-CLAUDE_BIN = os.environ.get("BRIEF_CLAUDE_BIN", "/opt/homebrew/bin/claude")
+# claude CLI 경로. BRIEF_CLAUDE_BIN 환경변수로 오버라이드 가능(E2E 테스트용 스텁 주입).
+CLAUDE_BIN = find_claude_bin()
 DEFAULT_MODEL = "claude-sonnet-4-6"
 # 어드민 LLM 모델 설정의 기능키. 카테고리·커스텀 주제 모두 같은 "이슈 생성" 이다.
 LLM_FEATURE = "brief_issue"

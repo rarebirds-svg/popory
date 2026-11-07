@@ -255,3 +255,42 @@ def _touch(tmp_path):
     p = tmp_path / "claude"
     p.write_text("#!/bin/sh\n")
     return p
+
+
+def _exe(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+def test_resolve_claude_bin_falls_back_when_default_path_gone(monkeypatch, tmp_path):
+    """기본 경로(/opt/homebrew/bin)가 사라져도 ~/.local/bin 등 설치 위치에서 찾는다(2026-11-07)."""
+    from popory_content import generate as g
+    monkeypatch.setattr(g, "_DEFAULT_CLAUDE_BIN", str(tmp_path / "gone" / "claude"))
+    monkeypatch.setattr(g, "CLAUDE_BIN", str(tmp_path / "gone" / "claude"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    native = _exe(tmp_path / ".local" / "bin" / "claude")
+    assert g.resolve_claude_bin() == str(native)
+
+
+def test_resolve_claude_bin_explicit_path_has_no_fallback(monkeypatch, tmp_path):
+    """POPORY_CLAUDE_BIN 처럼 명시한 경로가 없으면 다른 걸 몰래 쓰지 않고 실패한다."""
+    from popory_content import generate as g
+    monkeypatch.setattr(g, "CLAUDE_BIN", str(tmp_path / "pinned-claude"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _exe(tmp_path / ".local" / "bin" / "claude")
+    with pytest.raises(g.GenerateError, match="claude CLI not found"):
+        g.resolve_claude_bin()
+
+
+def test_run_claude_cli_once_uses_resolved_fallback(monkeypatch, tmp_path):
+    from popory_content import generate as g
+    monkeypatch.setattr(g, "_DEFAULT_CLAUDE_BIN", str(tmp_path / "gone" / "claude"))
+    monkeypatch.setattr(g, "CLAUDE_BIN", str(tmp_path / "gone" / "claude"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    native = _exe(tmp_path / ".local" / "bin" / "claude")
+    fake = _Fake(json.dumps({"result": "답", "session_id": "s"}))
+    monkeypatch.setattr(g.subprocess, "run", fake)
+    g.run_claude_cli_once(user_msg="hi", system_prompt="sys", job_id="j")
+    assert fake.cmds[0][0] == str(native)
