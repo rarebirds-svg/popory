@@ -132,6 +132,10 @@ LIMIT_FAIL_SLUGS=""     # 한도(exit 6)로 실패한 카테고리 — 자동 �
 LIMIT_FAIL_CUSTOM=""    # 한도로 실패한 커스텀 주제 id
 AUTH_FAIL_SLUGS=""      # LLM 인증 실패로 막힌 카테고리 — 사람이 고친 뒤 자동 재시도 대상
 AUTH_FAIL_PROVIDER=""   # 무엇을 고쳐야 하는지(claude=/login, gemini=API 키) — 알림 문구를 가른다
+# claude 인증 실패가 한 건이라도 있었는가. 재시도 잡이 이걸로 횟수 소모 여부를 가른다 — claude 인증은
+# 재시도 전에 프로브로 막히지만, Gemini 키·결제 실패는 막을 프로브가 없어 횟수를 안 세면 10분마다
+# 끝없이 다시 돈다(2026-11-07: 대체 claude 를 못 찾아 7개 카테고리가 13시간 동안 73번씩 재시도).
+CLAUDE_AUTH_FAILED=0
 LIMIT_RESET_MAX=0       # 수집한 reset epoch 중 최대값
 PUB_FAIL_SLUGS=""       # 생성은 됐는데 포털 발행이 실패한 카테고리 — 생성본으로 재발행 대상
 
@@ -283,6 +287,7 @@ while IFS=' ' read -r SLUG MODE; do
   AUTH_FAIL=0
   if [ -f "${OUT_FILE}" ] && grep -qE 'OAuth session expired|Failed to authenticate|Not logged in' "${OUT_FILE}"; then
     AUTH_FAIL=1
+    CLAUDE_AUTH_FAILED=1
     [ -z "${AUTH_FAIL_PROVIDER}" ] && AUTH_FAIL_PROVIDER="claude"
   fi
   # Gemini 는 CLI 가 아니라 API 키라 위 문구가 안 나온다. generate_brief 가 남기는 마커로 잡는다.
@@ -455,6 +460,7 @@ fi
 # 복구 루프가 죽는다(2026-09-04: /login 전까지 9.5시간 침묵).
 echo "__RUN_LIMIT_FAIL_CATS__=${LIMIT_CAT_CSV}"
 echo "__RUN_AUTH_FAIL_CATS__=${AUTH_CAT_CSV}"
+echo "__RUN_AUTH_FAIL_CLAUDE__=${CLAUDE_AUTH_FAILED}"
 echo "__RUN_PUBLISH_FAIL_CATS__=${PUB_CAT_CSV}"
 echo "__RUN_LIMIT_RESET__=${RETRY_AT}"
 

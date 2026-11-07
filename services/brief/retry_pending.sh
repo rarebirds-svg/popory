@@ -109,6 +109,7 @@ NEW_RESET=0
 REMAIN_CATS=""
 REMAIN_CUS=""
 AUTH_FAILED=0   # 인증 실패로 끝난 재시도 — pending 은 유지하되 retry_count 는 태우지 않는다
+GEMINI_AUTH_FAILED=0   # Gemini 키·결제 실패만 남은 재시도 — 막을 프로브가 없으니 횟수를 태운다
 
 # 1) 카테고리 재시도 — run_daily --only 정규식 1회. 발행만 실패했던 카테고리는 run_daily 가
 #    생성본을 재사용해 다시 발행한다(pubfail 마커).
@@ -139,7 +140,16 @@ if [ "${CATS}" != "-" ]; then
   # 다시 돌 주체가 없었다(2026-09-04 08:31 오기록).
   AUTH_CATS=$(echo "${OUT}" | grep -o '__RUN_AUTH_FAIL_CATS__=.*' | head -1 | cut -d= -f2-)
   if [ -n "${AUTH_CATS}" ]; then
-    AUTH_FAILED=1
+    # claude 인증 만료는 위 프로브가 다음 폴링부터 막아 주므로 횟수를 안 센다. Gemini 키·결제 실패는
+    # 막을 프로브가 없어 횟수를 안 세면 10분마다 영원히 다시 돈다 — 그때는 한도 실패처럼 횟수를 태워
+    # MAX_RETRY 뒤 포기한다(사람은 run_daily 의 즉시 알림으로 이미 불렀다). 마커가 없으면(옛 run_daily)
+    # 예전처럼 claude 로 본다.
+    CLAUDE_AUTH=$(echo "${OUT}" | grep -o '__RUN_AUTH_FAIL_CLAUDE__=[01]' | head -1 | cut -d= -f2)
+    if [ "${CLAUDE_AUTH}" = "0" ]; then
+      GEMINI_AUTH_FAILED=1
+    else
+      AUTH_FAILED=1
+    fi
     REMAIN_CATS="${REMAIN_CATS:+${REMAIN_CATS},}${AUTH_CATS}"
   fi
   # 포털 발행 실패분 — 재시도해도 발행이 안 되면 남긴다. 횟수는 소모한다(401 처럼 사람이 고쳐야
@@ -206,6 +216,8 @@ if [ -n "${REMAIN_CATS}" ] || [ -n "${REMAIN_CUS}" ]; then
     --categories "${REMAIN_CATS}" --custom "${REMAIN_CUS}" ${INC} >> "${LOG_FILE}" 2>&1
   if [ "${AUTH_FAILED}" -eq 1 ]; then
     log "\"retry blocked — claude 인증 만료, 조치 대기: ${POPORY_CLAUDE_AUTH_HINT:-터미널에서 claude /login} (cats=${REMAIN_CATS:-none})\""
+  elif [ "${GEMINI_AUTH_FAILED}" -eq 1 ]; then
+    log "\"retry incomplete — Gemini 키·결제 거부(check_gemini.py 로 확인), 횟수 $((RETRY_COUNT + 1))/${MAX_RETRY} (cats=${REMAIN_CATS:-none})\""
   else
     log "\"retry incomplete — remain cats=${REMAIN_CATS:-none} custom=${REMAIN_CUS:-none} next_reset=${NEW_RESET}\""
   fi

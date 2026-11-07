@@ -781,3 +781,20 @@ def test_github_token_without_expiry_is_ok(monkeypatch):
 def test_github_token_other_failure_is_warn(monkeypatch):
     _gh(monkeypatch, _GhResp(502, text="github: getDir services/brief/categories 500: oops"))
     assert checks.check_github_token("u", _NOW) == ("warn", "카테고리 목록 HTTP 502")
+
+
+def test_brief_auth_fail_names_why_claude_fallback_was_off(tmp_path):
+    """대체 claude 가 꺼져 실패한 날은 그 이유를 알림에 싣는다 — 2026-11-07 claude 를 못 찾아 대체가
+    꺼진 채 Gemini 402 만 13시간 반복됐는데, 알림만 보면 Gemini 결제를 고치러 가게 됐다."""
+    log = tmp_path / "d.log"
+    log.write_text("\n".join([
+        '{"ts": "2026-11-07T09:14:16+09:00", "cli": "generate_brief", "status": "gemini_fail", '
+        '"category": "naver", "exit_code": 3, "error": "Gemini 선불 크레딧 소진(402) — 충전 필요", '
+        '"fallback_skipped": "claude CLI 없음(/opt/homebrew/bin/claude)"}',
+        "__BRIEF_AUTH_FAIL__=gemini",
+        _DONE_AUTH,
+    ]), encoding="utf-8")
+    status, msg = checks.check_brief_run(str(log))
+    assert status == "warn"
+    assert "Gemini 키·결제 거부" in msg
+    assert msg.endswith("Claude 대체 불가 — claude CLI 없음(/opt/homebrew/bin/claude)")
