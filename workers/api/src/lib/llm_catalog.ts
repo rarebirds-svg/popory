@@ -18,7 +18,10 @@ export type Provider = "claude" | "gemini";
 // providers 는 그 서비스의 워커가 실제로 호출할 수 있는 공급자다. 목록에 없는 공급자의 모델은
 // 어드민 화면에도 안 뜨고 저장도 400 으로 막는다 — 워커가 못 부르는 모델이 저장되면 그날 잡이 죽는다.
 export const SERVICES: { key: ServiceKey; label: string; description: string; providers: Provider[] }[] = [
-  { key: "brief", label: "뉴스 브리핑", description: "카테고리·커스텀 주제 일일 이슈", providers: ["claude", "gemini"] },
+  // 2026-11-07 부터 브리핑도 claude 전용이다. Gemini 선불 크레딧이 소진돼(402) 7개 카테고리가 며칠째
+  // 대체 경로로만 돌았고, 크레딧을 다시 쓰지 않기로 했다. 여기서 gemini 를 빼면 어드민에서 고를 수도,
+  // 이미 저장된 gemini 행이 워커로 내려가지도 않는다(isModelAllowed). 되돌리려면 "gemini" 를 다시 넣는다.
+  { key: "brief", label: "뉴스 브리핑", description: "카테고리·커스텀 주제 일일 이슈", providers: ["claude"] },
   // 컨텐츠 워커는 claude CLI 전용이다. Gemini 를 붙이려면 services/content 쪽 호출부가 먼저 필요하다.
   { key: "content", label: "컨텐츠 생성", description: "포포리 책방 블로그·영상·인스타", providers: ["claude"] },
 ];

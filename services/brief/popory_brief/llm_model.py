@@ -18,6 +18,8 @@ TIMEOUT_SECONDS = 5
 # content-worker 가 generic_brief 를 부를 때는 이 환경변수가 없다. brief 서비스
 # 표준 키 경로를 기본값으로 쓴다(publish_to_portal 호출부와 같은 규칙).
 DEFAULT_KEY_FILE = BRIEF_DIR / "secrets" / "brief_signing_key.json"
+# 어드민 설정으로는 이 공급자의 모델로 가지 않는다(Gemini API 선불 크레딧 미사용).
+_BLOCKED_PREFIX = "gemini-"
 
 
 def _token() -> tuple[str, str] | None:
@@ -35,7 +37,12 @@ def _token() -> tuple[str, str] | None:
 
 
 def resolve_model(feature: str, fallback: str) -> str:
-    """feature 에 설정된 모델. 조회 불가·미설정이면 fallback."""
+    """feature 에 설정된 모델. 조회 불가·미설정이면 fallback.
+
+    Gemini 모델은 설정에 있어도 무시하고 fallback(claude)으로 돈다 — 2026-11-07 부터 Gemini 선불
+    크레딧을 쓰지 않는다. 포털 API 도 같은 값을 걸러 내려주지만(llm_catalog.ts), 포털이 구버전이거나
+    응답이 오래 캐시돼도 Gemini 호출이 새지 않게 이쪽에서 한 번 더 막는다. 명시한 --model 은 이 함수를
+    거치지 않으므로 운영자가 직접 시험하는 길(check_gemini.py)은 그대로다."""
     target = _token()
     if target is None:
         return fallback
@@ -51,4 +58,6 @@ def resolve_model(feature: str, fallback: str) -> str:
         model = resp.json().get("models", {}).get(feature)
     except Exception:
         return fallback
-    return model if isinstance(model, str) and model else fallback
+    if not isinstance(model, str) or not model or model.startswith(_BLOCKED_PREFIX):
+        return fallback
+    return model

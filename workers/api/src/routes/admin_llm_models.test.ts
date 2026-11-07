@@ -157,18 +157,24 @@ describe("admin llm-models", () => {
     // UI 가 서비스별로 선택지를 걸러낼 수 있어야 한다 — 못 부르는 모델을 고르게 두면 그날 잡이 죽는다.
     expect(body.models.every((m) => m.provider === "claude" || m.provider === "gemini")).toBe(true);
     expect(body.models.find((m) => m.id === "gemini-3.8-flash")!.provider).toBe("gemini");
-    expect(body.services.find((s) => s.key === "brief")!.providers).toContain("gemini");
+    expect(body.services.find((s) => s.key === "brief")!.providers).not.toContain("gemini");
     expect(body.services.find((s) => s.key === "content")!.providers).not.toContain("gemini");
   });
 
-  it("브리핑 이슈 생성에는 Gemini 모델을 저장할 수 있다", async () => {
+  it("브리핑 이슈 생성에 Gemini 모델은 400", async () => {
+    // 브리핑은 claude 전용이다(Gemini 선불 크레딧 미사용). 저장이 통과하면 워커가 Gemini API 를 부른다.
     const c = await cookie("admin");
-    expect((await save({ brief_issue: "gemini-3.8-flash" }, c)).status).toBe(204);
+    expect((await save({ brief_issue: "gemini-3.8-flash" }, c)).status).toBe(400);
+  });
+
+  it("DB 에 남은 브리핑 Gemini 설정은 워커로 새지 않고 기본 모델이 내려간다", async () => {
+    await env.DB.prepare(
+      "INSERT INTO llm_model_settings (feature, model, updated_at, updated_by) VALUES ('brief_issue', 'gemini-3.8-flash', 1, 'x')"
+    ).run();
     const token = await workerToken("brief");
     const res = await SELF.fetch("https://example.com/api/brief/llm-models", { headers: { authorization: `Bearer ${token}` } });
     const body = await res.json() as { models: Record<string, string> };
-    // 워커는 이 값을 그대로 공급자 분기에 쓴다 (services/brief/popory_brief/gemini_client.is_gemini_model).
-    expect(body.models.brief_issue).toBe("gemini-3.8-flash");
+    expect(body.models.brief_issue).toBe(defaultModelOf("brief_issue"));
   });
 
   it("컨텐츠 기능에 Gemini 모델은 400", async () => {
