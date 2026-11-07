@@ -1,6 +1,7 @@
 # claude CLI(비대화형, Claude Max) 호출 공통 헬퍼 + 블로그 HTML 생성.
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -15,7 +16,29 @@ from popory_content.youtube_post_contract import parse_youtube_post
 from popory_content.reply_prompt import build_reply_system_prompt, build_reply_user_message
 from popory_content.reply_contract import parse_reply
 
-CLAUDE_BIN = "/opt/homebrew/bin/claude"
+_DEFAULT_CLAUDE_BIN = "/opt/homebrew/bin/claude"
+# POPORY_CLAUDE_BIN 으로 경로를 고정할 수 있다. 기본 경로일 때만 아래 후보를 더 찾아본다.
+CLAUDE_BIN = os.environ.get("POPORY_CLAUDE_BIN", _DEFAULT_CLAUDE_BIN)
+# 설치 방식이 바뀌면(brew → 네이티브 설치 등) 기본 경로가 사라진다(2026-11-07 생성 전면 실패).
+# launchd PATH 는 좁아 which 만으론 못 찾으므로 알려진 설치 위치를 먼저 본다.
+_CLAUDE_FALLBACKS = ("~/.local/bin/claude", "~/.claude/local/claude", "/usr/local/bin/claude")
+
+
+def resolve_claude_bin() -> str:
+    """실행할 claude CLI 경로. 호출마다 찾는다 — 상주 워커가 도는 중에 CLI 가 옮겨가도 따라간다."""
+    if Path(CLAUDE_BIN).exists():
+        return CLAUDE_BIN
+    if CLAUDE_BIN == _DEFAULT_CLAUDE_BIN:
+        for cand in _CLAUDE_FALLBACKS:
+            path = Path(cand).expanduser()
+            if path.exists() and os.access(path, os.X_OK):
+                return str(path)
+        found = shutil.which("claude")
+        if found:
+            return found
+    raise GenerateError(
+        f"claude CLI not found at {CLAUDE_BIN} (also checked {', '.join(_CLAUDE_FALLBACKS)}, PATH)"
+    )
 # 기본 모델. 포털 어드민(LLM 모델)에서 기능별로 덮어쓰며, 그 설정을 못 읽으면 여기로 돌아온다.
 DEFAULT_MODEL = os.environ.get("POPORY_CLAUDE_MODEL", "claude-sonnet-5")
 
@@ -107,11 +130,10 @@ def run_claude_cli(*, system_prompt: str, user_msg: str, parse: Callable[[str], 
     루트/홈이 되므로, 서버가 필요한 호출은 명시해야 한다(2026-09-05 발행 실패). 없는 경로는 무시한다."""
     timeout_seconds = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     max_attempts = MAX_ATTEMPTS if max_attempts is None else max_attempts
-    if not Path(CLAUDE_BIN).exists():
-        raise GenerateError(f"claude CLI not found at {CLAUDE_BIN}")
+    claude_bin = resolve_claude_bin()
     sys_path = Path(f"/tmp/content_system_{job_id}.txt")
     sys_path.write_text(system_prompt, encoding="utf-8")
-    cmd = [CLAUDE_BIN, "--print", "--model", model]
+    cmd = [claude_bin, "--print", "--model", model]
     if allowed_tools:
         cmd += ["--allowed-tools", *allowed_tools]
     cmd += ["--system-prompt-file", str(sys_path), "--output-format", "text"]
@@ -167,10 +189,9 @@ def run_claude_cli_once(*, user_msg: str, system_prompt: str | None = None, job_
     응답이 모자랄 때 재시도가 아니라 이어 말하기로 마무리시켜야 한다.
     resume 을 주면 system_prompt 는 다시 주지 않는다 — 그 대화가 이미 들고 있다."""
     timeout_seconds = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
-    if not Path(CLAUDE_BIN).exists():
-        raise GenerateError(f"claude CLI not found at {CLAUDE_BIN}")
+    claude_bin = resolve_claude_bin()
     sys_path: Path | None = None
-    cmd = [CLAUDE_BIN, "--print", "--model", model]
+    cmd = [claude_bin, "--print", "--model", model]
     if allowed_tools:
         cmd += ["--allowed-tools", *allowed_tools]
     if resume:
