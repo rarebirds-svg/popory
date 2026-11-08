@@ -8,6 +8,7 @@ from PIL import Image
 
 from popory_content import worker
 from popory_content import generate as gen
+from popory_content import options
 
 
 def _png(color=(10, 20, 30)) -> bytes:
@@ -208,7 +209,7 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
     assert body["status"] == "review"
     assert callable(captured.get("image_fetcher"))
     assert captured.get("scene_count") == 12
-    assert captured.get("voice") == "gemini-3.8-flash-tts/voice_s8vzho2m0lq6"   # male 기본 = Gemini 설계 음성
+    assert captured.get("voice") == options.VOICE["male"]
     assert "illustration" in captured.get("image_style_kw")
 
 
@@ -1041,27 +1042,39 @@ def _statuses(tmp_path) -> list[str]:
     return [r["status"] for r in _records(tmp_path)]
 
 
-def test_voice_expiry_silent_before_window(tmp_path):
-    worker._log_voice_expiry("j1", "gemini-3.8-flash-tts/voice_s8vzho2m0lq6", today=date(2027, 10, 8))  # 31일
+TEST_VOICE = "gemini-3.8-flash-tts/voice_testexpiry"
+
+
+@pytest.fixture
+def fake_expiry(monkeypatch):
+    """운영 음성 ID·만료일에 묶이지 않게 가짜 만료표를 쓴다. worker 는 options 의 함수를 가져다 쓰고 그 함수가
+    options 모듈의 DESIGNED_VOICE_EXPIRES 를 읽으므로, options 쪽 표를 바꾸면 worker 도 같은 표를 본다."""
+    monkeypatch.setattr(options, "DESIGNED_VOICE_EXPIRES", {"voice_testexpiry": date(2030, 1, 31)})
+
+
+def test_voice_expiry_silent_before_window(tmp_path, fake_expiry):
+    worker._log_voice_expiry("j1", TEST_VOICE, today=date(2029, 12, 31))  # 31일
     assert _statuses(tmp_path) == []
 
 
-def test_voice_expiry_logs_within_30_days(tmp_path):
-    worker._log_voice_expiry("j1", "gemini-3.8-flash-tts/voice_s8vzho2m0lq6", today=date(2027, 10, 9))
+def test_voice_expiry_logs_within_30_days(tmp_path, fake_expiry):
+    worker._log_voice_expiry("j1", TEST_VOICE, today=date(2030, 1, 1))
+    assert _statuses(tmp_path) == ["gemini_voice_expiry_failed"]
     rec = _records(tmp_path)[0]
-    assert rec["status"] == "gemini_voice_expiry_failed" and rec["days_left"] == 30 and rec["expires"] == "2027-11-08"
+    assert rec["voice"] == TEST_VOICE and rec["days_left"] == 30 and rec["expires"] == "2030-01-31"
     assert "design_voice.py" in rec["error"]
 
 
-def test_voice_expiry_logs_after_expiry(tmp_path):
-    worker._log_voice_expiry("j1", "gemini-3.8-flash-tts/voice_s8vzho2m0lq6", today=date(2027, 11, 9))
+def test_voice_expiry_logs_after_expiry(tmp_path, fake_expiry):
+    worker._log_voice_expiry("j1", TEST_VOICE, today=date(2030, 2, 1))
+    assert _statuses(tmp_path) == ["gemini_voice_expiry_failed"]
     rec = _records(tmp_path)[0]
-    assert rec["days_left"] == -1 and "만료됨" in rec["error"]
+    assert rec["days_left"] == -1 and "만료됨(2030-01-31)" in rec["error"]
 
 
-def test_voice_expiry_ignores_voices_without_expiry(tmp_path):
+def test_voice_expiry_ignores_voices_without_expiry(tmp_path, fake_expiry):
     for v in ("gemini-3.8-flash-tts/Iapetus", "ko-KR-Chirp3-HD-Aoede"):
-        worker._log_voice_expiry("j1", v, today=date(2027, 11, 9))
+        worker._log_voice_expiry("j1", v, today=date(2030, 2, 1))
     assert _statuses(tmp_path) == []
 
 

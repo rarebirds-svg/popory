@@ -23,6 +23,13 @@ def _isolate_logs_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_portal_ship(monkeypatch):
+    """(source secrets/env.sh; pytest) 로 돌려도 _failed 기록이 운영 /admin/errors 로 가지 않게 포털 주소·키 환경변수를 지운다."""
+    for name in ("POPORY_PORTAL_API_BASE", "POPORY_CONTENT_KEY_FILE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clean_claude_token_env(monkeypatch):
     """장기 토큰 환경변수가 usage·worker 테스트에 새지 않게 비운다(실행 환경 비의존)."""
     for name in ("CLAUDE_CODE_OAUTH_TOKEN", "POPORY_CLAUDE_AUTH_HINT"):

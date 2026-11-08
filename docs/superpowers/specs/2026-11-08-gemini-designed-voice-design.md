@@ -48,3 +48,4 @@
 ## 되돌리기
 
 `options.VOICE["male"]` 를 `gemini-3.8-flash-tts/Iapetus` 로 되돌리고 워커를 재시작한다. 연출 지시는 env `POPORY_GEMINI_TTS_STYLE` 로 즉시 바꿀 수 있다.
+연출 지시까지 되돌리려면 env `POPORY_GEMINI_TTS_STYLE` 에 옛 문구(커밋 b0d18c9 이전 `gemini_tts.STYLE`)를 넣는다.

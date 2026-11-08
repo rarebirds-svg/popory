@@ -24,7 +24,7 @@ from popory_content.subtitles import to_srt
 from popory_content.translate import translate_lines
 from popory_content.youtube_upload import upload, upload_caption, set_thumbnail
 from popory_content.options import (parse_options, parse_shorts_options, SCENE_COUNT, SHORT_SCENE_COUNT, VOICE, STYLE,
-                                    designed_voice_days_left)
+                                    designed_voice_days_left, designed_voice_expiry)
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
 from popory_content.log import append_log, KST
@@ -260,14 +260,14 @@ VOICE_EXPIRY_WARN_DAYS = 30  # 설계 음성 만료까지 남은 날이 이 이�
 
 
 def _log_voice_expiry(job_id: str, voice: str, today: datetime.date | None = None) -> None:
-    """설계 음성(voice_…) 만료가 30일 안으로 들어왔거나 지났으면 실패로 기록한다(→ /admin/errors, 헬스체크 '자원한도').
+    """설계 음성(voice_…) 만료가 VOICE_EXPIRY_WARN_DAYS 일 안으로 들어왔거나 지났으면 실패로 기록한다(→ /admin/errors, 헬스체크 '자원한도').
     만료되면 설계 음성 요청이 실패해 영상 전체가 폴백 음성으로 간다. 만료일이 없는 음성(프리셋·Chirp3-HD)은 건너뛴다."""
     if today is None:
         today = datetime.datetime.now(KST).date()
     n = designed_voice_days_left(voice, today)
     if n is None or n > VOICE_EXPIRY_WARN_DAYS:
         return
-    expires = (today + datetime.timedelta(days=n)).isoformat()  # 남은 날에서 되짚은 DESIGNED_VOICE_EXPIRES 값
+    expires = designed_voice_expiry(voice).isoformat()
     fix = "services/content/tools/design_voice.py 로 새 음성을 만들고 options.VOICE·DESIGNED_VOICE_EXPIRES 를 바꾸세요"
     head = f"설계 음성 만료까지 {n}일" if n >= 0 else f"설계 음성이 만료됨({expires})"
     append_log(LOGS_DIR, {"worker": "content", "status": "gemini_voice_expiry_failed", "job": job_id,
@@ -336,6 +336,7 @@ def _rerender_video(client, job: dict, draft: str | None, portrait: bool) -> Non
     _log_tts_fallback(job_id, meta)
     _log_sync(job_id, meta)
     _log_scene_match(job_id, meta)
+    _log_voice_expiry(job_id, voice)
     append_log(LOGS_DIR, {"worker": "content", "status": "rerender", "job": job_id,
                           "commit": meta["worker_commit"],
                           "reused_backgrounds": len(backgrounds), "scenes": len(scenes),

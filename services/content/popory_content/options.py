@@ -10,6 +10,7 @@ SHORT_SCENE_COUNT = {"15": 3, "30": 5, "60": 8}
 # 프리셋 Iapetus 는 화자 이름만 고정하고 합성할 때마다 목소리를 새로 만들어 챕터마다 목소리가 바뀌었다.
 # 실험(같은 쇼츠 원고, tools/voice_ab.py) — 장면 사이 폭 2.66→1.36반음, 테이크 간 2.1→1.1반음, 필요 보정량 0.58→0.38반음.
 # 되돌리려면 male 값을 "gemini-3.8-flash-tts/Iapetus" 로 한 줄 바꾸고 워커를 재시작한다.
+# 연출 지시까지 되돌리려면 env POPORY_GEMINI_TTS_STYLE 에 옛 문구(커밋 b0d18c9 이전 gemini_tts.STYLE)를 넣는다.
 # Charon(초기 목소리)은 2026-06-29 b3d3eeb 와 2026-08-11 두 번 취향 사유로 기각됐다 — 다시 올리지 않는다.
 VOICE = {"female-calm": "ko-KR-Chirp3-HD-Aoede", "female-bright": "ko-KR-Chirp3-HD-Leda",
          "male": "gemini-3.8-flash-tts/voice_s8vzho2m0lq6"}
@@ -67,8 +68,13 @@ def parse_shorts_options(params_json: str | None) -> dict:
     return opts
 
 
-def designed_voice_days_left(voice: str, today: datetime.date) -> int | None:
-    """설계 음성 만료까지 남은 날(만료일 당일 0, 지나면 음수). voice 는 "모델/화자" 또는 화자만 받는다.
+def designed_voice_expiry(voice: str) -> datetime.date | None:
+    """설계 음성의 만료일(DESIGNED_VOICE_EXPIRES). voice 는 "모델/화자" 또는 화자만 받는다.
     만료일이 없는 음성(프리셋 화자·Chirp3-HD 등)은 None."""
-    expires = DESIGNED_VOICE_EXPIRES.get(voice.rpartition("/")[2])
+    return DESIGNED_VOICE_EXPIRES.get(voice.rpartition("/")[2])
+
+
+def designed_voice_days_left(voice: str, today: datetime.date) -> int | None:
+    """설계 음성 만료까지 남은 날(만료일 당일 0, 지나면 음수). 만료일이 없는 음성은 None."""
+    expires = designed_voice_expiry(voice)
     return None if expires is None else (expires - today).days
