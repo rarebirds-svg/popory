@@ -23,10 +23,11 @@ from popory_content.rerender import (parse_script, load_backgrounds, build_scene
 from popory_content.subtitles import to_srt
 from popory_content.translate import translate_lines
 from popory_content.youtube_upload import upload, upload_caption, set_thumbnail
-from popory_content.options import parse_options, parse_shorts_options, SCENE_COUNT, SHORT_SCENE_COUNT, VOICE, STYLE
+from popory_content.options import (parse_options, parse_shorts_options, SCENE_COUNT, SHORT_SCENE_COUNT, VOICE, STYLE,
+                                    designed_voice_days_left, designed_voice_expiry)
 from popory_content.jwt_signer import KeyMaterial, sign_for_portal
 from popory_content.portal_client import PortalClient, PortalError
-from popory_content.log import append_log
+from popory_content.log import append_log, KST
 from popory_content import runtime_info
 from popory_content.usage import cached_claude_usage
 from popory_content.tts_config import build_tts_config
@@ -146,6 +147,7 @@ def run_once(client) -> bool:
             _log_tts_fallback(job_id, meta)
             _log_sync(job_id, meta)
             _log_scene_match(job_id, meta)
+            _log_voice_expiry(job_id, VOICE[opts["voice"]])
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
@@ -168,6 +170,7 @@ def run_once(client) -> bool:
             _log_tts_fallback(job_id, meta)
             _log_sync(job_id, meta)
             _log_scene_match(job_id, meta)
+            _log_voice_expiry(job_id, VOICE[opts["voice"]])
             client.put_binary(f"/api/content/jobs/{job_id}/video", data=mp4.read_bytes(), content_type="video/mp4")
             _store_subtitles(client, job_id, cues)
             script = "\n\n".join(f"[{s['caption']}]\n{s['narration']}" for s in scenes)
@@ -253,6 +256,24 @@ def _log_scene_match(job_id: str, meta: dict) -> None:
                                         f"장면 사이 음높이 폭 {sm.get('spread_semitones')}반음. 맥미니에서 brew install ffmpeg-full 후 워커 재시작")})
 
 
+VOICE_EXPIRY_WARN_DAYS = 30  # 설계 음성 만료까지 남은 날이 이 이하이면 영상 작업마다 기록한다
+
+
+def _log_voice_expiry(job_id: str, voice: str, today: datetime.date | None = None) -> None:
+    """설계 음성(voice_…) 만료가 VOICE_EXPIRY_WARN_DAYS 일 안으로 들어왔거나 지났으면 실패로 기록한다(→ /admin/errors, 헬스체크 '자원한도').
+    만료되면 설계 음성 요청이 실패해 영상 전체가 폴백 음성으로 간다. 만료일이 없는 음성(프리셋·Chirp3-HD)은 건너뛴다."""
+    if today is None:
+        today = datetime.datetime.now(KST).date()
+    n = designed_voice_days_left(voice, today)
+    if n is None or n > VOICE_EXPIRY_WARN_DAYS:
+        return
+    expires = designed_voice_expiry(voice).isoformat()
+    fix = "services/content/tools/design_voice.py 로 새 음성을 만들고 options.VOICE·DESIGNED_VOICE_EXPIRES 를 바꾸세요"
+    head = f"설계 음성 만료까지 {n}일" if n >= 0 else f"설계 음성이 만료됨({expires})"
+    append_log(LOGS_DIR, {"worker": "content", "status": "gemini_voice_expiry_failed", "job": job_id,
+                          "voice": voice, "expires": expires, "days_left": n, "error": f"{head} — {fix}"})
+
+
 SYNC_P95_LIMIT_MS = 250     # 자막과 발화 시작이 이보다 크게 어긋난 cue 가 5% 넘으면 기록한다
 SYNC_DRIFT_LIMIT_MS = 200   # 뒤로 갈수록 이만큼 넘게 밀리면(누적 어긋남) 기록한다
 
@@ -315,6 +336,7 @@ def _rerender_video(client, job: dict, draft: str | None, portrait: bool) -> Non
     _log_tts_fallback(job_id, meta)
     _log_sync(job_id, meta)
     _log_scene_match(job_id, meta)
+    _log_voice_expiry(job_id, voice)
     append_log(LOGS_DIR, {"worker": "content", "status": "rerender", "job": job_id,
                           "commit": meta["worker_commit"],
                           "reused_backgrounds": len(backgrounds), "scenes": len(scenes),

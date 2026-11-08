@@ -23,6 +23,13 @@ def _isolate_logs_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_portal_ship(monkeypatch):
+    """(source secrets/env.sh; pytest) 로 돌려도 _failed 기록이 운영 /admin/errors 로 가지 않게 포털 주소·키 환경변수를 지운다."""
+    for name in ("POPORY_PORTAL_API_BASE", "POPORY_CONTENT_KEY_FILE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clean_claude_token_env(monkeypatch):
     """장기 토큰 환경변수가 usage·worker 테스트에 새지 않게 비운다(실행 환경 비의존)."""
     for name in ("CLAUDE_CODE_OAUTH_TOKEN", "POPORY_CLAUDE_AUTH_HINT"):
@@ -43,3 +50,11 @@ def _media_tools_ok(monkeypatch):
     도구 고장 경로를 시험하는 테스트는 이 값을 다시 바꾼다."""
     from popory_content import worker
     monkeypatch.setattr(worker, "media_tools_problem", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_alerts(monkeypatch):
+    """인증 실패 경로를 타는 테스트가 실제 텔레그램 경보를 보내지 못하게 막는다.
+    NOTIFY_SH 는 절대경로라 임시 복사본·워크트리에서 돌려도 운영 스크립트를 부른다. /dev/null 은 bash 가 빈 스크립트로 실행한다."""
+    from popory_content import worker
+    monkeypatch.setattr(worker, "NOTIFY_SH", "/dev/null")

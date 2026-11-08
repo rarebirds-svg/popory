@@ -23,16 +23,12 @@ import requests
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 VOICE_PREFIX = "gemini-"
 
-# 낭독 연출 지시 — 화자 비교(scripts/compare_voices.py)에서 고른 결과와 같은 지시를 쓴다.
-STYLE = os.environ.get("POPORY_GEMINI_TTS_STYLE") or (
-    "Narrate this Korean script for a YouTube book-review channel as a calm, warm Korean man "
-    "in his forties reading to one listener. Natural conversational pace, not an announcer. "
-    "Let the intonation of each sentence ending vary with its meaning: statements settle softly, "
-    "rhetorical questions rise gently, and leave a short natural breath between sentences. "
-    "Keep exactly the same voice, pitch, pace and energy from the first line to the last. "
-    "Pause a little longer at each blank line between paragraphs. "
-    "Do not add any sounds, words or breaths that are not in the transcript."
-)
+# 낭독 연출 지시 — 짧은 고정 문구(2026-11-08~). 공식 문서 권고대로 긴 Director's Notes·"같은 목소리를 유지하라" 같은
+# 메타 지시·나이·성별은 넣지 않는다 — 오히려 목소리 흔들림을 늘린다. 화자의 나이·성별·말투는 설계 음성
+# (options.VOICE["male"])을 만들 때 정했다. Iapetus 에서 지시만 줄여서는 효과가 없었다(2026-11-08 tools/voice_ab.py).
+# options.py 의 설계 음성 실험 수치는 이 지시로 잰 값이다. env POPORY_GEMINI_TTS_STYLE 이 있으면 그 값을 쓴다.
+DEFAULT_STYLE = "Calm, warm and conversational."
+STYLE = os.environ.get("POPORY_GEMINI_TTS_STYLE") or DEFAULT_STYLE
 
 # 비용 상한. 출력(오디오) 단가 $/1M 토큰은 2026-10-04 cloud.google.com/text-to-speech/pricing 직접 확인 —
 # 3.8 Flash TTS 는 2026-12-31 까지 9, 2027-01-01 부터 18. 오디오는 초당 25토큰. 입력 텍스트는 출력의 1/20
@@ -158,12 +154,14 @@ def record(seconds: float, requests_made: int, today: "datetime.date | None" = N
 
 
 def payload(text: str, speaker: str, style: str = STYLE) -> dict:
-    """연출 지시와 대본을 머리표로 나눠 한 텍스트에 담는다 — 지시문을 소리 내 읽지 않게."""
+    """연출 지시와 대본을 머리표로 나눠 한 텍스트에 담는다 — 지시문을 소리 내 읽지 않게.
+    화자가 Voice design 으로 만든 고정 음성 ID(voice_…)면 voiceConfig.voice 로, 프리셋 이름이면 prebuiltVoiceConfig 로."""
+    voice = {"voice": speaker} if speaker.startswith("voice_") else {"prebuiltVoiceConfig": {"voiceName": speaker}}
     return {
         "contents": [{"parts": [{"text": f"### DIRECTOR'S NOTES\n{style}\n\n#### TRANSCRIPT\n{text}"}]}],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
-            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": speaker}}},
+            "speechConfig": {"voiceConfig": voice},
         },
     }
 
@@ -217,7 +215,7 @@ def _explain(status: int, body: str) -> str:
     hint = {
         402: "선불 크레딧 소진 — AI Studio(https://ai.studio/projects)에서 결제·충전 필요",
         403: "권한 없음 — GEMINI_API_KEY·프로젝트 결제 설정 확인",
-        404: "모델 이름을 찾을 수 없음 — 모델 ID 변경 여부 확인",
+        404: "모델 이름 또는 설계 음성(voice_…)을 찾을 수 없음 — 모델 ID 변경·설계 음성 만료(tools/design_voice.py) 확인",
     }.get(status)
     if status == 429 and re.search(r"per ?day", body or "", re.IGNORECASE):
         hint = "하루 요청 한도 초과 — 내일 다시 시도"
@@ -585,6 +583,8 @@ def pause_spans(pcm: bytes, rate: int, min_ms: int = 80) -> list[tuple[float, fl
 # 영상 전체 장면들의 중앙값(발화 길이 가중)에 맞춘다. 장면 안의 억양은 그대로 둔 채 장면 전체를 한 번에 옮기므로
 # 질문·강조의 높낮이는 남는다. 예전(2026-10-05~)엔 둘째 요청부터 첫 장면에만 맞추고 0.7반음 넘게 다르면 한 번 더
 # 합성했는데, 요청 안의 장면별 차이가 요청 사이 차이보다 커서 효과가 없었고 요청만 늘었다(그 롱폼은 3묶음에 5요청).
+# 설계 음성(voiceConfig.voice)도 장면마다 흔들리지만 덜하다(2026-11-08 실측 — 장면 사이 폭 2.66→1.36반음,
+# 밝기 폭은 그대로). 그래서 장면 보정을 유지한다.
 PROFILE_RATE = 8000          # 분석용으로 낮춘 샘플레이트 — 남성 음성 F0(60~300Hz)를 재기에 충분하다
 F0_MIN, F0_MAX = 60.0, 300.0
 PROFILE_WINDOW_MS = 40

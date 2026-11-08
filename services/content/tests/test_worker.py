@@ -1,11 +1,14 @@
 # 워커가 claim→generate→result 를 올바른 상태로 호출하는지 검증.
 import io
+import json
+from datetime import date
 
 import pytest
 from PIL import Image
 
 from popory_content import worker
 from popory_content import generate as gen
+from popory_content import options
 
 
 def _png(color=(10, 20, 30)) -> bytes:
@@ -206,7 +209,7 @@ def test_youtube_branch_uploads_video_and_reviews(monkeypatch, tmp_path):
     assert body["status"] == "review"
     assert callable(captured.get("image_fetcher"))
     assert captured.get("scene_count") == 12
-    assert captured.get("voice") == "gemini-3.8-flash-tts/Iapetus"   # male 기본 = Gemini Iapetus
+    assert captured.get("voice") == options.VOICE["male"]
     assert "illustration" in captured.get("image_style_kw")
 
 
@@ -989,6 +992,15 @@ def test_auth_notify_defaults_to_login_hint(monkeypatch):
     assert "claude /login" in sent[0][-1]
 
 
+def test_auth_notify_under_test_never_targets_the_real_notify_script(monkeypatch):
+    """NOTIFY_SH 는 절대경로라 막지 않으면 임시 복사본·워크트리의 테스트도 실제 텔레그램 경보를 보낸다.
+    2026-11-06 test_auth_failure_reports_failed_then_exits 가 가짜 '인증 만료' 경보를 냈다."""
+    sent = []
+    monkeypatch.setattr(worker.subprocess, "run", lambda cmd, **kw: sent.append(cmd))
+    worker._notify_auth_failure()
+    assert "services/healthcheck/notify.sh" not in sent[0][1]
+
+
 @pytest.mark.parametrize("platform", ["youtube", "shorts"])
 def test_broken_media_tools_fail_video_jobs_before_spending_claude_and_images(monkeypatch, platform):
     """ffmpeg·ffprobe 가 고장이면 대본·이미지를 만들기 전에 원인과 함께 실패한다 — 예전엔 다 만든 뒤 끝에서 죽었다."""
@@ -1014,3 +1026,68 @@ def test_blog_jobs_do_not_check_media_tools(monkeypatch):
     client = FakeClient({"job": {"id": "b1", "topic": "t", "platform": "naver-blog"}, "sources": [], "style_samples": []})
     worker.run_once(client)
     assert "영상 도구를 확인하지 않는다" not in str(client.patched)   # boom 이 불렸다면 그 메시지로 실패했을 것이다
+
+
+# --- 설계 음성 만료 경고 ---
+
+def _records(tmp_path) -> list[dict]:
+    """conftest 가 LOGS_DIR 를 tmp_path/"logs" 로 바꿔 둔다. 그 폴더의 로그 줄을 JSON 으로 읽는다."""
+    out = []
+    for f in sorted((tmp_path / "logs").glob("*.log")):
+        out += [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return out
+
+
+def _statuses(tmp_path) -> list[str]:
+    return [r["status"] for r in _records(tmp_path)]
+
+
+TEST_VOICE = "gemini-3.8-flash-tts/voice_testexpiry"
+
+
+@pytest.fixture
+def fake_expiry(monkeypatch):
+    """운영 음성 ID·만료일에 묶이지 않게 가짜 만료표를 쓴다. worker 는 options 의 함수를 가져다 쓰고 그 함수가
+    options 모듈의 DESIGNED_VOICE_EXPIRES 를 읽으므로, options 쪽 표를 바꾸면 worker 도 같은 표를 본다."""
+    monkeypatch.setattr(options, "DESIGNED_VOICE_EXPIRES", {"voice_testexpiry": date(2030, 1, 31)})
+
+
+def test_voice_expiry_silent_before_window(tmp_path, fake_expiry):
+    worker._log_voice_expiry("j1", TEST_VOICE, today=date(2029, 12, 31))  # 31일
+    assert _statuses(tmp_path) == []
+
+
+def test_voice_expiry_logs_within_30_days(tmp_path, fake_expiry):
+    worker._log_voice_expiry("j1", TEST_VOICE, today=date(2030, 1, 1))
+    assert _statuses(tmp_path) == ["gemini_voice_expiry_failed"]
+    rec = _records(tmp_path)[0]
+    assert rec["voice"] == TEST_VOICE and rec["days_left"] == 30 and rec["expires"] == "2030-01-31"
+    assert "design_voice.py" in rec["error"]
+
+
+def test_voice_expiry_logs_after_expiry(tmp_path, fake_expiry):
+    worker._log_voice_expiry("j1", TEST_VOICE, today=date(2030, 2, 1))
+    assert _statuses(tmp_path) == ["gemini_voice_expiry_failed"]
+    rec = _records(tmp_path)[0]
+    assert rec["days_left"] == -1 and "만료됨(2030-01-31)" in rec["error"]
+
+
+def test_voice_expiry_ignores_voices_without_expiry(tmp_path, fake_expiry):
+    for v in ("gemini-3.8-flash-tts/Iapetus", "ko-KR-Chirp3-HD-Aoede"):
+        worker._log_voice_expiry("j1", v, today=date(2030, 2, 1))
+    assert _statuses(tmp_path) == []
+
+
+@pytest.mark.parametrize("platform", ["youtube", "shorts"])
+def test_video_jobs_check_voice_expiry_with_the_job_voice(monkeypatch, tmp_path, platform):
+    """롱폼·쇼츠 작업은 그 작업이 고른 목소리로 설계 음성 만료를 확인한다."""
+    mp4 = tmp_path / "v.mp4"
+    mp4.write_bytes(b"\x00")
+    monkeypatch.setattr(worker, "make_video",
+                        lambda **kw: (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"}, 0, 1, []))
+    calls = []
+    monkeypatch.setattr(worker, "_log_voice_expiry", lambda job_id, voice: calls.append((job_id, voice)))
+    client = FakeClient({"job": {"id": "v1", "topic": "t", "platform": platform, "params_json": '{"voice":"female-calm"}'},
+                         "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    assert calls == [("v1", "ko-KR-Chirp3-HD-Aoede")]

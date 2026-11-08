@@ -350,6 +350,19 @@ def test_scan_markers_still_catches_real_image_failure():
     assert "이미지 생성 실패 1건" in msg
 
 
+def test_scan_log_markers_flags_designed_voice_expiry():
+    status, msg = checks.scan_log_markers('{"status": "gemini_voice_expiry_failed"}\n')
+    assert status == "warn" and "설계 음성 만료(임박) 1건" in msg
+
+
+def test_scan_log_markers_flags_gemini_voice_fallback():
+    """설계 음성이 만료 전에 사라지면(프로젝트 삭제·키 교체) 영상 전체가 폴백 음성으로 간다 — 조용히 넘어가지 않게 잡는다.
+    "status": "failed" 마커와 겹쳐 세지 않는다."""
+    status, msg = checks.scan_log_markers('{"status": "gemini_tts_failed"}\n')
+    assert status == "warn" and "Gemini 음성 폴백 1건" in msg
+    assert "작업 실패" not in msg
+
+
 def test_brief_run_warns_when_log_missing(tmp_path):
     """오늘자 로그 부재 = 데일리 잡이 아예 안 뜸(launchd 미로드·맥 종료).
 

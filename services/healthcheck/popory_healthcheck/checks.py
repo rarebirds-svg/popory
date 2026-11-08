@@ -166,6 +166,8 @@ _MARKERS = (
     ('"status": "image_failed"', "이미지 생성 실패"),
     ('"status": "claude_fail"', "Claude 호출 실패"),
     ('"status": "failed"', "작업 실패"),
+    ('"status": "gemini_tts_failed"', "Gemini 음성 폴백"),
+    ('"status": "gemini_voice_expiry_failed"', "설계 음성 만료(임박)"),
 )
 
 

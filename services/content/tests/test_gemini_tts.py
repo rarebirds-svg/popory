@@ -92,6 +92,18 @@ def test_payload_separates_direction_from_transcript():
     assert body["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Iapetus"
 
 
+def test_payload_uses_voice_id_for_designed_voice():
+    body = g.payload("대본입니다.", "voice_s8vzho2m0lq6", style="calm")
+    assert body["generationConfig"]["speechConfig"]["voiceConfig"] == {"voice": "voice_s8vzho2m0lq6"}
+    assert body["contents"][0]["parts"][0]["text"] == "### DIRECTOR'S NOTES\ncalm\n\n#### TRANSCRIPT\n대본입니다."
+
+
+def test_default_style_is_one_short_constant_without_meta_instructions():
+    assert g.DEFAULT_STYLE == "Calm, warm and conversational."
+    lowered = g.DEFAULT_STYLE.lower()
+    assert "same voice" not in lowered and "forties" not in lowered and "blank line" not in lowered
+
+
 class _Resp:
     def __init__(self, status, text="", pcm=b""):
         self.status_code, self.text, self._pcm = status, text, pcm
@@ -122,6 +134,21 @@ def test_synthesize_scene_returns_pcm_and_records_usage(monkeypatch):
     assert seen["url"].endswith("/models/gemini-3.8-flash-tts:generateContent") and seen["params"] == {"key": "k"}
     u = g.usage()
     assert u["month_seconds"] == pytest.approx(1.0) and u["day_requests"] == 1
+
+
+def test_synthesize_scene_sends_designed_voice_to_model_url(monkeypatch):
+    # "모델/voice_…" 는 모델을 URL 로, 설계 음성 ID 를 본문 voiceConfig.voice 로 나눠 보낸다.
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    seen = {}
+
+    def post(url, params=None, json=None, timeout=None):
+        seen.update(url=url, json=json)
+        return _Resp(200, pcm=b"\x00\x00" * 2400)
+
+    monkeypatch.setattr(g.requests, "post", post)
+    g.synthesize_scene("대본입니다.", "gemini-3.8-flash-tts/voice_s8vzho2m0lq6")
+    assert seen["url"].endswith("/models/gemini-3.8-flash-tts:generateContent")
+    assert seen["json"]["generationConfig"]["speechConfig"]["voiceConfig"] == {"voice": "voice_s8vzho2m0lq6"}
 
 
 def test_synthesize_scene_does_not_retry_4xx_but_counts_request(monkeypatch):
@@ -358,6 +385,12 @@ def test_prepay_depleted_402_is_explained_and_remembered(monkeypatch):
     monkeypatch.setattr(g.requests, "post", lambda *a, **k: _Resp(200, pcm=b"\x00\x00" * 2400))
     g.synthesize_scene("대본", "gemini-3.8-flash-tts/Iapetus")
     assert g.usage()["last_error"] is None
+
+
+def test_explain_404_mentions_designed_voice():
+    # 설계 음성은 1년 뒤 만료된다 — 404 안내가 모델 이름만 가리키면 만료를 놓친다.
+    msg = g._explain(404, "NOT_FOUND")
+    assert "설계 음성" in msg and "모델" in msg
 
 
 def _speech(sentences, rate=24000, sent_pause=0.5, para_after=(), para_pause=0.6):

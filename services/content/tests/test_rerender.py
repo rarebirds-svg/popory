@@ -1,9 +1,10 @@
 # 재렌더링 — 저장 대본 복원, 남은 배경 재사용, 장면 정보 병합, 워커 라우팅 검증.
 import json
+from datetime import date
 
 import pytest
 
-from popory_content import rerender, worker
+from popory_content import options, rerender, worker
 from popory_content.video_prompt import ENDING_CTA_CAPTION, ENDING_CTA_IMAGE_PROMPT
 
 DRAFT = "[성과는 밖에 있다]\n첫 문장입니다. 둘째 문장입니다.\n\n[강점에 집중하라]\n강점을 씁니다.\n이어지는 줄입니다."
@@ -127,7 +128,7 @@ def test_run_once_rerenders_with_saved_script_and_old_backgrounds(rerender_env):
     assert worker.run_once(client) is True
     assert [s["caption"] for s in captured["scenes"]] == ["성과는 밖에 있다", "강점에 집중하라"]
     assert captured["images"] == [b"BG0", b"BG1"]           # 이미지 생성 없이 남은 배경 재사용
-    assert captured["voice"] == "gemini-3.8-flash-tts/Iapetus" and captured["portrait"] is False
+    assert captured["voice"] == options.VOICE["male"] and captured["portrait"] is False
     assert client.put == ["/api/content/jobs/jd/video", "subs"]
     path, body = client.patched[0]
     assert body["status"] == "review"
@@ -135,7 +136,7 @@ def test_run_once_rerenders_with_saved_script_and_old_backgrounds(rerender_env):
     meta = body["meta"]
     assert meta["title"] == "T"                             # 제목·설명 등 기존 meta 유지
     assert "images_missing" not in meta                     # 이전 렌더의 누락 기록은 지운다
-    assert meta["tts"]["voice"] == "gemini-3.8-flash-tts/Iapetus"
+    assert meta["tts"]["voice"] == options.VOICE["male"]
     assert meta["rerender"]["reused_backgrounds"] == 2
     assert meta["worker_commit"] == worker.runtime_info._short(worker.runtime_info.LOADED_COMMIT)
     assert [s["caption"] for s in meta["scenes"]] == ["성과는 밖에 있다", "강점에 집중하라"]
@@ -155,6 +156,26 @@ def test_run_once_rerender_without_script_fails_visibly(rerender_env):
     worker.run_once(client)
     _, body = client.patched[0]
     assert body["status"] == "failed" and "대본" in body["error"]
+
+
+def test_rerender_logs_voice_expiry_within_window(rerender_env, monkeypatch):
+    """재렌더도 영상 작업이다 — 다시 만들 때 쓴 음성의 만료가 경고 기간 안이면 gemini_voice_expiry_failed 를 남긴다."""
+    tmp, captured = rerender_env
+    monkeypatch.setattr(options, "DESIGNED_VOICE_EXPIRES", {"voice_testexpiry": date(2030, 1, 31)})
+    monkeypatch.setitem(options.VOICE, "male", "gemini-3.8-flash-tts/voice_testexpiry")  # worker.VOICE 와 같은 dict
+    real = worker._log_voice_expiry
+    monkeypatch.setattr(worker, "_log_voice_expiry",
+                        lambda job_id, voice: real(job_id, voice, today=date(2030, 1, 21)))  # 오늘 = 만료 10일 전
+    client = _Client(_claim())
+    assert worker.run_once(client) is True
+    assert client.patched[0][1]["status"] == "review"
+    assert captured["voice"] == "gemini-3.8-flash-tts/voice_testexpiry"
+    records = [json.loads(line) for f in sorted((tmp / "logs").glob("*.log"))
+               for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
+    expiry = [r for r in records if r["status"] == "gemini_voice_expiry_failed"]
+    assert len(expiry) == 1
+    assert expiry[0]["job"] == "jd" and expiry[0]["voice"] == "gemini-3.8-flash-tts/voice_testexpiry"
+    assert expiry[0]["days_left"] == 10 and expiry[0]["expires"] == "2030-01-31"
 
 
 def test_tts_fallback_is_logged_as_failure(monkeypatch, tmp_path):
