@@ -62,8 +62,12 @@ def _voices(data) -> list:
 
 
 def list_voices(key: str) -> int:
-    resp = requests.get(API_URL, params={"type": "prompted", "language_code": "ko-KR"},
-                        headers={"x-goog-api-key": key}, timeout=TIMEOUT_SECONDS)
+    try:
+        resp = requests.get(API_URL, params={"type": "prompted", "language_code": "ko-KR"},
+                            headers={"x-goog-api-key": key}, timeout=TIMEOUT_SECONDS)
+    except requests.RequestException as e:  # 키는 헤더로만 보내 예외 문자열(URL)에 없다
+        print(f"목록 조회 실패 — {type(e).__name__}: {str(e)[:300]}", file=sys.stderr)
+        return 1
     if _http_failed(resp):
         return 1
     voices = _voices(resp.json())
@@ -83,8 +87,16 @@ def create(key: str) -> int:
     if _http_failed(resp):
         return 1
     data = resp.json()
-    vid, expire = data["id"], data.get("expire_time", "")
+    vid, expire = data.get("id"), data.get("expire_time", "")
+    if not vid:
+        print(f"HTTP {resp.status_code} 응답에 음성 ID(id)가 없다 — {resp.text[:300]}\n"
+              "서버에서는 만들어졌을 수 있다. 다시 만들기 전에 --list 로 확인한다.", file=sys.stderr)
+        return 1
     print(f"만든 음성 {vid} · 만료 {expire}")
+    if not str(vid).startswith("voice_"):
+        print(f"경고 — ID {vid} 가 voice_ 로 시작하지 않아 options.VOICE 에 그대로 넣으면 프리셋 경로로 간다 — 응답을 확인하라.",
+              file=sys.stderr)
+        return 1
     audio = (data.get("sample_audio") or {}).get("data")
     if audio:
         PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
@@ -93,7 +105,11 @@ def create(key: str) -> int:
         print(f"미리듣기 {preview}")
     else:
         print("응답에 미리듣기(sample_audio)가 없다.")
-    d = datetime.date.fromisoformat(expire[:10])
+    try:
+        d = datetime.date.fromisoformat(str(expire)[:10])
+        expires_line = f'DESIGNED_VOICE_EXPIRES = {{"{vid}": datetime.date({d.year}, {d.month}, {d.day})}}'
+    except ValueError:  # expire_time 이 없거나 날짜로 읽을 수 없다
+        expires_line = "만료 시각을 읽지 못했다 — --list 로 확인해 DESIGNED_VOICE_EXPIRES 를 채운다."
     print(f"""
 다음 조치 — 같은 페르소나여도 목소리가 다를 수 있다. 바꾸기 전에 다시 잰다.
   1. 미리듣기를 듣는다.
@@ -101,7 +117,7 @@ def create(key: str) -> int:
      장면 사이 폭·보정량이 지금 음성의 기록(SKILL.md TTS 절)보다 나쁘지 않은지 본다.
   3. popory_content/options.py 의 두 값을 함께 바꾼다.
        VOICE["male"] = "{MODEL}/{vid}"
-       DESIGNED_VOICE_EXPIRES = {{"{vid}": datetime.date({d.year}, {d.month}, {d.day})}}
+       {expires_line}
   4. 머지 후 맥미니에서 git pull → 진행 중 작업이 없을 때 launchctl kill 9 gui/$(id -u)/com.popory.content-worker""")
     return 0
 

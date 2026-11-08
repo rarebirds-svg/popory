@@ -135,3 +135,56 @@ def test_create_network_error_points_to_list(monkeypatch, capsys, key):
     assert dv.main(["--yes"]) == 1
     err = capsys.readouterr().err
     assert "read timed out" in err and "--list" in err      # 서버에선 만들어졌을 수 있다 — 다시 만들기 전에 목록부터
+
+
+def test_create_without_id_prints_status_and_body_head(monkeypatch, tmp_path, capsys, key):
+    body = '{"name": "voices/x", "note": "' + "가" * 300 + '잘려야할꼬리"}'
+    monkeypatch.setattr(dv.requests, "post", lambda *a, **k: _Resp(200, {"name": "voices/x"}, text=body))
+    monkeypatch.setattr(dv, "PREVIEW_DIR", tmp_path)
+    assert dv.main(["--yes"]) == 1                           # 트레이스백(KeyError) 없이 끝난다
+    out = capsys.readouterr()
+    shown = out.out + out.err
+    assert "200" in shown and body[:300] in shown and "잘려야할꼬리" not in shown
+    assert 'VOICE["male"]' not in shown                       # 붙여 넣을 값을 안내하지 않는다
+    assert KEY not in shown
+
+
+def test_create_rejects_id_without_voice_prefix(monkeypatch, tmp_path, capsys, key):
+    # 설계 음성 ID 가 voice_ 로 시작하지 않으면 options.VOICE 에 넣어도 프리셋 화자(prebuiltVoiceConfig)로 보낸다
+    monkeypatch.setattr(dv.requests, "post", lambda *a, **k: _Resp(200, {
+        "id": "voices/voice_new", "expire_time": "2028-11-08T00:00:00Z",
+        "sample_audio": {"data": base64.b64encode(b"RIFF").decode()}}))
+    monkeypatch.setattr(dv, "PREVIEW_DIR", tmp_path)
+    assert dv.main(["--yes"]) == 1
+    out = capsys.readouterr()
+    shown = out.out + out.err
+    assert "voices/voice_new" in shown                        # ID 는 보여 준다
+    assert "voice_ 로 시작하지 않아" in shown and "프리셋 경로" in shown and "응답을 확인하라" in shown
+    assert 'VOICE["male"] =' not in shown and "DESIGNED_VOICE_EXPIRES =" not in shown
+    assert KEY not in shown
+
+
+@pytest.mark.parametrize("expire", [None, "", "soon"])
+def test_create_unreadable_expiry_points_to_list(monkeypatch, tmp_path, capsys, key, expire):
+    data = {"id": "voice_new"} if expire is None else {"id": "voice_new", "expire_time": expire}
+    monkeypatch.setattr(dv.requests, "post", lambda *a, **k: _Resp(200, data))
+    monkeypatch.setattr(dv, "PREVIEW_DIR", tmp_path)
+    assert dv.main(["--yes"]) == 0                           # 음성은 만들어졌다 — 나머지 조치는 그대로 안내한다
+    out = capsys.readouterr()
+    shown = out.out + out.err
+    assert "만료 시각을 읽지 못했다 — --list 로 확인" in out.out
+    assert "DESIGNED_VOICE_EXPIRES = {" not in shown           # 붙여 넣을 만료일 줄 대신 위 안내
+    assert 'VOICE["male"] = "gemini-3.8-flash-tts/voice_new"' in out.out and "voice_ab.py" in out.out
+    assert "launchctl kill 9" in out.out
+    assert KEY not in shown
+
+
+def test_list_network_error_prints_summary(monkeypatch, capsys, key):
+    def get(*a, **k):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(dv.requests, "get", get)
+    assert dv.main(["--list"]) == 1                          # 트레이스백 없이 끝난다
+    out = capsys.readouterr()
+    assert "목록 조회 실패 — " in out.err and "connection refused" in out.err
+    assert KEY not in out.out + out.err                      # 키는 헤더로만 보내 예외 문자열에 없다
