@@ -158,12 +158,14 @@ def record(seconds: float, requests_made: int, today: "datetime.date | None" = N
 
 
 def payload(text: str, speaker: str, style: str = STYLE) -> dict:
-    """연출 지시와 대본을 머리표로 나눠 한 텍스트에 담는다 — 지시문을 소리 내 읽지 않게."""
+    """연출 지시와 대본을 머리표로 나눠 한 텍스트에 담는다 — 지시문을 소리 내 읽지 않게.
+    화자가 Voice design 으로 만든 고정 음성 ID(voice_…)면 voiceConfig.voice 로, 프리셋 이름이면 prebuiltVoiceConfig 로."""
+    voice = {"voice": speaker} if speaker.startswith("voice_") else {"prebuiltVoiceConfig": {"voiceName": speaker}}
     return {
         "contents": [{"parts": [{"text": f"### DIRECTOR'S NOTES\n{style}\n\n#### TRANSCRIPT\n{text}"}]}],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
-            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": speaker}}},
+            "speechConfig": {"voiceConfig": voice},
         },
     }
 
@@ -217,7 +219,7 @@ def _explain(status: int, body: str) -> str:
     hint = {
         402: "선불 크레딧 소진 — AI Studio(https://ai.studio/projects)에서 결제·충전 필요",
         403: "권한 없음 — GEMINI_API_KEY·프로젝트 결제 설정 확인",
-        404: "모델 이름을 찾을 수 없음 — 모델 ID 변경 여부 확인",
+        404: "모델 이름 또는 설계 음성(voice_…)을 찾을 수 없음 — 모델 ID 변경·설계 음성 만료(tools/design_voice.py) 확인",
     }.get(status)
     if status == 429 and re.search(r"per ?day", body or "", re.IGNORECASE):
         hint = "하루 요청 한도 초과 — 내일 다시 시도"
