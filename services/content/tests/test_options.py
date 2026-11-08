@@ -64,4 +64,12 @@ def test_voice_map_uses_chirp3hd():
     from popory_content.options import VOICE
     assert VOICE["female-calm"] == "ko-KR-Chirp3-HD-Aoede"
     assert VOICE["female-bright"] == "ko-KR-Chirp3-HD-Leda"
-    assert VOICE["male"] == "gemini-3.8-flash-tts/Iapetus"   # 2026-10-05 사용자가 비교 후 선택
+    assert VOICE["male"] == "gemini-3.8-flash-tts/voice_s8vzho2m0lq6"   # 2026-11-08 설계 음성(이전 Iapetus)
+
+
+def test_male_default_is_a_designed_gemini_voice():
+    from popory_content import gemini_tts as g
+    model, speaker = g.parse_voice(VOICE["male"])
+    assert g.is_gemini_voice(VOICE["male"]) and model == "gemini-3.8-flash-tts"
+    assert speaker == "voice_s8vzho2m0lq6"
+    assert g.payload("x", speaker)["generationConfig"]["speechConfig"]["voiceConfig"] == {"voice": speaker}

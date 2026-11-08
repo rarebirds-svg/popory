@@ -98,6 +98,12 @@ def test_payload_uses_voice_id_for_designed_voice():
     assert body["contents"][0]["parts"][0]["text"] == "### DIRECTOR'S NOTES\ncalm\n\n#### TRANSCRIPT\n대본입니다."
 
 
+def test_default_style_is_one_short_constant_without_meta_instructions():
+    assert g.DEFAULT_STYLE == "Calm, warm and conversational."
+    lowered = g.DEFAULT_STYLE.lower()
+    assert "same voice" not in lowered and "forties" not in lowered and "blank line" not in lowered
+
+
 class _Resp:
     def __init__(self, status, text="", pcm=b""):
         self.status_code, self.text, self._pcm = status, text, pcm

@@ -23,16 +23,12 @@ import requests
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 VOICE_PREFIX = "gemini-"
 
-# 낭독 연출 지시 — 화자 비교(scripts/compare_voices.py)에서 고른 결과와 같은 지시를 쓴다.
-STYLE = os.environ.get("POPORY_GEMINI_TTS_STYLE") or (
-    "Narrate this Korean script for a YouTube book-review channel as a calm, warm Korean man "
-    "in his forties reading to one listener. Natural conversational pace, not an announcer. "
-    "Let the intonation of each sentence ending vary with its meaning: statements settle softly, "
-    "rhetorical questions rise gently, and leave a short natural breath between sentences. "
-    "Keep exactly the same voice, pitch, pace and energy from the first line to the last. "
-    "Pause a little longer at each blank line between paragraphs. "
-    "Do not add any sounds, words or breaths that are not in the transcript."
-)
+# 낭독 연출 지시 — 짧은 고정 문구(2026-11-08~). 공식 문서 권고대로 긴 Director's Notes·"같은 목소리를 유지하라" 같은
+# 메타 지시·나이·성별은 넣지 않는다 — 오히려 목소리 흔들림을 늘린다. 화자의 나이·성별·말투는 설계 음성
+# (options.VOICE["male"])을 만들 때 정했다. Iapetus 에서 지시만 줄여서는 효과가 없었다(2026-11-08 tools/voice_ab.py).
+# options.py 의 설계 음성 실험 수치는 이 지시로 잰 값이다. env POPORY_GEMINI_TTS_STYLE 이 있으면 그 값을 쓴다.
+DEFAULT_STYLE = "Calm, warm and conversational."
+STYLE = os.environ.get("POPORY_GEMINI_TTS_STYLE") or DEFAULT_STYLE
 
 # 비용 상한. 출력(오디오) 단가 $/1M 토큰은 2026-10-04 cloud.google.com/text-to-speech/pricing 직접 확인 —
 # 3.8 Flash TTS 는 2026-12-31 까지 9, 2027-01-01 부터 18. 오디오는 초당 25토큰. 입력 텍스트는 출력의 1/20

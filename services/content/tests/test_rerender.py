@@ -127,7 +127,7 @@ def test_run_once_rerenders_with_saved_script_and_old_backgrounds(rerender_env):
     assert worker.run_once(client) is True
     assert [s["caption"] for s in captured["scenes"]] == ["성과는 밖에 있다", "강점에 집중하라"]
     assert captured["images"] == [b"BG0", b"BG1"]           # 이미지 생성 없이 남은 배경 재사용
-    assert captured["voice"] == "gemini-3.8-flash-tts/Iapetus" and captured["portrait"] is False
+    assert captured["voice"] == "gemini-3.8-flash-tts/voice_s8vzho2m0lq6" and captured["portrait"] is False
     assert client.put == ["/api/content/jobs/jd/video", "subs"]
     path, body = client.patched[0]
     assert body["status"] == "review"
@@ -135,7 +135,7 @@ def test_run_once_rerenders_with_saved_script_and_old_backgrounds(rerender_env):
     meta = body["meta"]
     assert meta["title"] == "T"                             # 제목·설명 등 기존 meta 유지
     assert "images_missing" not in meta                     # 이전 렌더의 누락 기록은 지운다
-    assert meta["tts"]["voice"] == "gemini-3.8-flash-tts/Iapetus"
+    assert meta["tts"]["voice"] == "gemini-3.8-flash-tts/voice_s8vzho2m0lq6"
     assert meta["rerender"]["reused_backgrounds"] == 2
     assert meta["worker_commit"] == worker.runtime_info._short(worker.runtime_info.LOADED_COMMIT)
     assert [s["caption"] for s in meta["scenes"]] == ["성과는 밖에 있다", "강점에 집중하라"]
