@@ -350,6 +350,11 @@ def test_scan_markers_still_catches_real_image_failure():
     assert "이미지 생성 실패 1건" in msg
 
 
+def test_scan_log_markers_flags_designed_voice_expiry():
+    status, msg = checks.scan_log_markers('{"status": "gemini_voice_expiry_failed"}\n')
+    assert status == "warn" and "설계 음성 만료 임박 1건" in msg
+
+
 def test_brief_run_warns_when_log_missing(tmp_path):
     """오늘자 로그 부재 = 데일리 잡이 아예 안 뜸(launchd 미로드·맥 종료).
 

@@ -1,4 +1,5 @@
 # youtube 작업의 params_json(길이·목소리·배경스타일) 파싱·매핑.
+import datetime
 import json
 
 SCENE_COUNT = {"3": 5, "5": 8, "7": 12, "10": 16}
@@ -13,6 +14,9 @@ SHORT_SCENE_COUNT = {"15": 3, "30": 5, "60": 8}
 VOICE = {"female-calm": "ko-KR-Chirp3-HD-Aoede", "female-bright": "ko-KR-Chirp3-HD-Leda",
          "male": "gemini-3.8-flash-tts/voice_s8vzho2m0lq6"}
 FALLBACK_VOICE = "ko-KR-Neural2-C"
+# 설계 음성(voice_…)의 만료일 — 생성 응답의 expire_time(저장 음성 TTL 1년)을 상수로 둔다. VOICE 의 설계 음성을
+# 바꾸면 이 표도 함께 바꾼다. 만료되면 설계 음성 요청이 실패해 영상 전체가 FALLBACK_VOICE 로 가므로 워커가 30일 전부터 경고한다.
+DESIGNED_VOICE_EXPIRES = {"voice_s8vzho2m0lq6": datetime.date(2027, 11, 8)}
 STYLE = {
     "photo": "photorealistic, cinematic",
     "illust": "digital illustration, clean",
@@ -61,3 +65,10 @@ def parse_shorts_options(params_json: str | None) -> dict:
         if isinstance(targets, list):
             opts["upload_targets"] = [t for t in targets if t in ("youtube", "instagram", "facebook")]
     return opts
+
+
+def designed_voice_days_left(voice: str, today: datetime.date) -> int | None:
+    """설계 음성 만료까지 남은 날(만료일 당일 0, 지나면 음수). voice 는 "모델/화자" 또는 화자만 받는다.
+    만료일이 없는 음성(프리셋 화자·Chirp3-HD 등)은 None."""
+    expires = DESIGNED_VOICE_EXPIRES.get(voice.rpartition("/")[2])
+    return None if expires is None else (expires - today).days

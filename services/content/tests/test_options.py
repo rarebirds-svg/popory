@@ -73,3 +73,12 @@ def test_male_default_is_a_designed_gemini_voice():
     assert g.is_gemini_voice(VOICE["male"]) and model == "gemini-3.8-flash-tts"
     assert speaker == "voice_s8vzho2m0lq6"
     assert g.payload("x", speaker)["generationConfig"]["speechConfig"]["voiceConfig"] == {"voice": speaker}
+
+
+def test_designed_voice_days_left():
+    from datetime import date
+    from popory_content.options import designed_voice_days_left
+    assert designed_voice_days_left("gemini-3.8-flash-tts/voice_s8vzho2m0lq6", date(2027, 10, 9)) == 30
+    assert designed_voice_days_left("voice_s8vzho2m0lq6", date(2027, 11, 9)) == -1
+    assert designed_voice_days_left("gemini-3.8-flash-tts/Iapetus", date(2027, 10, 9)) is None
+    assert designed_voice_days_left("ko-KR-Chirp3-HD-Aoede", date(2027, 10, 9)) is None

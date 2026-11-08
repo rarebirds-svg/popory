@@ -1,5 +1,7 @@
 # 워커가 claim→generate→result 를 올바른 상태로 호출하는지 검증.
 import io
+import json
+from datetime import date
 
 import pytest
 from PIL import Image
@@ -1023,3 +1025,56 @@ def test_blog_jobs_do_not_check_media_tools(monkeypatch):
     client = FakeClient({"job": {"id": "b1", "topic": "t", "platform": "naver-blog"}, "sources": [], "style_samples": []})
     worker.run_once(client)
     assert "영상 도구를 확인하지 않는다" not in str(client.patched)   # boom 이 불렸다면 그 메시지로 실패했을 것이다
+
+
+# --- 설계 음성 만료 경고 ---
+
+def _records(tmp_path) -> list[dict]:
+    """conftest 가 LOGS_DIR 를 tmp_path/"logs" 로 바꿔 둔다. 그 폴더의 로그 줄을 JSON 으로 읽는다."""
+    out = []
+    for f in sorted((tmp_path / "logs").glob("*.log")):
+        out += [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return out
+
+
+def _statuses(tmp_path) -> list[str]:
+    return [r["status"] for r in _records(tmp_path)]
+
+
+def test_voice_expiry_silent_before_window(tmp_path):
+    worker._log_voice_expiry("j1", "gemini-3.8-flash-tts/voice_s8vzho2m0lq6", today=date(2027, 10, 8))  # 31일
+    assert _statuses(tmp_path) == []
+
+
+def test_voice_expiry_logs_within_30_days(tmp_path):
+    worker._log_voice_expiry("j1", "gemini-3.8-flash-tts/voice_s8vzho2m0lq6", today=date(2027, 10, 9))
+    rec = _records(tmp_path)[0]
+    assert rec["status"] == "gemini_voice_expiry_failed" and rec["days_left"] == 30 and rec["expires"] == "2027-11-08"
+    assert "design_voice.py" in rec["error"]
+
+
+def test_voice_expiry_logs_after_expiry(tmp_path):
+    worker._log_voice_expiry("j1", "gemini-3.8-flash-tts/voice_s8vzho2m0lq6", today=date(2027, 11, 9))
+    rec = _records(tmp_path)[0]
+    assert rec["days_left"] == -1 and "만료됨" in rec["error"]
+
+
+def test_voice_expiry_ignores_voices_without_expiry(tmp_path):
+    for v in ("gemini-3.8-flash-tts/Iapetus", "ko-KR-Chirp3-HD-Aoede"):
+        worker._log_voice_expiry("j1", v, today=date(2027, 11, 9))
+    assert _statuses(tmp_path) == []
+
+
+@pytest.mark.parametrize("platform", ["youtube", "shorts"])
+def test_video_jobs_check_voice_expiry_with_the_job_voice(monkeypatch, tmp_path, platform):
+    """롱폼·쇼츠 작업은 그 작업이 고른 목소리로 설계 음성 만료를 확인한다."""
+    mp4 = tmp_path / "v.mp4"
+    mp4.write_bytes(b"\x00")
+    monkeypatch.setattr(worker, "make_video",
+                        lambda **kw: (mp4, [{"caption": "c", "narration": "n"}], {"title": "T"}, 0, 1, []))
+    calls = []
+    monkeypatch.setattr(worker, "_log_voice_expiry", lambda job_id, voice: calls.append((job_id, voice)))
+    client = FakeClient({"job": {"id": "v1", "topic": "t", "platform": platform, "params_json": '{"voice":"female-calm"}'},
+                         "sources": [], "style_samples": []})
+    assert worker.run_once(client) is True
+    assert calls == [("v1", "ko-KR-Chirp3-HD-Aoede")]
