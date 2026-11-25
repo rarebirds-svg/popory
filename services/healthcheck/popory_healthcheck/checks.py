@@ -292,6 +292,11 @@ def check_brief_run(log_path: str, mode: str = "pm", token_mode: bool = False) -
     except OSError:
         return ("warn", "오늘 브리핑 잡 미기동 — 로그 없음(launchd 로드 여부 확인)")
     status, msg = _brief_run_verdict(text, mode, token_mode)
+    # 대체 claude 가 꺼져 있어 실패한 날은 그 이유가 진짜 원인이다 — Gemini 쪽만 보면 엉뚱한 곳을 고친다
+    # (2026-11-07: claude 를 못 찾아 대체가 꺼진 채 Gemini 402 만 13시간 반복).
+    skipped = _fallback_skipped(_brief_records(text))
+    if skipped and msg.startswith("브리핑 생성 실패"):
+        msg = f"{msg} · Claude 대체 불가 — {skipped}"
     # 메일이 꺼진 뒤로 포털 발행이 유일한 전달 경로다 — 생성이 다 됐어도 발행이 안 됐으면 경고.
     pub = _last_publish_fail(text)
     if pub:
@@ -300,6 +305,12 @@ def check_brief_run(log_path: str, mode: str = "pm", token_mode: bool = False) -
     if text.rfind(_BRIEF_CUSTOM_LOOKUP_FAIL) > text.rfind(_BRIEF_CUSTOM_LOOKUP_OK):
         return ("warn", f"{msg} · 커스텀 주제 조회 실패 — 오늘 커스텀 주제 생략")
     return (status, msg)
+
+
+def _fallback_skipped(records: list[dict]) -> str:
+    """generate_brief 가 남긴 '대체 못 한 이유'(claude CLI 없음 등). 마지막 것을 쓴다."""
+    reasons = [str(r["fallback_skipped"]) for r in records if r.get("fallback_skipped")]
+    return reasons[-1][:_CAUSE_MAX * 2] if reasons else ""
 
 
 def _last_publish_fail(text: str) -> str:

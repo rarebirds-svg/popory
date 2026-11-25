@@ -158,3 +158,46 @@ def test_publish_recovered_clears_pending(env):
     path = _write_pending(env, _day(0), 0, cats=("naver",))
     _run(env)
     assert not path.exists()
+
+
+def _auth_markers(claude_flag: str | None) -> str:
+    body = ("echo '__RUN_LIMIT_FAIL_CATS__='\n"
+            "echo '__RUN_AUTH_FAIL_CATS__=naver'\n")
+    if claude_flag is not None:
+        body += f"echo '__RUN_AUTH_FAIL_CLAUDE__={claude_flag}'\n"
+    return body + "echo '__RUN_PUBLISH_FAIL_CATS__='\necho '__RUN_LIMIT_RESET__=0'\n"
+
+
+def test_gemini_auth_failure_burns_a_retry(env):
+    """Gemini 키·결제 실패는 막아 줄 프로브가 없다 — 횟수를 안 세면 10분마다 영원히 돈다
+    (2026-11-07: 7개 카테고리가 13시간 동안 73번씩 재시도). 횟수를 태워 MAX_RETRY 뒤 포기한다."""
+    _stub_run_daily(env["brief"], env["calls"], _auth_markers("0"))
+    path = _write_pending(env, _day(0), 0, cats=("naver",), retry_count=2)
+
+    _run(env)
+
+    d = json.loads(path.read_text())
+    assert d["categories"] == ["naver"]
+    assert d["retry_count"] == 3
+    log = (env["brief"] / "logs" / f"{_day(0)}.log").read_text()
+    assert "Gemini 키·결제 거부" in log and "claude 인증 만료" not in log
+
+
+def test_gemini_auth_failure_gives_up_after_max_retry(env):
+    _stub_run_daily(env["brief"], env["calls"], _auth_markers("0"))
+    path = _write_pending(env, _day(0), 0, cats=("naver",), retry_count=6)
+
+    assert _run(env) == []                       # 더 돌리지 않는다
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("flag", ["1", None])   # None: 마커가 없는 옛 run_daily
+def test_claude_auth_failure_keeps_retry_count(env, flag):
+    """claude 인증 만료는 재시도 전 프로브가 막아 주므로 예전처럼 횟수를 태우지 않는다."""
+    _stub_run_daily(env["brief"], env["calls"], _auth_markers(flag))
+    path = _write_pending(env, _day(0), 0, cats=("naver",), retry_count=2)
+
+    _run(env)
+
+    assert json.loads(path.read_text())["retry_count"] == 2
+    assert "claude 인증 만료" in (env["brief"] / "logs" / f"{_day(0)}.log").read_text()

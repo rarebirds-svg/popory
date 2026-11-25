@@ -27,7 +27,7 @@ from popory_brief.log import append_log, safe_error, KST
 from popory_brief import limit_detect
 from popory_brief import gemini_client
 from popory_brief import link_check
-from popory_brief.fallback import fallback_model, restore_gemini_contract
+from popory_brief.fallback import fallback_model, fallback_skip_reason, restore_gemini_contract
 from popory_brief.response import ResponseFormatError, parse_response
 from popory_brief.llm_model import resolve_model
 from popory_brief.seo_rules import seo_rules
@@ -115,7 +115,7 @@ def _run_claude(*, model: str, system_text: str, user_msg: str,
 
 
 def _gemini_fail_record(category: str, date_str: str, e: "gemini_client.GeminiError",
-                        fallback: str | None) -> dict:
+                        fallback: str | None, fallback_skipped: str = "") -> dict:
     """Gemini 실패 로그 1줄. 빈 응답이면 원인을 가릴 응답 메타(diag)를 같이 남긴다."""
     record = {"cli": "generate_brief", "status": "gemini_fail",
               "category": category, "date": date_str,
@@ -125,6 +125,9 @@ def _gemini_fail_record(category: str, date_str: str, e: "gemini_client.GeminiEr
     if fallback:
         # 대체를 "시도" 했다는 표시. 대체로 발행까지 됐는지는 ok 레코드의 fallback 으로 가른다.
         record["fallback"] = fallback
+    if fallback_skipped:
+        # 대체가 있어야 할 자리에서 못 한 이유(claude CLI 없음 등). 헬스체크가 알림에 싣는다.
+        record["fallback_skipped"] = fallback_skipped
     return record
 
 
@@ -172,7 +175,10 @@ def _run_gemini(*, model: str, system_text: str, user_msg: str,
 
     fallback = fallback_model(CLAUDE_BIN) if claude_prompts else None
     if fallback is None:
-        _exit_gemini(err, category, date_str)
+        skipped = fallback_skip_reason(CLAUDE_BIN) if claude_prompts else ""
+        if skipped:
+            print(f"--- Gemini 실패(exit {err.exit_code}) — claude 대체 불가: {skipped} ---", file=sys.stderr)
+        _exit_gemini(err, category, date_str, skipped)
 
     append_log(LOGS_DIR, _gemini_fail_record(category, date_str, err, fallback))
     print(f"--- Gemini 실패(exit {err.exit_code}) — {fallback} 로 대체 생성 ---", file=sys.stderr)
@@ -196,20 +202,24 @@ def _run_gemini(*, model: str, system_text: str, user_msg: str,
     return body, meta, fallback
 
 
-def _exit_gemini(e: "gemini_client.GeminiError", category: str, date_str: str) -> None:
+def _exit_gemini(e: "gemini_client.GeminiError", category: str, date_str: str,
+                 fallback_skipped: str = "") -> None:
     """대체 없이 Gemini 실패를 규약 exit code 로 끝낸다."""
     if e.is_limit:
         # 쿼터는 claude 한도와 같은 규약으로 넘긴다 — retry 잡이 그대로 복구한다.
         reset_epoch = e.reset_epoch or int(datetime.datetime.now(KST).timestamp())
         print(f"__BRIEF_LIMIT_RESET__={reset_epoch}")
-        append_log(LOGS_DIR, {"cli": "generate_brief", "status": "limit_fail",
-                              "category": category, "date": date_str,
-                              "reset_epoch": reset_epoch, "error": str(e)[:200]})
+        record = {"cli": "generate_brief", "status": "limit_fail",
+                  "category": category, "date": date_str,
+                  "reset_epoch": reset_epoch, "error": str(e)[:200]}
+        if fallback_skipped:
+            record["fallback_skipped"] = fallback_skipped
+        append_log(LOGS_DIR, record)
         sys.exit(6)
     # 인증 실패는 사람이 키를 고쳐야 풀린다 — run_daily.sh 가 즉시 알림을 걸도록 마커를 남긴다.
     if e.exit_code == 3:
         print("__BRIEF_AUTH_FAIL__=gemini")
-    append_log(LOGS_DIR, _gemini_fail_record(category, date_str, e, None))
+    append_log(LOGS_DIR, _gemini_fail_record(category, date_str, e, None, fallback_skipped))
     sys.exit(e.exit_code)
 
 

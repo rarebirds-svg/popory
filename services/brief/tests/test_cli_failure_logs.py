@@ -630,6 +630,28 @@ def test_generate_gemini_auth_failure_prints_marker(monkeypatch, capsys):
     assert rec.one(generate_brief)["status"] == "gemini_fail"
 
 
+def test_generate_gemini_failure_records_why_claude_fallback_was_skipped(monkeypatch, capsys, tmp_path):
+    """대체가 꺼진 이유가 로그에 남아야 한다 — 2026-11-07 claude 를 못 찾아 대체가 조용히 꺼진 채
+    Gemini 402 만 13시간 반복됐는데, 로그에는 Gemini 실패만 있어 엉뚱하게 Gemini 결제를 보게 됐다."""
+    rec = _patch(monkeypatch, generate_brief)
+    _gemini_raises(monkeypatch, gemini_client.GeminiError("Gemini 선불 크레딧 소진(402) — 충전 필요", exit_code=3))
+    _gemini_argv(monkeypatch, fallback="claude-sonnet-4-6")
+    missing = tmp_path / "no-claude"
+    monkeypatch.setattr(generate_brief, "CLAUDE_BIN", str(missing))
+
+    with pytest.raises(SystemExit) as e:
+        generate_brief.main()
+
+    assert e.value.code == 3
+    out = capsys.readouterr()
+    assert "__BRIEF_AUTH_FAIL__=gemini" in out.out
+    assert "claude 대체 불가" in out.err
+    r = rec.one(generate_brief)
+    assert r["status"] == "gemini_fail"
+    assert r["fallback_skipped"] == f"claude CLI 없음({missing})"
+    assert "fallback" not in r
+
+
 def test_generate_gemini_missing_key_is_config_exit_2(monkeypatch):
     """키가 없으면 설정 누락(exit 2) — 재시도 대상이 아니다."""
     rec = _patch(monkeypatch, generate_brief)

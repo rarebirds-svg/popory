@@ -1,7 +1,7 @@
 # 공급자 대체 정책 — Gemini 실패 시 claude 로 대신 쓸지, 어떤 모델로 쓸지.
 import pytest
 
-from popory_brief.fallback import DEFAULT_FALLBACK_MODEL, fallback_model
+from popory_brief.fallback import DEFAULT_FALLBACK_MODEL, fallback_model, fallback_skip_reason
 
 
 @pytest.fixture
@@ -37,3 +37,15 @@ def test_no_fallback_without_cli(monkeypatch, tmp_path):
     """CLI 가 없는 머신에서 대체를 시도하면 원래 Gemini 오류가 init 실패로 덮인다."""
     monkeypatch.delenv("BRIEF_FALLBACK_MODEL", raising=False)
     assert fallback_model(str(tmp_path / "missing")) is None
+
+
+def test_skip_reason_names_why_fallback_is_off(monkeypatch, tmp_path, claude_bin):
+    """대체가 꺼진 이유 — 로그·알림이 "claude 경로" 를 고치게 이끈다."""
+    monkeypatch.delenv("BRIEF_FALLBACK_MODEL", raising=False)
+    assert fallback_skip_reason(claude_bin) == ""                 # 대체 가능 → 이유 없음
+    missing = str(tmp_path / "missing")
+    assert fallback_skip_reason(missing) == f"claude CLI 없음({missing})"
+    monkeypatch.setenv("BRIEF_FALLBACK_MODEL", "off")
+    assert "off" in fallback_skip_reason(claude_bin)
+    monkeypatch.setenv("BRIEF_FALLBACK_MODEL", "gemini-3-pro")
+    assert "Gemini" in fallback_skip_reason(claude_bin)

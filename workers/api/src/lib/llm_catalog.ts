@@ -63,17 +63,24 @@ export function defaultModelOf(feature: string): string {
 // id 는 공급자에 그대로 넘어간다 — claude 는 claude CLI 의 --model, gemini 는 API 경로의 모델명.
 // 그래서 오탈자 하나가 그날 잡을 죽인다. 새 모델을 넣을 때 공급자 문서의 정확한 id 를 확인한다.
 export const MODELS: { id: string; label: string; note: string; provider: Provider }[] = [
-  { id: "claude-opus-5-5", label: "Opus 5.5", note: "Opus 최신. 가장 강한 추론 — 호출당 비용·시간이 가장 크다", provider: "claude" },
-  { id: "claude-opus-5", label: "Opus 5", note: "Opus 직전 세대. 추론 강함", provider: "claude" },
-  { id: "claude-opus-4-8", label: "Opus 4.8", note: "Opus 계열 직전 세대", provider: "claude" },
-  { id: "claude-opus-4-7", label: "Opus 4.7", note: "Opus 계열", provider: "claude" },
-  { id: "claude-opus-4-6", label: "Opus 4.6", note: "Opus 계열 구세대", provider: "claude" },
-  { id: "claude-sonnet-5", label: "Sonnet 5", note: "현재 기본값. Sonnet 최신", provider: "claude" },
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", note: "직전 기본값. 품질·속도 균형", provider: "claude" },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5", note: "가장 빠르고 가볍다. 이진 판정(검수)에 적합", provider: "claude" },
-  // Gemini 는 구독(Claude Max)이 아니라 GEMINI_API_KEY 로 과금된다. 웹 검색은 Google Search grounding.
+  // 2026-11 기준 Claude 현행 모델. 계열마다 최신을 위에 둔다. 구세대도 아직 서비스되므로 남긴다 —
+  // 지운 id 로 저장된 기능은 화면에서 "직접 입력"으로 보일 뿐 동작은 그대로다.
+  // claude CLI(--model)로 부르므로 맥미니의 claude 가 이 id 를 알 만큼 새 버전이어야 한다.
+  { id: "claude-fable-5-1", label: "Fable 5.1", note: "가장 강한 모델. Opus 5.5 보다 비싸고 한 번 호출이 길다 — 사용량을 가장 많이 쓴다", provider: "claude" },
+  { id: "claude-opus-5-5", label: "Opus 5.5", note: "Opus 최신. 강한 추론 — 호출당 비용·시간이 크다", provider: "claude" },
+  { id: "claude-opus-5", label: "Opus 5", note: "Opus 직전 세대", provider: "claude" },
+  { id: "claude-opus-4-8", label: "Opus 4.8", note: "Opus 4 계열 마지막", provider: "claude" },
+  { id: "claude-opus-4-7", label: "Opus 4.7", note: "Opus 4 계열 구세대", provider: "claude" },
+  { id: "claude-opus-4-6", label: "Opus 4.6", note: "Opus 4 계열 구세대", provider: "claude" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "Sonnet 최신. 품질·속도 균형", provider: "claude" },
+  { id: "claude-sonnet-5", label: "Sonnet 5", note: "전역 기본값. Sonnet 직전 세대", provider: "claude" },
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", note: "Sonnet 구세대. 브리핑 기본값·Gemini 실패 시 대체 모델", provider: "claude" },
+  { id: "claude-haiku-5-5", label: "Haiku 5.5", note: "Haiku 최신. 가장 빠르고 가볍다 — 이진 판정(검수)에 적합", provider: "claude" },
+  { id: "claude-haiku-4-5", label: "Haiku 4.5", note: "Haiku 직전 세대", provider: "claude" },
+  // Gemini 는 구독(Claude Max)이 아니라 GEMINI_API_KEY 로 과금된다(선불 크레딧). 웹 검색은 Google Search grounding.
   { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash", note: "Gemini 최신 Flash. 속도·비용 유리 — Gemini 전환 시 먼저 시범할 모델", provider: "gemini" },
-  { id: "gemini-3-pro", label: "Gemini 3 Pro", note: "Gemini Pro 안정판. Flash 품질이 부족할 때", provider: "gemini" },
+  { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite", note: "Gemini 최신 Flash-Lite. 가장 싸고 빠르지만 품질은 Flash 보다 낮다", provider: "gemini" },
+  { id: "gemini-3-pro", label: "Gemini 3 Pro", note: "Gemini Pro. Flash 품질이 부족할 때", provider: "gemini" },
 ];
 
 export const MODEL_IDS = new Set(MODELS.map((m) => m.id));
