@@ -149,15 +149,49 @@ def test_judge_sees_first_scene_sentences_and_whole_script_without_tools():
     assert "intro_person" in call["system_prompt"] and "질문" in call["system_prompt"]
 
 
-def test_make_video_checks_hook_for_longform_only_and_before_script_review(monkeypatch):
-    order = []
+def test_make_video_checks_hook_before_script_review_with_the_right_mode(monkeypatch):
+    order, seen = [], []
     scenes = [{"caption": "a", "narration": "첫 문장입니다.", "image_prompt": "x"}]
     monkeypatch.setattr(video, "generate_scenes", lambda **kw: (scenes, {"title": "t"}))
-    monkeypatch.setattr(video, "check_hook", lambda sc, meta, **kw: order.append("hook") or {"status": "passed"})
+    monkeypatch.setattr(video, "check_hook",
+                        lambda sc, meta, **kw: (order.append("hook"), seen.append(kw["shorts"])) and {"status": "passed"})
     monkeypatch.setattr(video, "review_script", lambda sc, meta, **kw: order.append("review") or {"status": "ok"})
     monkeypatch.setattr(video, "render_video", lambda sc, **kw: (None, 0, 1, []))
     _, _, meta, *_ = video.make_video(topic="t", sources=[], style_samples=[], job_id="j")
     assert order == ["hook", "review"] and meta["hook_check"]["status"] == "passed"
+    assert seen == [False]
     order.clear()
     _, _, meta, *_ = video.make_video(topic="t", sources=[], style_samples=[], job_id="j", portrait=True)
-    assert order == ["review"] and "hook_check" not in meta        # 쇼츠는 대상이 아니다
+    assert order == ["hook", "review"] and seen == [False, True]    # 쇼츠는 쇼츠 기준으로 검수한다
+
+
+# ---------------- 쇼츠 훅 검수 ----------------
+
+def _shorts_scenes():
+    return [
+        {"caption": "책 소개", "image_prompt": "x", "narration": "오늘은 모건 하우절의 돈의 심리학을 소개합니다. 이 책은 부에 대한 생각을 바꿉니다."},
+        {"caption": "청소부", "image_prompt": "y", "narration": "청소부 로널드 리드는 800만 달러를 남겼습니다."},
+    ]
+
+
+def test_shorts_use_their_own_prompt_and_rewrite_the_first_sentence():
+    run = _runner(_verdict(kind="intro_book", replace_count=1, rewrite=["청소부가 800만 달러를 남겼습니다."]))
+    scenes = _shorts_scenes()
+    out = hc.check_hook(scenes, META, split=video._split_sentences, runner=run, shorts=True)
+    assert out["status"] == "rewritten" and out["kind"] == "intro_book"
+    assert scenes[0]["narration"] == "청소부가 800만 달러를 남겼습니다. 이 책은 부에 대한 생각을 바꿉니다."
+    assert run.calls[0]["system_prompt"] == hc.SHORTS_SYSTEM_PROMPT
+    assert "쇼츠 훅 규칙" in run.calls[0]["user_msg"]
+
+
+def test_shorts_allow_a_question_hook_but_not_a_long_first_sentence():
+    """롱폼은 질문으로 여는 교체문을 버리지만 쇼츠는 받는다. 대신 첫 문장 상한이 더 짧다."""
+    question = _verdict(kind="vague", replace_count=1, rewrite=["왜 청소부가 800만 달러를 남겼을까요?"])
+    assert hc.check_hook(_shorts_scenes(), META, split=video._split_sentences,
+                         runner=_runner(question), shorts=True)["status"] == "rewritten"
+    assert hc.check_hook(_shorts_scenes(), META, split=video._split_sentences,
+                         runner=_runner(question))["status"] == "rejected"
+    long_first = _verdict(kind="vague", replace_count=1,
+                          rewrite=["평생 주유소와 백화점에서 청소부로 일한 한 남자가 세상을 떠나며 800만 달러를 남겼습니다."])
+    out = hc.check_hook(_shorts_scenes(), META, split=video._split_sentences, runner=_runner(long_first), shorts=True)
+    assert out["status"] == "rejected" and "45자" in out["rejected_because"]

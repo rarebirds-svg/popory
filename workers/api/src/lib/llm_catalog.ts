@@ -35,8 +35,10 @@ export const FEATURES: {
   key: FeatureKey; service: ServiceKey; label: string; description: string; defaultModel?: string;
 }[] = [
   { key: "blog", service: "content", label: "블로그 본문", description: "네이버 블로그 HTML 생성" },
-  { key: "video_script", service: "content", label: "유튜브 롱폼 대본", description: "장면·내레이션·이미지 프롬프트" },
-  { key: "shorts_script", service: "content", label: "쇼츠 대본", description: "세로 영상 장면 구성" },
+  // 대본은 하루 한두 번 부르고 영상 품질을 가장 크게 좌우한다 — 2026-11 품질 점검에서 기본값을 Opus 로 올렸다.
+  // 사용량이 부담이면 어드민에서 Sonnet 으로 내리면 된다(이 두 기능만 따로 저장된다).
+  { key: "video_script", service: "content", label: "유튜브 롱폼 대본", defaultModel: "claude-opus-5-5", description: "이야기 설계·장면·내레이션·이미지 프롬프트" },
+  { key: "shorts_script", service: "content", label: "쇼츠 대본", defaultModel: "claude-opus-5-5", description: "세로 영상 장면 구성" },
   { key: "carousel", service: "content", label: "인스타 캐러셀", description: "슬라이드 카피·이미지 프롬프트" },
   { key: "youtube_post", service: "content", label: "유튜브 커뮤니티 글", description: "채널 커뮤니티 포스트" },
   { key: "reply", service: "content", label: "댓글 답글 초안", description: "시청자 댓글 답글" },
@@ -66,8 +68,9 @@ export const MODELS: { id: string; label: string; note: string; provider: Provid
   // 2026-11 기준 Claude 현행 모델. 계열마다 최신을 위에 둔다. 구세대도 아직 서비스되므로 남긴다 —
   // 지운 id 로 저장된 기능은 화면에서 "직접 입력"으로 보일 뿐 동작은 그대로다.
   // claude CLI(--model)로 부르므로 맥미니의 claude 가 이 id 를 알 만큼 새 버전이어야 한다.
-  { id: "claude-fable-5-1", label: "Fable 5.1", note: "가장 강한 모델. Opus 5.5 보다 비싸고 한 번 호출이 길다 — 사용량을 가장 많이 쓴다", provider: "claude" },
-  { id: "claude-opus-5-5", label: "Opus 5.5", note: "Opus 최신. 강한 추론 — 호출당 비용·시간이 크다", provider: "claude" },
+  { id: "claude-fable-5-2", label: "Fable 5.2", note: "가장 강한 모델. Opus 5.5 보다 비싸고 한 번 호출이 길다 — 사용량을 가장 많이 쓴다", provider: "claude" },
+  { id: "claude-fable-5-1", label: "Fable 5.1", note: "Fable 직전 세대", provider: "claude" },
+  { id: "claude-opus-5-5", label: "Opus 5.5", note: "Opus 최신. 강한 추론 — 호출당 비용·시간이 크다. 롱폼·쇼츠 대본 기본값", provider: "claude" },
   { id: "claude-opus-5", label: "Opus 5", note: "Opus 직전 세대", provider: "claude" },
   { id: "claude-opus-4-8", label: "Opus 4.8", note: "Opus 4 계열 마지막", provider: "claude" },
   { id: "claude-opus-4-7", label: "Opus 4.7", note: "Opus 4 계열 구세대", provider: "claude" },

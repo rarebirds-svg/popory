@@ -1512,3 +1512,70 @@ def test_media_tools_problem_ok_broken_and_missing(monkeypatch):
         raise FileNotFoundError(cmd[0])
     monkeypatch.setattr(video.subprocess, "run", missing)
     assert "ffmpeg 없음" in video.media_tools_problem()
+
+
+def _any_font():
+    """카드 렌더 테스트용 글꼴 — 맥(운영)의 FONT_PATH, 없으면 리눅스 CI 의 CJK 글꼴."""
+    for cand in (FONT_PATH, "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"):
+        if Path(cand).exists():
+            return cand
+    return None
+
+
+@pytest.mark.skipif(_any_font() is None, reason="글꼴 없음")
+def test_stat_card_shrinks_a_long_value_to_fit_the_frame(monkeypatch, tmp_path):
+    """숫자 카드의 value 는 화면 폭의 80% 를 넘지 않게 글자 크기를 줄인다 — 세로 화면에서도 잘리지 않아야 한다."""
+    from PIL import Image
+    font = _any_font()
+    monkeypatch.setattr(_video, "FONT_PATH", font)
+    if font != FONT_PATH:
+        monkeypatch.setattr(_video, "FONT_INDEX_BOLD", 0)
+    for portrait, (w, h) in ((False, (1920, 1080)), (True, (1080, 1920))):
+        out = tmp_path / f"stat_{portrait}.png"
+        _video._render_graphic_card_png({"type": "stat", "value": "1,234억 5천만 원", "label": "숫자 설명"}, out,
+                                        portrait=portrait)
+        img = Image.open(out).convert("RGB")
+        assert img.size == (w, h)
+        # 좌우 끝 5% 띠에는 글자(밝은 픽셀)가 없어야 한다 — 넘쳤다면 여기에 걸린다.
+        for box in ((0, 0, int(w * 0.05), h), (int(w * 0.95), 0, w, h)):
+            assert img.crop(box).convert("L").getextrema()[1] < 60
+
+
+def test_env_fallback_voice_gets_its_family_rate_and_a_safe_second_try(monkeypatch):
+    """POPORY_TTS_FALLBACK_VOICE 로 바꾼 대체 음성은 계열 말속도로 읽고, 합성이 실패하면 기본 대체 음성으로 다시 시도한다."""
+    calls = []
+
+    def fake(text, voice="x", speaking_rate=None):
+        calls.append((voice, speaking_rate))
+        return None if "Iapetus" in voice else b"ok"
+    monkeypatch.setattr(_video, "synthesize", fake)
+    monkeypatch.setattr(_video, "FALLBACK_VOICE", "ko-KR-Chirp3-HD-Iapetus")
+    monkeypatch.delenv("POPORY_TTS_FALLBACK_RATE", raising=False)
+    assert _video._synth_cloud("문장입니다.", "ko-KR-Chirp3-HD-Iapetus") == b"ok"
+    assert calls == [("ko-KR-Chirp3-HD-Iapetus", 1.06), (_video.DEFAULT_FALLBACK_VOICE, None)]
+    # 사용자가 고른 음성·기본 대체 음성은 예전 그대로(말속도 인자 없이 한 번).
+    calls.clear()
+    assert _video._synth_cloud("문장입니다.", "ko-KR-Chirp3-HD-Aoede") == b"ok"
+    monkeypatch.setattr(_video, "FALLBACK_VOICE", _video.DEFAULT_FALLBACK_VOICE)
+    assert _video._synth_cloud("문장입니다.", _video.DEFAULT_FALLBACK_VOICE) == b"ok"
+    assert calls == [("ko-KR-Chirp3-HD-Aoede", None), (_video.DEFAULT_FALLBACK_VOICE, None)]
+
+
+def test_fallback_rate_follows_family_unless_overridden(monkeypatch):
+    from popory_content import tts
+    monkeypatch.delenv("POPORY_TTS_FALLBACK_RATE", raising=False)
+    assert tts.fallback_rate("ko-KR-Chirp3-HD-Iapetus") == 1.06
+    assert tts.fallback_rate("ko-KR-Neural2-C") == 1.0
+    monkeypatch.setenv("POPORY_TTS_FALLBACK_RATE", "0.98")
+    assert tts.fallback_rate("ko-KR-Chirp3-HD-Iapetus") == 0.98
+    monkeypatch.setenv("POPORY_TTS_FALLBACK_RATE", "빠르게")           # 못 읽는 값은 무시
+    assert tts.fallback_rate("ko-KR-Chirp3-HD-Iapetus") == 1.06
+
+
+def test_sentence_gap_default_is_unchanged_and_chapter_gap_follows():
+    """문장 사이 호흡 기본값은 귀로 정한 0.7 그대로다(POPORY_SENTENCE_GAP 은 들어 보고 줄일 때만 쓴다)."""
+    import importlib
+    import os
+    assert "POPORY_SENTENCE_GAP" not in os.environ
+    assert _video.SENTENCE_GAP == 0.7 and _video.CHAPTER_GAP == 2 * _video.SENTENCE_GAP

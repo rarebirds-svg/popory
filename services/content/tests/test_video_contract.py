@@ -83,3 +83,17 @@ def test_card_normalized_and_malformed_dropped():
     for bad in ({"type": "keypoints", "items": "복리"}, {"type": "quote"}, {"type": "table"}, "quote", {"type": "keypoints", "items": ["하나"]}):
         scenes, _ = parse_video(_two_scenes(card=bad))
         assert "card" not in scenes[1]
+
+
+def test_stat_card_needs_a_number_and_fits_the_screen():
+    """숫자 카드 — value 에 숫자가 있어야 하고(문장을 넣으면 버린다) 너무 길면 버린다. label 은 잘라 맞춘다."""
+    scenes, _ = parse_video(_two_scenes(card={"type": "stat", "value": " 800만 달러 ", "label": "청소부가 남기고 간 유산"}))
+    assert scenes[1]["card"] == {"type": "stat", "value": "800만 달러", "label": "청소부가 남기고 간 유산"}
+    scenes, _ = parse_video(_two_scenes(card={"type": "stat", "value": "61%"}))
+    assert scenes[1]["card"] == {"type": "stat", "value": "61%", "label": ""}
+    for bad in ({"type": "stat", "value": "부는 보이지 않는다"}, {"type": "stat", "value": ""},
+                {"type": "stat", "value": "1,234,567,890,123원 이상"}):
+        scenes, _ = parse_video(_two_scenes(card=bad))
+        assert "card" not in scenes[1]
+    scenes, _ = parse_video(_two_scenes(card={"type": "stat", "value": "3배", "label": "가" * 50}))
+    assert len(scenes[1]["card"]["label"]) == 30

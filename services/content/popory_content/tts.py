@@ -275,7 +275,19 @@ def voice_family(voice_name: str) -> str:
     return "기타"
 
 
-def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
+def fallback_rate(voice: str) -> float:
+    """환경변수로 바꾼 대체 음성의 말속도. POPORY_TTS_FALLBACK_RATE 가 있으면 그 값, 없으면 계열 기준값
+    (Chirp3-HD 1.06 · 그 밖 1.0). 전역 SPEAKING_RATE 는 기본 대체 음성(Neural2-C)과 짝이라 건드리지 않는다."""
+    raw = os.environ.get("POPORY_TTS_FALLBACK_RATE", "").strip()
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return 1.06 if "Chirp3-HD" in voice else 1.0
+
+
+def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede", speaking_rate: float | None = None) -> bytes | None:
     key = os.environ.get("GOOGLE_TTS_API_KEY")
     if not key:
         return None
@@ -285,7 +297,8 @@ def synthesize(text: str, voice: str = "ko-KR-Chirp3-HD-Aoede") -> bytes | None:
             json={
                 "input": {"ssml": _to_ssml(_prep_text(text))},
                 "voice": {"languageCode": LANGUAGE, "name": voice},
-                "audioConfig": {"audioEncoding": "MP3", "speakingRate": SPEAKING_RATE},
+                "audioConfig": {"audioEncoding": "MP3",
+                                "speakingRate": SPEAKING_RATE if speaking_rate is None else speaking_rate},
             },
             timeout=30,
         )

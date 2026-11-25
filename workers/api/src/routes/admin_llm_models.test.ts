@@ -93,6 +93,7 @@ describe("admin llm-models", () => {
     const body = await res.json() as { models: Record<string, string> };
     expect(body.models.shorts_script).toBe("claude-sonnet-5");
     expect(body.models.blog).toBe(DEFAULT_MODEL);   // 기본값도 채워 보낸다 — 워커가 분기하지 않게
+    expect(body.models.video_script).toBe("claude-opus-5-5");   // 대본은 기능별 기본값이 따로다(2026-11)
   });
 
   it("워커 조회는 서비스 JWT·area 를 요구한다", async () => {
