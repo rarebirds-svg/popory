@@ -23,7 +23,7 @@ from popory_content.rerender import scene_records
 from popory_content import sync_check
 from popory_content import gemini_tts
 from popory_content import tts as _tts
-from popory_content.options import FALLBACK_VOICE
+from popory_content.options import DEFAULT_FALLBACK_VOICE, FALLBACK_VOICE
 from popory_content.tts import synthesize, spoken_text, voice_family
 from popory_content.video_prompt import build_video_system_prompt, build_video_user_message
 from popory_content.video_contract import parse_video
@@ -299,8 +299,9 @@ def _render_headline_png(title: str, out_png: Path, portrait: bool = False) -> N
 
 
 def _render_graphic_card_png(card: dict[str, Any], out_png: Path, portrait: bool = False) -> None:
-    """명언·핵심 요약 카드를 어두운 배경 + 큰 글씨로 렌더한다(카드 클립의 배경).
-    quote: 큰 따옴표 + 문장 + 출처 줄. keypoints: 제목 + 번호 매긴 항목. 상단엔 브랜드 키커."""
+    """명언·숫자·핵심 요약 카드를 어두운 배경 + 큰 글씨로 렌더한다(카드 클립의 배경).
+    quote: 큰 따옴표 + 문장 + 출처 줄. stat: 큰 숫자 + 설명 한 줄. keypoints: 제목 + 번호 매긴 항목.
+    상단엔 브랜드 키커."""
     w, h = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
     img = Image.new("RGB", (w, h), CARD_BG)
     d = ImageDraw.Draw(img)
@@ -318,6 +319,21 @@ def _render_graphic_card_png(card: dict[str, Any], out_png: Path, portrait: bool
             src_font = ImageFont.truetype(FONT_PATH, 40 if portrait else 46)
             d.text((w / 2, h - (420 if portrait else 200)), f"— {card['source']}", font=src_font,
                    fill=(200, 205, 215), anchor="ma")
+    elif card.get("type") == "stat":
+        # 숫자 하나를 화면에서 가장 크게. 글자 수가 늘면 폭을 넘지 않게 크기를 줄인다(여백 포함 화면 폭의 80%).
+        value = str(card.get("value", ""))
+        size = 200 if portrait else 260
+        value_font = ImageFont.truetype(FONT_PATH, size, index=FONT_INDEX_BOLD)
+        while size > 80 and d.textlength(value, font=value_font) > w * 0.8:
+            size -= 12
+            value_font = ImageFont.truetype(FONT_PATH, size, index=FONT_INDEX_BOLD)
+        d.text((w / 2, h / 2 - (40 if card.get("label") else 0)), value, font=value_font,
+               fill=CARD_ACCENT, anchor="mm")
+        if card.get("label"):
+            label_font = ImageFont.truetype(FONT_PATH, 52 if portrait else 60)
+            label = "\n".join(textwrap.wrap(str(card["label"]), width=14 if portrait else 24))
+            d.multiline_text((w / 2, h / 2 + size / 2 + 30), label, font=label_font,
+                             fill=(230, 234, 240), anchor="ma", align="center", spacing=14)
     else:
         title_font = ImageFont.truetype(FONT_PATH, 64 if portrait else 80, index=FONT_INDEX_BOLD)
         item_font = ImageFont.truetype(FONT_PATH, 54 if portrait else 66)
@@ -451,7 +467,9 @@ def _split_sentences(text: str) -> list[str]:
 
 # 문장별 TTS 클립 사이에 넣는 호흡(무음) 길이(초). 자막 타이밍이 이 값을 그대로 반영한다.
 # 0.35는 마침표 뒤 다음 문장이 급하게 시작돼, 차분한 낭독 톤을 위해 0.7로 늘림.
-SENTENCE_GAP = 0.7
+# 2026-11 점검: 10분 롱폼에 문장·장면 사이 무음이 합쳐 1분 반쯤 들어간다. 기본값은 귀로 정한 0.7 그대로 두고,
+# POPORY_SENTENCE_GAP 으로 줄여 들어 볼 수 있게 했다(장면 사이 CHAPTER_GAP 은 이 값의 2배로 같이 움직인다).
+SENTENCE_GAP = float(os.environ.get("POPORY_SENTENCE_GAP", "0.7"))
 # 챕터(상단 헤드라인)가 바뀌는 장면 경계에 넣는 호흡(무음) 길이(초). 문장 사이(마침표)보다
 # 길게 둬야 한 챕터가 끝났음이 청각적으로 구분된다 → 마침표 인터벌의 2배.
 CHAPTER_GAP = 2 * SENTENCE_GAP
@@ -982,6 +1000,16 @@ def _master_audio(src: Path, out: Path, bgm: Path | None) -> None:
 
 
 # 묵직한 중저음 정도(반음). 0이면 미적용(기본). env로 켤 수 있음.
+def _synth_cloud(sent: str, voice: str) -> bytes | None:
+    """Cloud TTS 로 한 문장. 환경변수로 바꾼 대체 음성(POPORY_TTS_FALLBACK_VOICE)은 계열에 맞는 말속도로 읽고,
+    합성에 실패하면(계정에 없는 화자 등) 검증된 기본 대체 음성으로 한 번 더 시도한다 — 화자 이름 오타 하나로
+    영상 전체가 macOS say 로 내려가면 안 된다."""
+    if voice == FALLBACK_VOICE and FALLBACK_VOICE != DEFAULT_FALLBACK_VOICE:
+        return (synthesize(sent, voice=voice, speaking_rate=_tts.fallback_rate(voice))
+                or synthesize(sent, voice=DEFAULT_FALLBACK_VOICE))
+    return synthesize(sent, voice=voice)
+
+
 VOICE_DEEPEN_SEMITONES = float(os.environ.get("POPORY_VOICE_DEEPEN_SEMITONES", "0"))
 
 
@@ -1093,7 +1121,7 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         else:
             for j, sent in enumerate(sentences):
                 # 내레이션이 빈 장면만 여기로 온다면 Gemini 이름을 Cloud TTS 에 보내지 않는다.
-                seg_bytes = synthesize(sent, voice=FALLBACK_VOICE if gemini_tts.is_gemini_voice(voice) else voice)
+                seg_bytes = _synth_cloud(sent, FALLBACK_VOICE if gemini_tts.is_gemini_voice(voice) else voice)
                 if seg_bytes:
                     seg = work / f"{i}_{j}.mp3"
                     seg.write_bytes(seg_bytes)
@@ -1505,10 +1533,9 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
                                    job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw,
                                    system_prompt_builder=system_prompt_builder, user_msg_builder=user_msg_builder,
                                    feature="shorts_script" if portrait else "video_script")
-    # 롱폼 첫 장면이 프리후크 규칙(첫 문장에 결과)을 지켰는지 판정하고, 어겼으면 앞 문장만 고친다(fail-open).
-    # 쇼츠는 60초 안에 별도 규칙이라 대상이 아니다. 오탈자 검수보다 먼저 — 새로 쓴 문장도 그 검수를 거치게.
-    if not portrait:
-        meta["hook_check"] = check_hook(scenes, meta, split=_split_sentences, job_id=job_id)
+    # 첫 장면이 훅 규칙을 지켰는지 판정하고, 어겼으면 앞 문장만 고친다(fail-open). 롱폼은 프리후크(첫 문장에
+    # 결과), 쇼츠는 쇼츠 기준(30자 안쪽·질문 훅 허용)으로 본다. 오탈자 검수보다 먼저 — 새로 쓴 문장도 그 검수를 거치게.
+    meta["hook_check"] = check_hook(scenes, meta, split=_split_sentences, job_id=job_id, shorts=portrait)
     # 렌더 전에 오탈자·고유명사 검수(치환만, fail-open). TTS·자막·제목·태그가 모두 이 대본에서
     # 나가므로 여기서 한 번 잡으면 전부 같이 고쳐진다. 결과는 meta 에 남겨 포털에서 볼 수 있게 한다.
     meta["script_review"] = review_script(scenes, meta, job_id=job_id)

@@ -63,13 +63,13 @@ def test_longform_cta_only_in_ending_scene_and_shorts_still_ban():
         assert "자동으로 덧붙" in sp
 
 
-def test_longform_prehook_summary_and_cards():
-    """프리후크(첫 문장 결론), 2~3분마다 요약, 카드(quote/keypoints) 규칙이 롱폼 프롬프트에 있다."""
+def test_longform_prehook_and_cards():
+    """프리후크(첫 문장 결론), 카드(stat/quote/keypoints) 규칙이 롱폼 프롬프트에 있다."""
     from popory_content.video_prompt import build_video_system_prompt
     sp = build_video_system_prompt([], scene_count=16)
     assert "프리후크" in sp and "첫 문장에" in sp
-    assert "3~4장면마다" in sp and "요약 문장" in sp
-    assert '"type": "quote"' in sp and '"type": "keypoints"' in sp
+    assert '"type": "quote"' in sp and '"type": "keypoints"' in sp and '"type": "stat"' in sp
+    assert "확인된 수치만" in sp   # 숫자 카드 환각 금지
     assert "확인된 문장만" in sp   # 명언 카드 환각 금지
     assert "고유명사 검수" in sp
 
@@ -145,7 +145,7 @@ def test_style_samples_cannot_override_prehook_in_longform():
     """말투 샘플은 프롬프트 맨 끝에 붙는다 — 어조만 따르고 첫 장면 구성은 프리후크가 우선이라고 못 박는다."""
     from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
     sp = build_video_system_prompt(["서정적으로 시작하는 샘플 글"], scene_count=16)
-    tail = sp[sp.index("## 4. 말투 스타일"):]
+    tail = sp[sp.index("## 말투 스타일"):]
     assert "어조와 어미만" in tail and "프리후크 규칙이 항상 우선" in tail
     # 쇼츠는 별도 규칙이라 이 문구를 쓰지 않는다
     assert "프리후크 규칙이 항상 우선" not in build_shorts_system_prompt(["샘플"], scene_count=5)
@@ -156,3 +156,40 @@ def test_longform_user_message_repeats_the_hook_rule_last():
     msg = build_video_user_message("돈의 심리학", [])
     assert "첫 문장은 인물·상황 소개나 질문이 아니라" in msg
     assert msg.rstrip().endswith("두 태그를 정확히 포함하세요.")   # 출력 형식 지시는 여전히 마지막
+
+
+def test_longform_is_designed_as_a_story_not_a_summary():
+    """2026-11 스토리 구성 재점검 — 목차 요약이 아니라 이야기로 설계하게 한다(약속·뼈대·열린 고리·실천)."""
+    from popory_content.video_prompt import build_video_system_prompt
+    sp = build_video_system_prompt([], scene_count=16)
+    assert "한 문장 약속" in sp and "열린 고리" in sp
+    for kind in ("person", "principles", "mystery"):          # 책 성격에 맞는 뼈대를 고른다
+        assert kind in sp
+    assert '"story_type"' in sp and '"promise"' in sp          # 어떤 뼈대를 골랐는지 meta 에 남긴다
+    assert "장면마다 길이를 다르게" in sp and "약 9분" in sp      # 16장면 × 35초 ≈ 9분, 리듬은 다르게
+    assert "오늘 바로 할 수 있는 한 가지" in sp                   # 끝에서 두 번째 장면: 정리와 실천
+    assert "피사체와 구도는 장면마다 다르게" in sp               # 같은 정물만 되풀이하지 않는다
+
+
+def test_longform_drops_the_mechanical_devices():
+    """정해진 간격의 요약·장면마다 넣는 수사 의문문·목차 예고는 틀이 보여 뺐다. 대신 장면 끝이 다음 장면을 당긴다."""
+    from popory_content.video_prompt import build_video_system_prompt
+    sp = build_video_system_prompt([], scene_count=16)
+    assert "3~4장면마다" not in sp
+    assert "장면마다 1문장 정도는" not in sp
+    assert "목차 안내가 아니라" in sp                            # '오늘 영상에서는 …을 정리해 드립니다' 금지
+    assert "장면의 끝이 다음 장면을 보게" in sp
+    assert "정말 답이 궁금할 때만" in sp
+    assert "세 문장 안팎" in sp                                  # 엔딩 CTA 는 짧게
+
+
+def test_shorts_carry_one_idea_with_a_short_hook_and_no_soft_ending():
+    """쇼츠는 책 전체 요약이 아니라 한 가지만 — 첫 문장 30자 훅, 소개·인사로 열지 않기, 맥 빠지는 마무리 금지."""
+    from popory_content.video_prompt import build_shorts_system_prompt, build_shorts_user_message
+    sp = build_shorts_system_prompt([], scene_count=8)
+    assert "한 편에 한 가지만" in sp
+    assert "30자 안쪽" in sp and "인사, 책·저자 소개" in sp
+    assert "훅(첫 장면)" in sp and "고리(마지막 장면)" in sp
+    assert "맥 빠지는 마무리" in sp
+    um = build_shorts_user_message("돈의 심리학", [])
+    assert "한 가지만" in um and "30자 안쪽" in um              # 가장 나중에 읽히는 자리에서 한 번 더

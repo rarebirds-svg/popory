@@ -1,5 +1,6 @@
 # youtube 작업의 params_json(길이·목소리·배경스타일) 파싱·매핑.
 import json
+import os
 
 SCENE_COUNT = {"3": 5, "5": 8, "7": 12, "10": 16}
 SHORT_SCENE_COUNT = {"15": 3, "30": 5, "60": 8}
@@ -8,7 +9,12 @@ SHORT_SCENE_COUNT = {"15": 3, "30": 5, "60": 8}
 # Charon(초기 목소리)은 2026-06-29 b3d3eeb 와 2026-08-11 두 번 취향 사유로 기각됐다 — 다시 올리지 않는다.
 VOICE = {"female-calm": "ko-KR-Chirp3-HD-Aoede", "female-bright": "ko-KR-Chirp3-HD-Leda",
          "male": "gemini-3.8-flash-tts/Iapetus"}
-FALLBACK_VOICE = "ko-KR-Neural2-C"
+# 대체 음성은 POPORY_TTS_FALLBACK_VOICE 로 바꿔 들어 볼 수 있다(2026-11). Neural2-C 는 기계음 티가 난다는 피드백으로
+# 기본 자리에서 내려온 목소리라, Gemini 가 막힌 날(크레딧 소진 등) 영상이 그 목소리로 나가면 품질이 크게 떨어진다.
+# 후보는 Gemini 화자와 이름이 같은 Chirp3-HD 화자(예: ko-KR-Chirp3-HD-Iapetus) — 계정에 그 화자가 있는지는
+# scripts/compare_voices.py --list 로 확인한다. 바꾼 음성이 합성에 실패하면 아래 기본값으로 한 번 더 시도한다.
+DEFAULT_FALLBACK_VOICE = "ko-KR-Neural2-C"
+FALLBACK_VOICE = os.environ.get("POPORY_TTS_FALLBACK_VOICE", "").strip() or DEFAULT_FALLBACK_VOICE
 STYLE = {
     "photo": "photorealistic, cinematic",
     "illust": "digital illustration, clean",

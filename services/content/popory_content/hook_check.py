@@ -58,6 +58,38 @@ SYSTEM_PROMPT = """당신은 유튜브 롱폼 대본의 프리후크 검수자�
 </hook_verdict>
 """
 
+# 쇼츠용 판정 기준. 롱폼과 다른 점: 질문 훅을 허용하고(1~2초 안에 넘길지 정하는 화면이라 날카로운 질문이 통한다),
+# 첫 문장이 훨씬 짧아야 하며, 책·저자 소개로 여는 것을 따로 잡는다. 2026-11 스토리 구성 점검에서 쇼츠 프롬프트가
+# "첫 장면 강렬하게 후킹" 한 줄뿐이고 검수도 없던 것을 보완했다.
+SHORTS_SYSTEM_PROMPT = """당신은 유튜브 쇼츠 대본의 훅 검수자입니다. 첫 장면의 첫 문장이 아래 규칙을 지켰는지 판정하고, 어겼으면 그 문장만 고쳐 돌려줍니다.
+
+규칙: **첫 문장이 훅이다.** 쇼츠 시청자는 1~2초 안에 넘길지 정한다. 첫 문장은 30자 안쪽이고, 결과·숫자·극적인 대비·도발적인 주장 가운데 하나를 담거나 답이 궁금해지는 날카로운 질문이어야 한다.
+
+통과 기준(하나라도 해당하면 통과):
+- 첫 문장에 결과·충격적인 수치·극적인 대비·도발적인 주장이 있다.
+- 첫 문장이 구체적이고 답이 궁금한 질문이다("왜 부자들은 월급날 주식을 사지 않을까요?").
+
+위반(kind):
+- greeting — 인사·채널 소개.
+- intro_book — 책·저자·주제 소개로 연다("오늘은 …라는 책을 소개합니다", "…의 저자 …는").
+- lyrical — 배경·상황 묘사로 연다.
+- vague — 막연한 질문·일반론("성공하고 싶으신가요?", "돈은 중요합니다").
+- other — 그 밖에 넘기지 않을 이유가 없는 시작.
+
+고칠 때(위반일 때만):
+- 첫 문장(또는 첫 두 문장)을 바꾼 새 문장 목록 rewrite 를 준다. replace_count 는 원문에서 몇 문장을 대체하는지(1~2)다. 나머지 원문 문장은 그대로 이어진다.
+- 새 첫 문장은 30자 안쪽이고, 구어체(합쇼체 기본에 해요체 혼용)다.
+- **대본에 이미 나온 사실만** 쓴다. 대본에 없는 인물·사건·숫자를 지어내지 않는다. 훅의 재료는 아래 대본의 뒤 장면에서 가져온다.
+- 인사하지 않는다. 구독·좋아요를 요청하지 않는다.
+
+출력은 마지막 응답에 태그 하나만. 코드블록 표시(```)를 넣지 않는다. 통과면 rewrite 는 빈 배열이다.
+<hook_verdict>
+{"pass": true또는false, "kind": "greeting|intro_book|lyrical|vague|other|none", "reason": "짧은 이유", "replace_count": 1, "rewrite": ["새 첫 문장."]}
+</hook_verdict>
+"""
+# 쇼츠 첫 문장 상한(자). 프롬프트 규칙(30자 안쪽)에 여유를 둔다.
+SHORTS_FIRST_SENTENCE_MAX = 45
+
 _TAG = re.compile(r"<hook_verdict>\s*(\{.*?\})\s*</hook_verdict>", re.S)
 _GREETING = re.compile(r"안녕|반갑|오늘은\s*.{0,30}(이야기|알아보|살펴|소개)")
 _NUMBER = re.compile(r"\d[\d,.]*")
@@ -97,21 +129,24 @@ def _corpus(scenes: list[dict[str, Any]], meta: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def validate_rewrite(verdict: dict[str, Any], sentences: list[str], corpus: str) -> str | None:
-    """교체 문장이 믿을 만한지. 문제가 있으면 사유 문자열, 괜찮으면 None."""
+def validate_rewrite(verdict: dict[str, Any], sentences: list[str], corpus: str, *,
+                     shorts: bool = False) -> str | None:
+    """교체 문장이 믿을 만한지. 문제가 있으면 사유 문자열, 괜찮으면 None.
+    쇼츠는 첫 문장 상한이 더 짧고 질문 훅을 허용한다."""
     rewrite = verdict["rewrite"]
     n = verdict["replace_count"]
+    first_max = SHORTS_FIRST_SENTENCE_MAX if shorts else FIRST_SENTENCE_MAX
     if not rewrite:
         return "rewrite 가 비어 있음"
     if not 1 <= len(rewrite) <= 3:
         return "rewrite 문장 수가 1~3 이 아님"
     if not 1 <= n <= min(3, len(sentences)):
         return f"replace_count({n}) 가 원문 문장 수 범위를 벗어남"
-    if len(rewrite[0]) > FIRST_SENTENCE_MAX:
-        return f"새 첫 문장이 {FIRST_SENTENCE_MAX}자를 넘음"
+    if len(rewrite[0]) > first_max:
+        return f"새 첫 문장이 {first_max}자를 넘음"
     if any(len(x) > SENTENCE_MAX for x in rewrite):
         return f"새 문장이 {SENTENCE_MAX}자를 넘음"
-    if rewrite[0].rstrip().endswith("?"):
+    if not shorts and rewrite[0].rstrip().endswith("?"):
         return "새 첫 문장이 질문"
     if any(_GREETING.search(x) for x in rewrite):
         return "새 문장에 인사·안내가 있음"
@@ -123,7 +158,8 @@ def validate_rewrite(verdict: dict[str, Any], sentences: list[str], corpus: str)
     return None
 
 
-def _user_message(scenes: list[dict[str, Any]], meta: dict[str, Any], first_sentences: list[str]) -> str:
+def _user_message(scenes: list[dict[str, Any]], meta: dict[str, Any], first_sentences: list[str],
+                  shorts: bool = False) -> str:
     lines = [f"[제목] {meta.get('title', '')}", "", f"[첫 장면 헤드라인] {scenes[0].get('caption', '')}",
              "[첫 장면 내레이션 — 문장 단위]"]
     lines += [f"{i}. {s}" for i, s in enumerate(first_sentences, 1)]
@@ -133,14 +169,16 @@ def _user_message(scenes: list[dict[str, Any]], meta: dict[str, Any], first_sent
         body.append(f"(장면 {i} · {s.get('caption', '')}) {s.get('narration', '')}")
     text = "\n".join(body)
     lines.append(text[:CONTEXT_MAX_CHARS])
-    lines += ["", "첫 장면의 첫 두 문장이 프리후크 규칙을 지켰는지 판정해 주세요."]
+    lines += ["", "첫 장면의 첫 문장이 쇼츠 훅 규칙을 지켰는지 판정해 주세요." if shorts
+              else "첫 장면의 첫 두 문장이 프리후크 규칙을 지켰는지 판정해 주세요."]
     return "\n".join(lines)
 
 
 def check_hook(scenes: list[dict[str, Any]], meta: dict[str, Any], *,
                split: Callable[[str], list[str]], job_id: str = "adhoc",
-               runner=run_claude_cli) -> dict[str, Any]:
+               runner=run_claude_cli, shorts: bool = False) -> dict[str, Any]:
     """첫 장면 프리후크를 판정하고 어겼으면 제자리에서 앞 문장을 고친다. 반환은 meta 에 실을 요약.
+    shorts=True 면 쇼츠 기준(SHORTS_SYSTEM_PROMPT — 더 짧은 첫 문장, 질문 훅 허용)으로 본다.
 
     status: passed(규칙 지킴) / rewritten(고침) / rejected(고치려 했지만 검증에 걸려 원문 유지) /
             unavailable(검수기 실패 → 원문 유지) / disabled / skipped(첫 장면이 비었음).
@@ -153,7 +191,8 @@ def check_hook(scenes: list[dict[str, Any]], meta: dict[str, Any], *,
     sentences = split(narration) or [narration.strip()]
     before = sentences[:3]
     try:
-        verdict = runner(system_prompt=SYSTEM_PROMPT, user_msg=_user_message(scenes, meta, sentences[:4]),
+        verdict = runner(system_prompt=SHORTS_SYSTEM_PROMPT if shorts else SYSTEM_PROMPT,
+                         user_msg=_user_message(scenes, meta, sentences[:4], shorts),
                          parse=_parse_verdict, job_id=f"{job_id}_hook_check",
                          model=MODEL_ENV or model_for("script_review"),
                          timeout_seconds=TIMEOUT_SECONDS, max_attempts=MAX_ATTEMPTS, allowed_tools=())
@@ -161,7 +200,7 @@ def check_hook(scenes: list[dict[str, Any]], meta: dict[str, Any], *,
         return {"status": "unavailable", "error": str(e)[:200], "before": before}
     if verdict["pass"]:
         return {"status": "passed", "kind": verdict["kind"], "reason": verdict["reason"], "before": before}
-    problem = validate_rewrite(verdict, sentences, _corpus(scenes, meta))
+    problem = validate_rewrite(verdict, sentences, _corpus(scenes, meta), shorts=shorts)
     if problem:
         return {"status": "rejected", "kind": verdict["kind"], "reason": verdict["reason"],
                 "rejected_because": problem, "before": before}

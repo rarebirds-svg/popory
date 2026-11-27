@@ -10,6 +10,9 @@ from popory_content.video_prompt import append_description_cta, ending_cta_scene
 CARD_QUOTE_MAX = 80
 CARD_ITEM_MAX = 20
 CARD_ITEMS_MAX = 4
+# 숫자 카드. value 는 화면 한가운데 가장 큰 글씨라 길면 넘친다(숫자 + 단위). label 은 그 아래 한 줄.
+CARD_STAT_VALUE_MAX = 14
+CARD_STAT_LABEL_MAX = 30
 
 
 def normalize_card(card: Any) -> dict[str, Any] | None:
@@ -25,6 +28,12 @@ def normalize_card(card: Any) -> dict[str, Any] | None:
             return None
         source = str(card.get("source") or "").strip()
         return {"type": "quote", "text": text[:CARD_QUOTE_MAX], "source": source}
+    if kind == "stat":
+        value = str(card.get("value") or "").strip()
+        # 숫자가 하나도 없으면 숫자 카드가 아니다(LLM 이 문장을 넣는 경우) — 버린다.
+        if not value or not any(ch.isdigit() for ch in value) or len(value) > CARD_STAT_VALUE_MAX:
+            return None
+        return {"type": "stat", "value": value, "label": str(card.get("label") or "").strip()[:CARD_STAT_LABEL_MAX]}
     if kind == "keypoints":
         items = card.get("items")
         if not isinstance(items, list):
