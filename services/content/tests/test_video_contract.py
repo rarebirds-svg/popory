@@ -97,3 +97,33 @@ def test_stat_card_needs_a_number_and_fits_the_screen():
         assert "card" not in scenes[1]
     scenes, _ = parse_video(_two_scenes(card={"type": "stat", "value": "3배", "label": "가" * 50}))
     assert len(scenes[1]["card"]["label"]) == 30
+
+
+def _scene_json(**scene):
+    import json
+    base = {"caption": "c", "narration": "n"}
+    base.update(scene)
+    return (f"<scenes_json>{json.dumps([base], ensure_ascii=False)}</scenes_json>"
+            '<video_meta>{"title": "t", "description": "d", "tags": []}</video_meta>')
+
+
+def test_image_prompts_array_becomes_primary_plus_extras():
+    """롱폼은 image_prompts 배열을 준다 — 첫 장은 image_prompt, 나머지는 extra_image_prompts 로 통일한다."""
+    scenes, _ = parse_video(_scene_json(image_prompts=["first", " second ", "", 7, "third"]))
+    assert scenes[0]["image_prompt"] == "first"
+    assert scenes[0]["extra_image_prompts"] == ["second", "third"]
+    assert "image_prompts" not in scenes[0]
+    scenes, _ = parse_video(_scene_json(image_prompts=["a", "b", "c", "d", "e", "f"]))
+    assert [scenes[0]["image_prompt"], *scenes[0]["extra_image_prompts"]] == ["a", "b", "c", "d"]   # 상한 4장
+
+
+def test_single_image_prompt_still_works_and_missing_is_an_error():
+    scenes, _ = parse_video(_scene_json(image_prompt="only"))
+    assert scenes[0]["image_prompt"] == "only" and "extra_image_prompts" not in scenes[0]
+    scenes, _ = parse_video(_scene_json(image_prompts=["only"]))
+    assert scenes[0]["image_prompt"] == "only" and "extra_image_prompts" not in scenes[0]
+    import pytest
+    from popory_content.contract import ContractError
+    for bad in ({"image_prompts": []}, {"image_prompts": "문자열"}, {}):
+        with pytest.raises(ContractError):
+            parse_video(_scene_json(**bad))

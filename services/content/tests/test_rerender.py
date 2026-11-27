@@ -100,7 +100,7 @@ def rerender_env(monkeypatch, tmp_path):
     mp4.write_bytes(b"MP4")
     captured = {}
 
-    def fake_render(scenes, *, job_id, image_fetcher, voice, portrait, tts_stats):
+    def fake_render(scenes, *, job_id, image_fetcher, voice, portrait, tts_stats, extra_image_fetcher=None):
         captured.update(scenes=scenes, voice=voice, portrait=portrait,
                         images=[image_fetcher(s["image_prompt"]) for s in scenes])
         tts_stats.update(used_voice=voice, sentences=3)
@@ -176,3 +176,15 @@ def test_scene_pitch_match_off_is_logged_as_failure(monkeypatch):
     worker._log_scene_match("j3", {"tts": {}})
     assert [r["job"] for r in logged] == ["j1"] and logged[0]["status"] == "scene_pitch_match_failed"
     assert "ffmpeg-full" in logged[0]["error"] and "5.7" in logged[0]["error"]
+
+
+def test_extra_image_prompts_survive_a_rerender_round_trip():
+    """장면 안 추가 그림의 프롬프트는 meta.scenes 에 남고, 재렌더가 그대로 다시 받는다."""
+    from popory_content.rerender import build_scenes, scene_records
+    scenes = [{"caption": "a", "narration": "n", "image_prompt": "p0", "extra_image_prompts": ["p1", "p2"]},
+              {"caption": "b", "narration": "m", "image_prompt": "q0"}]
+    records = scene_records(scenes)
+    assert records[0]["extra_image_prompts"] == ["p1", "p2"] and "extra_image_prompts" not in records[1]
+    rebuilt = build_scenes([{"caption": "a", "narration": "n"}, {"caption": "b", "narration": "m"}],
+                           {"scenes": records}, backgrounds={})
+    assert rebuilt[0]["extra_image_prompts"] == ["p1", "p2"] and "extra_image_prompts" not in rebuilt[1]

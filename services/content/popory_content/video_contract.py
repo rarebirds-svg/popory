@@ -13,6 +13,8 @@ CARD_ITEMS_MAX = 4
 # 숫자 카드. value 는 화면 한가운데 가장 큰 글씨라 길면 넘친다(숫자 + 단위). label 은 그 아래 한 줄.
 CARD_STAT_VALUE_MAX = 14
 CARD_STAT_LABEL_MAX = 30
+# 한 장면에 쓰는 그림 수 상한(첫 장 포함). 실제로 몇 장을 쓸지는 렌더가 장면 길이·영상 전체 예산으로 다시 줄인다.
+SCENE_IMAGE_PROMPTS_MAX = 4
 
 
 def normalize_card(card: Any) -> dict[str, Any] | None:
@@ -46,6 +48,27 @@ def normalize_card(card: Any) -> dict[str, Any] | None:
     return None
 
 
+def normalize_image_prompts(scene: dict[str, Any]) -> None:
+    """장면의 이미지 프롬프트를 렌더가 쓰는 모양으로 맞춘다(제자리 수정).
+
+    롱폼 대본은 image_prompts(배열)를 주고, 쇼츠·예전 대본은 image_prompt(문자열)를 준다. 어느 쪽이든
+    **첫 장은 image_prompt**, 나머지는 extra_image_prompts(없으면 키 없음)로 통일한다 — 썸네일·재렌더·검수 등
+    기존 경로는 image_prompt 하나만 보므로 그대로 돈다."""
+    raw = scene.pop("image_prompts", None)
+    prompts = [p.strip() for p in raw if isinstance(p, str) and p.strip()] if isinstance(raw, list) else []
+    single = scene.get("image_prompt")
+    if not prompts and isinstance(single, str) and single.strip():
+        prompts = [single.strip()]
+    prompts = prompts[:SCENE_IMAGE_PROMPTS_MAX]
+    scene.pop("extra_image_prompts", None)
+    if not prompts:
+        scene.pop("image_prompt", None)
+        return
+    scene["image_prompt"] = prompts[0]
+    if len(prompts) > 1:
+        scene["extra_image_prompts"] = prompts[1:]
+
+
 def ensure_ending_cta(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """마지막 장면이 구독 CTA 를 담고 있지 않으면 결정적 엔딩 CTA 장면을 덧붙인다(멱등).
     LLM 이 "구독 요청 금지" 시절 습관대로 CTA 를 빼먹어도 영상이 CTA 없이 끝나지 않게 한다."""
@@ -71,6 +94,7 @@ def parse_video(text: str, *, ending_cta: bool = False) -> tuple[list[dict[str, 
     for s in scenes:
         if not s.get("caption") or not s.get("narration"):
             raise ContractError("scene 에 caption/narration 누락")
+        normalize_image_prompts(s)
         if not s.get("image_prompt"):
             raise ContractError("scene 에 image_prompt 누락")
         card = normalize_card(s.get("card"))
