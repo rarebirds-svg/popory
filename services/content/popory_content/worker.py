@@ -36,7 +36,7 @@ from popory_content.instagram_image_render import render_carousel
 from popory_content.instagram_upload import upload_reels, upload_carousel, InstagramUploadError
 from popory_content.facebook_upload import upload_reels as fb_upload_reels
 from popory_content.youtube_playlist import assign_to_playlist
-from popory_content.image_review import (apply_people_policy, harden_prompt,
+from popory_content.image_review import (apply_people_policy, harden_prompt, has_person,
                                           is_unavailable, review_image)
 from popory_content.seo_review import review_blog, review_youtube_post
 from popory_content.seo_title import strip_prefix
@@ -138,6 +138,7 @@ def run_once(client) -> bool:
             mp4, scenes, meta, img_missing, img_total, cues = make_video(
                 topic=job["topic"], sources=sources, style_samples=samples, job_id=job_id,
                 image_fetcher=lambda p: _safe_image(client, p, job_id, anchor, "landscape"),
+                extra_image_fetcher=lambda p: _safe_image(client, p, job_id, anchor, "landscape", light=True),
                 scene_count=SCENE_COUNT[opts["length"]],
                 image_style_kw=STYLE[opts["image_style"]],
                 voice=VOICE[opts["voice"]],
@@ -304,8 +305,10 @@ def _rerender_video(client, job: dict, draft: str | None, portrait: bool) -> Non
     fetch = rerender_fetcher(backgrounds, lambda p: _safe_image(client, p, job_id, anchor, shape))
     voice = VOICE[opts["voice"]]
     tts_stats: dict = {}
-    mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=fetch, voice=voice,
-                                                     portrait=portrait, tts_stats=tts_stats)
+    mp4, img_missing, img_total, cues = render_video(
+        scenes, job_id=job_id, image_fetcher=fetch, voice=voice, portrait=portrait, tts_stats=tts_stats,
+        extra_image_fetcher=lambda p: _safe_image(client, p, job_id, anchor, shape, light=True))
+    meta["shots"] = {"extra": tts_stats.pop("extra_shots", 0)}
     meta["tts"] = tts_meta(voice, tts_stats)
     meta["scenes"] = scene_records(scenes)
     meta["rerender"] = {"at": int(time.time()), "reused_backgrounds": len(backgrounds),
@@ -613,7 +616,7 @@ def _generate_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor
 
 
 def _safe_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | None" = None,
-                shape: str | None = None):
+                shape: str | None = None, light: bool = False):
     """배경 1장 생성 + 이상 검수. 얼굴·인체 기형이나 눈 이상이 보이면 프롬프트에서 인물
     위험을 단계적으로 낮춰(뒷모습·실루엣 → 인물 제거) 재생성한다.
 
@@ -621,6 +624,11 @@ def _safe_image(client, prompt: str, job_id: str = "?", anchor: "StyleAnchor | N
     _finalize_video 가 failed/review 로 떨어뜨려 영상 전체를 버리게 되는데, 기형이
     의심되는 한 장이 그보다 낫다. 재생성 라운드는 IMAGE_REVIEW_ROUNDS 로 제한해
     24장을 도는 배치가 늘어지지 않게 한다."""
+    if light and not has_person(prompt):
+        # 장면 안 추가 그림(영상 한 편에 수십 장)은 사람이 없는 프롬프트면 검수를 건너뛴다 — 검수는 장당 claude 호출
+        # 1회라 전량에 걸면 영상 하나에 수십 분과 사용량이 더 든다. 인물 정책 접미사(NO_PEOPLE_SUFFIX)가 붙으므로
+        # 기형이 나올 인물 자체가 거의 없다. 사람이 나오는 프롬프트는 아래 검수 경로를 그대로 탄다.
+        return _generate_image(client, apply_people_policy(prompt), job_id, anchor, shape)
     last_img = None
     for round_index in range(IMAGE_REVIEW_ROUNDS + 1):
         # 0라운드엔 인물 정책, 이후엔 harden_prompt 가 인물 위험을 더 낮춘다. 둘을 겹쳐 붙이면

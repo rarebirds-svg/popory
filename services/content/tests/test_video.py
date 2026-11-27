@@ -1579,3 +1579,111 @@ def test_sentence_gap_default_is_unchanged_and_chapter_gap_follows():
     import os
     assert "POPORY_SENTENCE_GAP" not in os.environ
     assert _video.SENTENCE_GAP == 0.7 and _video.CHAPTER_GAP == 2 * _video.SENTENCE_GAP
+
+
+# ---------------- 장면 안 그림 전환(샷) ----------------
+
+def test_plan_extra_shots_respects_scene_and_video_caps():
+    """장면 상한(첫 장 포함 3장)과 영상 전체 예산을 함께 지키고, 예산이 모자라면 긴 장면부터 준다."""
+    scenes = [
+        {"narration": "가" * 300, "extra_image_prompts": ["a", "b", "c"]},
+        {"narration": "가" * 50, "extra_image_prompts": ["a", "b"]},
+        {"narration": "가" * 200, "extra_image_prompts": ["a"]},
+        {"narration": "가" * 100},
+    ]
+    assert _video.plan_extra_shots(scenes, per_scene_max=3, total_max=24) == [2, 2, 1, 0]
+    assert _video.plan_extra_shots(scenes, per_scene_max=3, total_max=3) == [1, 1, 1, 0]
+    assert _video.plan_extra_shots(scenes, per_scene_max=3, total_max=2) == [1, 0, 1, 0]   # 긴 장면부터
+    assert _video.plan_extra_shots(scenes, per_scene_max=1, total_max=24) == [0, 0, 0, 0]
+    assert _video.plan_extra_shots(scenes, per_scene_max=3, total_max=0) == [0, 0, 0, 0]
+
+
+def test_shot_cuts_land_on_sentence_ends_and_keep_a_minimum_length():
+    """전환은 문장 끝에만 두고, 어느 그림도 최소 시간보다 짧아지지 않게 그림 수를 줄인다."""
+    spans = [(0.0, 5.0), (5.7, 11.0), (11.7, 18.0), (18.7, 24.0), (24.7, 30.0)]
+    cuts = _video.shot_cuts(spans, 30.7, 3, min_seconds=6)
+    assert cuts == [11.0, 18.0]                       # 균등 분할(10.2·20.5초)에 가장 가까운 문장 끝
+    assert _video.shot_cuts(spans, 30.7, 2, min_seconds=6) == [18.0]
+    # 짧은 장면: 3장은 못 나누고 2장으로 줄인다. 그것도 안 되면 한 장.
+    short = [(0.0, 4.0), (4.7, 9.0), (9.7, 15.0)]
+    assert _video.shot_cuts(short, 15.7, 3, min_seconds=6) == [9.0]
+    assert _video.shot_cuts([(0.0, 4.0), (4.7, 8.0)], 8.7, 3, min_seconds=6) == []
+    assert _video.shot_cuts([(0.0, 20.0)], 20.7, 3, min_seconds=6) == []      # 한 문장 장면은 나눌 자리가 없다
+
+
+def test_shots_graph_overlaps_each_shot_by_the_transition():
+    g = _video._shots_graph([10.0, 8.0, 6.0], ["F0", "F1", "F2"], first_input=4, td=0.3)
+    parts = g.split(";")
+    assert parts[0] == "[0:v]F0,trim=duration=10.300000,setpts=PTS-STARTPTS[b0]"
+    assert parts[1] == "[4:v]F1,trim=duration=8.300000,setpts=PTS-STARTPTS[b1]"
+    assert parts[2] == "[5:v]F2,trim=duration=6.000000,setpts=PTS-STARTPTS[b2]"       # 마지막은 겹침 없음
+    assert parts[3] == "[b0][b1]xfade=transition=fade:duration=0.300:offset=10.000000[x1]"
+    assert parts[4] == "[x1][b2]xfade=transition=fade:duration=0.300:offset=18.000000[v0]"
+
+
+def _shots_render(monkeypatch, tmp_path, scenes, extra):
+    """render_video 를 ffmpeg 없이 돌려 장면 클립 명령과 그림 호출을 모은다."""
+    from popory_content import video
+    _render_stub(monkeypatch, tmp_path, video)
+    monkeypatch.setattr(video, "TMP", tmp_path)
+    monkeypatch.setattr(video, "_master_audio", lambda src, out, bgm, scale=None: None)
+    # 문장마다 8초, 장면 오디오(챕터 무음을 붙인 파일)는 26초 → 문장 끝(8초·16.7초)에서 세 장으로 나눌 수 있다.
+    monkeypatch.setattr(video, "_duration", lambda path: 26.0 if "chapter" in str(path) else 8.0)
+    monkeypatch.setattr(video, "_concat_audio_with_gaps", lambda *a, **k: None)
+    monkeypatch.setattr(video, "_append_silence", lambda *a, **k: None)
+    monkeypatch.setattr(video.sync_check, "measure", lambda out, cues: {})
+    cmds, calls = [], []
+    monkeypatch.setattr(video, "_run", lambda cmd: cmds.append(cmd))
+
+    def primary(p):
+        calls.append(("P", p))
+        return b"IMG"
+    stats = {}
+    # 장면이 하나면 render_video 가 클립 파일을 그대로 복사하려 든다(ffmpeg 를 건너뛰어 파일이 없다) — 꼬리 장면을 붙인다.
+    scenes = [*scenes, {"caption": "끝", "narration": "끝입니다."}]
+    video.render_video(scenes, job_id="shots", image_fetcher=primary,
+                       extra_image_fetcher=lambda p: (calls.append(("X", p)), extra(p))[1], tts_stats=stats)
+    scene_cmds = [c for c in cmds if any(str(x).endswith("scene_0.mkv") for x in c)]
+    return scene_cmds[0], calls, stats
+
+
+_THREE = "첫 문장입니다. 둘째 문장입니다. 셋째 문장입니다."
+
+
+def test_render_video_switches_background_at_sentence_ends(monkeypatch, tmp_path):
+    scenes = [{"caption": "a", "narration": _THREE, "image_prompt": "p0", "extra_image_prompts": ["p1", "p2"]}]
+    cmd, calls, stats = _shots_render(monkeypatch, tmp_path, scenes, lambda p: b"IMG")
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert calls == [("P", "p0"), ("X", "p1"), ("X", "p2")]
+    assert graph.count("xfade=transition=fade") == 2 and "[b2]" in graph
+    assert stats["extra_shots"] == 2
+    # 추가 배경 2장이 입력 4·5 로 들어가고 자막 오버레이는 그 뒤(6번~)부터 읽는다.
+    assert "[4:v]" in graph and "[5:v]" in graph and "[6:v]overlay" in graph
+    assert sum(1 for x in cmd if str(x).endswith(("0_s1.png", "0_s2.png"))) == 2
+
+
+def test_failed_extra_image_just_extends_the_previous_shot(monkeypatch, tmp_path):
+    """추가 그림이 실패하면 그 전환만 사라진다 — 누락으로 세지 않고 영상은 그대로 나간다."""
+    scenes = [{"caption": "a", "narration": _THREE, "image_prompt": "p0", "extra_image_prompts": ["bad", "p2"]}]
+    cmd, calls, stats = _shots_render(monkeypatch, tmp_path, scenes, lambda p: None if p == "bad" else b"IMG")
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert graph.count("xfade=transition=fade") == 1
+    assert stats["extra_shots"] == 1
+
+
+def test_scene_without_extras_keeps_the_single_image_graph(monkeypatch, tmp_path):
+    """추가 그림이 없는 장면(쇼츠·예전 대본)은 예전 그래프 그대로다 — trim·xfade 가 끼지 않는다."""
+    scenes = [{"caption": "a", "narration": _THREE, "image_prompt": "p0"}]
+    cmd, calls, stats = _shots_render(monkeypatch, tmp_path, scenes, lambda p: b"IMG")
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert calls == [("P", "p0")]
+    assert "xfade" not in graph and ",trim=duration" not in graph and "[4:v]overlay" in graph
+    assert "extra_shots" not in stats
+
+
+def test_shots_can_be_switched_off(monkeypatch, tmp_path):
+    from popory_content import video
+    monkeypatch.setattr(video, "SHOTS_ENABLED", False)
+    scenes = [{"caption": "a", "narration": _THREE, "image_prompt": "p0", "extra_image_prompts": ["p1"]}]
+    cmd, calls, stats = _shots_render(monkeypatch, tmp_path, scenes, lambda p: b"IMG")
+    assert calls == [("P", "p0")] and "xfade" not in cmd[cmd.index("-filter_complex") + 1]

@@ -1032,11 +1032,98 @@ def _deepen_voice(audio: Path) -> Path:
         return audio
 
 
+# --- 장면 안 그림 전환(샷) ---------------------------------------------------------------------------
+# 2026-11 품질 점검: 장면 하나(30~50초)에 그림이 한 장이라 줌·패닝이 있어도 정지 화면처럼 보였다. 대본이 장면마다
+# 그림을 여러 장(extra_image_prompts) 주면 문장 경계에서 그림을 바꾼다. 오디오·자막·장면 길이는 그대로다.
+SHOTS_ENABLED = os.environ.get("POPORY_SCENE_SHOTS", "1") != "0"
+# 한 장면에 쓰는 그림 수 상한(첫 장 포함).
+SCENE_SHOTS_MAX = int(os.environ.get("POPORY_SCENE_SHOTS_MAX", "3"))
+# 영상 한 편에서 추가로 그리는 그림 수 상한. 이미지는 Cloudflare 무료 한도(하루 1만 뉴런)로 그리는데 1536×1024 한 장이
+# 약 150 뉴런이다 — 롱폼 16장면 + 추가 24장 + 쇼츠·썸네일이면 하루 7~8천 뉴런으로 한도 안쪽에 든다.
+VIDEO_EXTRA_SHOTS_MAX = int(os.environ.get("POPORY_VIDEO_EXTRA_SHOTS_MAX", "24"))
+# 그림 한 장이 화면에 머무는 최소 시간(초). 이보다 짧게 쪼개질 것 같으면 그림 수를 줄인다.
+SHOT_MIN_SECONDS = float(os.environ.get("POPORY_SHOT_MIN_SECONDS", "6"))
+# 장면 안 그림 전환 길이(초). 장면 사이(XFADE_TD 0.4)보다 짧게 — 같은 이야기 안의 컷이라 빨리 넘긴다.
+SHOT_XFADE_TD = 0.3
+
+
+def plan_extra_shots(scenes: list[dict[str, Any]], per_scene_max: int | None = None,
+                     total_max: int | None = None) -> list[int]:
+    """장면마다 추가로 그릴 그림 수. 장면 상한(첫 장 포함 SCENE_SHOTS_MAX)과 영상 전체 예산(VIDEO_EXTRA_SHOTS_MAX)을
+    함께 지킨다. 예산이 모자라면 내레이션이 긴 장면부터 한 장씩 돌아가며 준다 — 긴 장면일수록 한 장으로 버티기 어렵다."""
+    per_scene_max = SCENE_SHOTS_MAX if per_scene_max is None else per_scene_max
+    total_max = VIDEO_EXTRA_SHOTS_MAX if total_max is None else total_max
+    want = []
+    for s in scenes:
+        extra = s.get("extra_image_prompts")
+        n = len([p for p in extra if isinstance(p, str) and p.strip()]) if isinstance(extra, list) else 0
+        want.append(max(0, min(n, per_scene_max - 1)))
+    plan = [0] * len(scenes)
+    budget = max(0, total_max)
+    order = sorted(range(len(scenes)), key=lambda i: -len(str(scenes[i].get("narration", ""))))
+    while budget > 0:
+        gave = False
+        for i in order:
+            if budget > 0 and plan[i] < want[i]:
+                plan[i] += 1
+                budget -= 1
+                gave = True
+        if not gave:
+            break
+    return plan
+
+
+def shot_cuts(spans: list[tuple[float, float]], dur: float, shots: int,
+              min_seconds: float | None = None) -> list[float]:
+    """장면을 shots 개 그림으로 나눌 전환 시각(장면 기준 초). 전환은 문장이 끝나는 자리에만 둔다 — 문장 중간에
+    그림이 바뀌면 말과 화면이 어긋나 보인다. 균등 분할 시각에 가장 가까운 문장 끝을 고르되, 어느 그림도
+    min_seconds 보다 짧아지지 않게 한다. 조건을 못 맞추면 그림 수를 줄인다(빈 목록 = 한 장으로 간다)."""
+    min_seconds = SHOT_MIN_SECONDS if min_seconds is None else min_seconds
+    ends = [round(en * FPS) / FPS for _st, en in spans[:-1]]      # 마지막 문장 끝은 장면 끝이라 후보가 아니다
+    for n in range(max(1, shots), 1, -1):
+        cuts: list[float] = []
+        prev = 0.0
+        for j in range(1, n):
+            ideal = dur * j / n
+            ok = [e for e in ends if e - prev >= min_seconds and dur - e >= min_seconds * (n - j)]
+            if not ok:
+                break
+            pick = min(ok, key=lambda e: abs(e - ideal))
+            cuts.append(pick)
+            prev = pick
+        if len(cuts) == n - 1:
+            return cuts
+    return []
+
+
+def _shots_graph(durs: list[float], filters: list[str], first_input: int, td: float = SHOT_XFADE_TD) -> str:
+    """장면 배경을 여러 그림으로 잇는 필터 그래프. 입력 0 이 첫 그림, first_input 부터가 나머지 그림이다.
+    그림마다 제 길이만큼 줌·패닝(filters[k])을 돌리고 trim 으로 끊은 뒤 xfade 로 이어 [v0] 를 낸다.
+    durs[k] 는 그림 k 가 화면을 차지하는 길이 — 마지막이 아닌 그림은 전환 길이(td)만큼 더 길게 뽑아 겹친다."""
+    n = len(durs)
+    parts = []
+    for k in range(n):
+        length = durs[k] + (td if k < n - 1 else 0.0)
+        src = 0 if k == 0 else first_input + k - 1
+        parts.append(f"[{src}:v]{filters[k]},trim=duration={length:.6f},setpts=PTS-STARTPTS[b{k}]")
+    prev, offset = "b0", 0.0
+    for k in range(1, n):
+        offset += durs[k - 1]
+        out = "v0" if k == n - 1 else f"x{k}"
+        parts.append(f"[{prev}][b{k}]xfade=transition=fade:duration={td:.3f}:offset={offset:.6f}[{out}]")
+        prev = out
+    return ";".join(parts)
+
+
 def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
                  image_fetcher: Any = None, voice: str = "ko-KR-Chirp3-HD-Aoede",
                  portrait: bool = False,
-                 tts_stats: "dict[str, Any] | None" = None) -> tuple[Path, int, int, list[Cue]]:
+                 tts_stats: "dict[str, Any] | None" = None,
+                 extra_image_fetcher: Any = None) -> tuple[Path, int, int, list[Cue]]:
     """장면당 클립 1개(배경+헤드라인+장면 내레이션 통째 합성) → xfade 합산 후 loudnorm 마스터 MP4.
+
+    장면에 extra_image_prompts 가 있으면 문장 경계에서 배경 그림을 바꾼다(extra_image_fetcher 로 그리고,
+    없으면 image_fetcher 를 쓴다). 추가 그림은 실패해도 앞 그림이 그 시간을 이어 받을 뿐 누락으로 세지 않는다.
 
     tts_stats 를 주면 합성한 문장 수(sentences)와 Google TTS 가 실패해 macOS say 로 대체한 문장 수
     (fallback)를 채워 준다. 반환 튜플을 늘리지 않으려고 출력 인자로 받는다(호출부·테스트가 많이 물려 있다).
@@ -1054,6 +1141,9 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
     images_total = 0
     # 줌 무빙 시작점을 job_id로 정해 같은 작업은 항상 같은 결과가 나오게 한다(_pick_bgm과 같은 방식).
     motion_base = zlib.crc32(job_id.encode()) % len(_MOTIONS)
+    extra_fetcher = extra_image_fetcher or image_fetcher
+    extra_plan = plan_extra_shots(scenes) if (SHOTS_ENABLED and extra_fetcher) else [0] * len(scenes)
+    extra_shots_used = 0
     # 스크림은 배경에 굽지 않고 화면에 고정 오버레이한다 — 배경이 패닝으로 밀리기 때문.
     scrim_png = work / "scrim.png"
     _render_scrim_png(scrim_png, portrait=portrait)
@@ -1143,22 +1233,54 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
             audio = padded
         # 클립 길이를 프레임 경계로 올리고(_frame_align) 오디오도 같은 길이로 맞춘다 — 자막 시점은 그대로다.
         dur = _frame_align(_duration(audio))
-        # 커버 크롭이 버리던 여유만큼 캔버스를 키워 그 안에서 패닝한다(확대율은 그대로 → 화질 손실 없음).
-        pan_px = _pan_amplitude(dur, _pan_headroom(_image_size(bg_bytes), portrait)) if motion else 0
+        spans = _spans_from_durations(seg_durs, gaps)
+        # 이 장면에서 그림을 몇 장 쓸지 — 계획한 수만큼 문장 끝에서 나눌 수 있을 때만 추가 그림을 그린다.
+        # 추가 그림이 실패하면 그 자리의 전환을 지워 앞 그림이 이어 받게 한다.
+        extra_prompts = [p for p in (scene.get("extra_image_prompts") or []) if isinstance(p, str) and p.strip()]
+        cuts = shot_cuts(spans, dur, 1 + extra_plan[i]) if (bg_bytes and extra_plan[i]) else []
+        shot_bgs: list[bytes] = [bg_bytes] if bg_bytes else []
+        kept_cuts: list[float] = []
+        for k, cut in enumerate(cuts):
+            try:
+                extra = extra_fetcher(extra_prompts[k])
+            except Exception:  # noqa: BLE001 — 추가 그림 실패는 그림 수만 줄인다
+                extra = None
+            if extra:
+                shot_bgs.append(extra)
+                kept_cuts.append(cut)
+        extra_shots_used += len(kept_cuts)
+        bounds = [0.0, *kept_cuts, dur]
+        shot_durs = [bounds[k + 1] - bounds[k] for k in range(len(bounds) - 1)]
         fw, fh = (PORTRAIT_W, PORTRAIT_H) if portrait else (LANDSCAPE_W, LANDSCAPE_H)
-        canvas = (fw + pan_px, fh) if portrait else (fw, fh + pan_px)
-        base_png = work / f"{i}.png"
-        _render_card("", "", base_png, bg_image_bytes=bg_bytes, portrait=portrait,
-                     canvas=canvas, scrim=False)
+        shot_pngs: list[Path] = []
+        shot_filters: list[str] = []
+        for k, shot_dur in enumerate(shot_durs):
+            shot_bytes = shot_bgs[k] if k < len(shot_bgs) else None
+            # 줌·패닝은 그 그림이 실제로 흐르는 길이(전환 겹침 포함)로 잡는다.
+            flow = shot_dur + (SHOT_XFADE_TD if k < len(shot_durs) - 1 else 0.0)
+            # 커버 크롭이 버리던 여유만큼 캔버스를 키워 그 안에서 패닝한다(확대율은 그대로 → 화질 손실 없음).
+            pan_px = _pan_amplitude(flow, _pan_headroom(_image_size(shot_bytes), portrait)) if motion else 0
+            canvas = (fw + pan_px, fh) if portrait else (fw, fh + pan_px)
+            png = work / (f"{i}.png" if k == 0 else f"{i}_s{k}.png")   # {i}.png 는 재렌더가 다시 쓰는 이름이다
+            _render_card("", "", png, bg_image_bytes=shot_bytes, portrait=portrait, canvas=canvas, scrim=False)
+            shot_pngs.append(png)
+            shot_filters.append(_zoompan_filter(flow, portrait, variant=motion_base + i + k, pan_px=pan_px,
+                                                motion=motion))
+        base_png = shot_pngs[0]
         head_png = work / f"head_{i}.png"
         _render_headline_png(caption, head_png, portrait=portrait)
         # 헤드라인·문장 자막을 zoompan 위에 오버레이(줌과 무관하게 고정).
-        spans = _spans_from_durations(seg_durs, gaps)
         scene_local_cues.append([(st, en, sentences[k]) for k, (st, en) in enumerate(spans)])
-        # 입력: 0=배경, 1=오디오, 2=헤드라인, 3=스크림, 4+=자막 조각.
+        # 입력: 0=배경, 1=오디오, 2=헤드라인, 3=스크림, (추가 배경 그림들), 그 뒤=자막 조각.
         inputs = ["-loop", "1", "-i", str(base_png), "-i", str(audio),
                   "-loop", "1", "-i", str(head_png), "-loop", "1", "-i", str(scrim_png)]
-        graph = f"[0:v]{_zoompan_filter(dur, portrait, variant=motion_base + i, pan_px=pan_px, motion=motion)}[v0]"
+        for png in shot_pngs[1:]:
+            inputs += ["-loop", "1", "-i", str(png)]
+        sub_base = 4 + len(shot_pngs) - 1
+        if len(shot_pngs) > 1:
+            graph = _shots_graph(shot_durs, shot_filters, first_input=4)
+        else:
+            graph = f"[0:v]{shot_filters[0]}[v0]"
         # 스크림·헤드라인은 화면에 고정(줌·패닝에 끌려다니지 않음). 스크림이 먼저 깔린다.
         graph += ";[v0][3:v]overlay=0:0[vs];[vs][2:v]overlay=0:0[vh]"
         prev = "vh"
@@ -1169,14 +1291,14 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         for k, (st, en) in enumerate(spans):
             chunks = _wrap_chunks(sentences[k], sub_wrap)
             # 줄이 여럿이면 전환 시점을 그 문장 오디오의 실제 숨에 맞춘다(문장별 조각이 있을 때만).
-            cuts = (_snap_chunk_cuts(seg_audios[k], chunks, seg_durs[k])
-                    if len(chunks) > 1 and k < len(seg_audios) else None)
-            for chunk, (cst, cen) in zip(chunks, _chunk_spans(chunks, st, seg_durs[k], en, cuts)):
+            chunk_cuts = (_snap_chunk_cuts(seg_audios[k], chunks, seg_durs[k])
+                          if len(chunks) > 1 and k < len(seg_audios) else None)
+            for chunk, (cst, cen) in zip(chunks, _chunk_spans(chunks, st, seg_durs[k], en, chunk_cuts)):
                 sub_png = work / f"sub_{i}_{n}.png"
                 _render_subtitle_png(chunk, sub_png, portrait=portrait)
                 inputs += ["-loop", "1", "-i", str(sub_png)]
                 out = f"v{n + 1}"
-                graph += (f";[{prev}][{n + 4}:v]overlay=0:0"
+                graph += (f";[{prev}][{n + sub_base}:v]overlay=0:0"
                           f":enable='between(t,{cst:.3f},{cen:.3f})'[{out}]")
                 prev = out
                 n += 1
@@ -1221,6 +1343,9 @@ def render_video(scenes: list[dict[str, Any]], job_id: str = "adhoc",
         tts_stats["sync"] = sync_check.measure(out, cues)
     except Exception:  # noqa: BLE001
         pass
+    # 장면 안에서 그림을 몇 번 바꿨는지(make_video 가 meta.shots 로 옮긴다 — 반환 튜플을 늘리지 않으려고 여기 싣는다).
+    if extra_shots_used:
+        tts_stats["extra_shots"] = extra_shots_used
     return out, images_missing, images_total, cues
 
 
@@ -1528,7 +1653,8 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
                image_style_kw: str = "photorealistic, cinematic",
                voice: str = "ko-KR-Chirp3-HD-Aoede",
                portrait: bool = False,
-               system_prompt_builder=None, user_msg_builder=None) -> tuple[Path, list[dict[str, Any]], dict[str, Any], int, int, list[Cue]]:
+               system_prompt_builder=None, user_msg_builder=None,
+               extra_image_fetcher: Any = None) -> tuple[Path, list[dict[str, Any]], dict[str, Any], int, int, list[Cue]]:
     scenes, meta = generate_scenes(topic=topic, sources=sources, style_samples=style_samples,
                                    job_id=job_id, scene_count=scene_count, image_style_kw=image_style_kw,
                                    system_prompt_builder=system_prompt_builder, user_msg_builder=user_msg_builder,
@@ -1540,8 +1666,11 @@ def make_video(*, topic: str, sources: list[dict[str, Any]], style_samples: list
     # 나가므로 여기서 한 번 잡으면 전부 같이 고쳐진다. 결과는 meta 에 남겨 포털에서 볼 수 있게 한다.
     meta["script_review"] = review_script(scenes, meta, job_id=job_id)
     tts_stats: dict[str, Any] = {}
+    # 추가 그림 함수는 줬을 때만 넘긴다(안 주면 render_video 가 image_fetcher 를 그대로 쓴다).
+    extra_kw = {"extra_image_fetcher": extra_image_fetcher} if extra_image_fetcher else {}
     mp4, img_missing, img_total, cues = render_video(scenes, job_id=job_id, image_fetcher=image_fetcher, voice=voice,
-                                                     portrait=portrait, tts_stats=tts_stats)
+                                                     portrait=portrait, tts_stats=tts_stats, **extra_kw)
+    meta["shots"] = {"extra": tts_stats.pop("extra_shots", 0)}
     meta["tts"] = tts_meta(voice, tts_stats)
     # 대본만 두고 음성·자막을 다시 만들 때(재렌더) 배경·카드를 되살릴 수 있게 장면 정보를 남긴다.
     meta["scenes"] = scene_records(scenes)

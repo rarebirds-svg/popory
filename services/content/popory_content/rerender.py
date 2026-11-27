@@ -94,6 +94,10 @@ def build_scenes(script: list[dict[str, str]], meta: dict[str, Any],
             scene["image_prompt"] = fallback_prompt
         if isinstance(info.get("card"), dict):
             scene["card"] = info["card"]
+        # 장면 안 추가 그림은 파일을 다시 쓰지 않고 저장된 프롬프트로 새로 그린다(문장 길이가 바뀌면 전환 수도 달라진다).
+        extra = info.get("extra_image_prompts")
+        if isinstance(extra, list) and extra:
+            scene["extra_image_prompts"] = [str(p) for p in extra if isinstance(p, str) and p.strip()]
         out.append(scene)
     return out
 
@@ -119,5 +123,7 @@ def scene_records(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             rec["image_prompt"] = prompt
         if isinstance(s.get("card"), dict):
             rec["card"] = s["card"]
+        if isinstance(s.get("extra_image_prompts"), list) and s["extra_image_prompts"]:
+            rec["extra_image_prompts"] = s["extra_image_prompts"]
         out.append(rec)
     return out

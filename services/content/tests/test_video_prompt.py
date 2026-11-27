@@ -193,3 +193,11 @@ def test_shorts_carry_one_idea_with_a_short_hook_and_no_soft_ending():
     assert "맥 빠지는 마무리" in sp
     um = build_shorts_user_message("돈의 심리학", [])
     assert "한 가지만" in um and "30자 안쪽" in um              # 가장 나중에 읽히는 자리에서 한 번 더
+
+
+def test_longform_asks_for_several_images_per_scene_and_shorts_do_not():
+    """롱폼은 장면마다 그림 1~3장(image_prompts 배열)을 내레이션 순서대로 — 한 장으로 30초를 버티지 않는다."""
+    from popory_content.video_prompt import build_video_system_prompt, build_shorts_system_prompt
+    sp = build_video_system_prompt([], scene_count=16)
+    assert '"image_prompts": [' in sp and "약 10초" in sp and "1~3개" in sp
+    assert "image_prompts" not in build_shorts_system_prompt([])      # 쇼츠 장면은 7초 안팎이라 한 장 그대로
