@@ -2,7 +2,9 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
+      "Bash(~/projects/scripts/ai/codex-review.sh*)",
       "Bash(/Users/daegong/projects/scripts/ai/codex-review.sh*)",
+      "Bash(~/projects/scripts/ai/gemini-analyze.sh*)",
       "Bash(/Users/daegong/projects/scripts/ai/gemini-analyze.sh*)"
     ]
   },
